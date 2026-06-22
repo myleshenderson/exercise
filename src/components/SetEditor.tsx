@@ -6,35 +6,39 @@ interface Props {
   initialWeight: number;
   initialSets: number;
   initialReps: number;
+  initialEntries?: SetEntry[];
   onSave(sets: SetEntry[]): void;
 }
 
 type Row = { weight: number; reps: number };
 
-export default function SetEditor({ initialWeight, initialSets, initialReps, onSave }: Props) {
-  const [weight, setWeight] = useState(initialWeight);
-  const [sets, setSets] = useState(initialSets);
-  const [reps, setReps] = useState(initialReps);
-  const [perSet, setPerSet] = useState(false);
-  const [rows, setRows] = useState<Row[]>([]);
+export default function SetEditor({ initialWeight, initialSets, initialReps, initialEntries, onSave }: Props) {
+  const seed = initialEntries && initialEntries.length > 0 ? initialEntries : null;
+  const seedNonUniform = seed
+    ? !seed.every((s) => s.weight === seed[0].weight && s.reps === seed[0].reps)
+    : false;
+
+  const [weight, setWeight] = useState(seed ? seed[0].weight : initialWeight);
+  const [sets, setSets] = useState(seed ? seed.length : initialSets);
+  const [reps, setReps] = useState(seed ? seed[0].reps : initialReps);
+  const [perSet, setPerSet] = useState(seedNonUniform);
+  const [rows, setRows] = useState<Row[]>(
+    seed && seedNonUniform ? seed.map((s) => ({ weight: s.weight, reps: s.reps })) : [],
+  );
 
   function expand() {
     setRows(expandLine(weight, sets, reps).map((s) => ({ weight: s.weight, reps: s.reps })));
     setPerSet(true);
   }
-
   function updateRow(i: number, field: "weight" | "reps", value: number) {
     setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)));
   }
-
   function addRow() {
     setRows((rs) => [...rs, rs[rs.length - 1] ?? { weight, reps }]);
   }
-
   function removeRow(i: number) {
     setRows((rs) => rs.filter((_, idx) => idx !== i));
   }
-
   function toEntries(rs: Row[]): SetEntry[] {
     return rs.map((r, i) => ({ setNumber: i + 1, weight: r.weight, reps: r.reps }));
   }

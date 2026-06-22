@@ -22,3 +22,33 @@ test("logging one line calls onLog with expanded sets", () => {
     { setNumber: 3, weight: 155, reps: 10 },
   ]);
 });
+
+test("logged exercise shows a collapsed summary, check, and no target", () => {
+  const logged = [
+    { setNumber: 1, weight: 150, reps: 12 },
+    { setNumber: 2, weight: 150, reps: 12 },
+    { setNumber: 3, weight: 140, reps: 8 },
+  ];
+  render(<ExerciseCard exercise={ex} lastSets={[]} loggedSets={logged} onLog={() => {}} />);
+  expect(screen.getByLabelText("logged")).toBeInTheDocument();
+  expect(screen.getByText("150×12, 150×12, 140×8")).toBeInTheDocument();
+  expect(screen.queryByText(/Target:/)).not.toBeInTheDocument();
+});
+
+test("editing a logged exercise reopens the editor and re-logs", () => {
+  const onLog = vi.fn();
+  const logged = [
+    { setNumber: 1, weight: 150, reps: 12 },
+    { setNumber: 2, weight: 150, reps: 12 },
+    { setNumber: 3, weight: 150, reps: 12 },
+  ];
+  render(<ExerciseCard exercise={ex} lastSets={[]} loggedSets={logged} onLog={onLog} />);
+  fireEvent.click(screen.getByRole("button", { name: /edit/i }));
+  fireEvent.change(screen.getByLabelText("reps"), { target: { value: "10" } });
+  fireEvent.click(screen.getByRole("button", { name: /^log$/i }));
+  expect(onLog).toHaveBeenCalledWith([
+    { setNumber: 1, weight: 150, reps: 10 },
+    { setNumber: 2, weight: 150, reps: 10 },
+    { setNumber: 3, weight: 150, reps: 10 },
+  ]);
+});

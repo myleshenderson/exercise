@@ -50,3 +50,30 @@ test("remove set removes a row", () => {
     { setNumber: 2, weight: 100, reps: 10 },
   ]);
 });
+
+test("seeds line mode from uniform initialEntries", () => {
+  const onSave = vi.fn();
+  render(<SetEditor initialWeight={0} initialSets={1} initialReps={1}
+    initialEntries={[{ setNumber: 1, weight: 100, reps: 10 }, { setNumber: 2, weight: 100, reps: 10 }]}
+    onSave={onSave} />);
+  fireEvent.click(screen.getByRole("button", { name: /^log$/i }));
+  expect(onSave).toHaveBeenCalledWith([
+    { setNumber: 1, weight: 100, reps: 10 },
+    { setNumber: 2, weight: 100, reps: 10 },
+  ]);
+});
+
+test("opens per-set mode for non-uniform initialEntries and Log preserves them", () => {
+  const onSave = vi.fn();
+  const entries = [
+    { setNumber: 1, weight: 150, reps: 12 },
+    { setNumber: 2, weight: 140, reps: 8 },
+  ];
+  render(<SetEditor initialWeight={0} initialSets={1} initialReps={1} initialEntries={entries} onSave={onSave} />);
+  expect(screen.getByLabelText("set 2 weight")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /^log$/i }));
+  expect(onSave).toHaveBeenCalledWith([
+    { setNumber: 1, weight: 150, reps: 12 },
+    { setNumber: 2, weight: 140, reps: 8 },
+  ]);
+});
