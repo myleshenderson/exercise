@@ -6,7 +6,7 @@ const ex: Exercise = { id: "leg-press", name: "Leg Press", cue: "main driver", d
 
 test("shows last time formatted", () => {
   render(<ExerciseCard exercise={ex} lastSets={[{ setNumber: 1, weight: 150, reps: 12 }, { setNumber: 2, weight: 150, reps: 12 }, { setNumber: 3, weight: 150, reps: 12 }]} loggedSets={null} onLog={() => {}} />);
-  expect(screen.getByText(/Last: 150 × 3 × 12/)).toBeInTheDocument();
+  expect(screen.getByText("Last: 150 × 3 × 12")).toBeInTheDocument();
 });
 
 test("logging one line calls onLog with expanded sets", () => {

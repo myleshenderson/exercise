@@ -12,7 +12,8 @@ interface Props {
 
 type Row = { weight: number; reps: number };
 
-const WEIGHT_STEP = 5;
+const WEIGHT_OPTIONS = Array.from({ length: 101 }, (_, i) => i * 5); // 0..500 by 5
+const REPS_OPTIONS = Array.from({ length: 40 }, (_, i) => i + 1); // 1..40
 
 export default function SetEditor({ initialWeight, initialSets, initialReps, initialEntries, onSave }: Props) {
   const seed = initialEntries && initialEntries.length > 0 ? initialEntries : null;
@@ -51,8 +52,8 @@ export default function SetEditor({ initialWeight, initialSets, initialReps, ini
         {rows.map((r, i) => (
           <div key={i} className="flex items-end gap-2">
             <span className="text-xs text-gray-500 w-10 pb-2">Set {i + 1}</span>
-            <Field label={`set ${i + 1} weight`} display="weight" step={WEIGHT_STEP} value={r.weight} onChange={(v) => updateRow(i, "weight", v)} />
-            <Field label={`set ${i + 1} reps`} display="reps" value={r.reps} onChange={(v) => updateRow(i, "reps", v)} />
+            <Field label={`set ${i + 1} weight`} display="weight" options={WEIGHT_OPTIONS} value={r.weight} onChange={(v) => updateRow(i, "weight", v)} />
+            <Field label={`set ${i + 1} reps`} display="reps" options={REPS_OPTIONS} value={r.reps} onChange={(v) => updateRow(i, "reps", v)} />
             <button aria-label={`remove set ${i + 1}`} onClick={() => removeRow(i)} className="text-red-600 text-xl px-2 pb-1">−</button>
           </div>
         ))}
@@ -67,9 +68,9 @@ export default function SetEditor({ initialWeight, initialSets, initialReps, ini
   return (
     <div className="mt-2">
       <div className="flex items-end gap-2">
-        <Field label="weight" step={WEIGHT_STEP} value={weight} onChange={setWeight} />
+        <Field label="weight" options={WEIGHT_OPTIONS} value={weight} onChange={setWeight} />
         <Field label="sets" value={sets} onChange={setSets} />
-        <Field label="reps" value={reps} onChange={setReps} />
+        <Field label="reps" options={REPS_OPTIONS} value={reps} onChange={setReps} />
         <button onClick={() => onSave(expandLine(weight, sets, reps))} className="rounded-lg bg-black text-white px-4 py-2 font-semibold">Log</button>
       </div>
       <button onClick={expand} className="mt-1 text-sm text-gray-500 underline">Adjust sets</button>
@@ -77,36 +78,35 @@ export default function SetEditor({ initialWeight, initialSets, initialReps, ini
   );
 }
 
-function Field({ label, display, value, step, onChange }: { label: string; display?: string; value: number; step?: number; onChange(n: number): void }) {
-  const input = (
-    <input
-      aria-label={label}
-      type="number"
-      inputMode="numeric"
-      value={value}
-      onChange={(e) => onChange(Number(e.target.value))}
-      className="w-16 rounded-lg border p-2 text-base text-black"
-    />
-  );
-  // For the stepper variant we must NOT wrap the buttons in a <label> — <button>
-  // is a labelable element, so a wrapping label makes getByLabelText(label) match
-  // the buttons too. Use a div + span for the caption and keep the input's aria-label.
-  if (step) {
+function Field({ label, display, value, options, onChange }: { label: string; display?: string; value: number; options?: number[]; onChange(n: number): void }) {
+  if (options) {
     return (
-      <div className="flex flex-col text-xs text-gray-500">
-        <span>{display ?? label}</span>
-        <div className="flex items-center gap-1">
-          <button type="button" aria-label={`decrease ${label}`} onClick={() => onChange(Math.max(0, value - step))} className="rounded-lg border w-9 h-10 text-lg leading-none">−</button>
-          {input}
-          <button type="button" aria-label={`increase ${label}`} onClick={() => onChange(value + step)} className="rounded-lg border w-9 h-10 text-lg leading-none">+</button>
-        </div>
-      </div>
+      <label className="flex flex-col text-xs text-gray-500">
+        {display ?? label}
+        <select
+          aria-label={label}
+          value={value}
+          onChange={(e) => onChange(Number(e.target.value))}
+          className="w-20 rounded-lg border p-2 text-base text-black"
+        >
+          {options.map((o) => (
+            <option key={o} value={o}>{o}</option>
+          ))}
+        </select>
+      </label>
     );
   }
   return (
     <label className="flex flex-col text-xs text-gray-500">
       {display ?? label}
-      {input}
+      <input
+        aria-label={label}
+        type="number"
+        inputMode="numeric"
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-16 rounded-lg border p-2 text-base text-black"
+      />
     </label>
   );
 }

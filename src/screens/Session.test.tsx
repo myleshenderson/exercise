@@ -16,7 +16,7 @@ async function renderSession() {
 test("renders day exercises with last-time numbers", async () => {
   await renderSession();
   await waitFor(() => expect(screen.getByText("Leg Press")).toBeInTheDocument());
-  expect(screen.getByText(/Last: 150 × 3 × 12/)).toBeInTheDocument();
+  expect(screen.getByText("Last: 150 × 3 × 12")).toBeInTheDocument();
 });
 
 test("logging an exercise marks it done", async () => {
