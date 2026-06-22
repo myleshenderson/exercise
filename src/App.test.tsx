@@ -1,7 +1,8 @@
 import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import App from "./App";
 
-test("renders app title", () => {
-  render(<App />);
-  expect(screen.getByText("Workout Tracker")).toBeInTheDocument();
+test("renders home route", () => {
+  render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
+  expect(screen.getAllByText("Home")[0]).toBeInTheDocument();
 });
