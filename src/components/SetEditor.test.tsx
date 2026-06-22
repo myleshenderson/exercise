@@ -77,3 +77,25 @@ test("opens per-set mode for non-uniform initialEntries and Log preserves them",
     { setNumber: 2, weight: 140, reps: 8 },
   ]);
 });
+
+test("plus increases weight by 5, minus decreases by 5", () => {
+  const onSave = vi.fn();
+  render(<SetEditor initialWeight={150} initialSets={3} initialReps={12} onSave={onSave} />);
+  fireEvent.click(screen.getByRole("button", { name: "increase weight" }));
+  fireEvent.click(screen.getByRole("button", { name: "increase weight" }));
+  fireEvent.click(screen.getByRole("button", { name: "decrease weight" }));
+  fireEvent.click(screen.getByRole("button", { name: /^log$/i }));
+  expect(onSave).toHaveBeenCalledWith([
+    { setNumber: 1, weight: 155, reps: 12 },
+    { setNumber: 2, weight: 155, reps: 12 },
+    { setNumber: 3, weight: 155, reps: 12 },
+  ]);
+});
+
+test("weight clamps at 0 and does not go negative", () => {
+  const onSave = vi.fn();
+  render(<SetEditor initialWeight={0} initialSets={1} initialReps={5} onSave={onSave} />);
+  fireEvent.click(screen.getByRole("button", { name: "decrease weight" }));
+  fireEvent.click(screen.getByRole("button", { name: /^log$/i }));
+  expect(onSave).toHaveBeenCalledWith([{ setNumber: 1, weight: 0, reps: 5 }]);
+});
