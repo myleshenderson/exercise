@@ -52,3 +52,8 @@ test("editing a logged exercise reopens the editor and re-logs", () => {
     { setNumber: 3, weight: 150, reps: 10 },
   ]);
 });
+
+test("does not render the exercise cue", () => {
+  render(<ExerciseCard exercise={ex} lastSets={[]} loggedSets={null} onLog={() => {}} />);
+  expect(screen.queryByText("main driver")).not.toBeInTheDocument();
+});

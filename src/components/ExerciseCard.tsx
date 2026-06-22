@@ -35,7 +35,6 @@ export default function ExerciseCard({ exercise, lastSets, loggedSets, onLog }: 
         <h2 className="font-semibold text-lg">{exercise.name}</h2>
         {loggedSets && <span aria-label="logged" className="text-green-600">✓</span>}
       </div>
-      {exercise.cue && <p className="text-sm text-gray-500">{exercise.cue}</p>}
       <p className="text-sm text-gray-600">
         Target: {exercise.defaultSets} × {exercise.defaultRepLow}–{exercise.defaultRepHigh}
       </p>
