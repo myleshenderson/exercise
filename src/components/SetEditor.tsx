@@ -14,6 +14,7 @@ type Row = { weight: number; reps: number };
 
 const WEIGHT_OPTIONS = Array.from({ length: 101 }, (_, i) => i * 5); // 0..500 by 5
 const REPS_OPTIONS = Array.from({ length: 40 }, (_, i) => i + 1); // 1..40
+const SETS_OPTIONS = Array.from({ length: 10 }, (_, i) => i + 1); // 1..10
 
 export default function SetEditor({ initialWeight, initialSets, initialReps, initialEntries, onSave }: Props) {
   const seed = initialEntries && initialEntries.length > 0 ? initialEntries : null;
@@ -69,7 +70,7 @@ export default function SetEditor({ initialWeight, initialSets, initialReps, ini
     <div className="mt-2">
       <div className="flex items-end gap-2">
         <Field label="weight" options={WEIGHT_OPTIONS} value={weight} onChange={setWeight} />
-        <Field label="sets" value={sets} onChange={setSets} />
+        <Field label="sets" options={SETS_OPTIONS} value={sets} onChange={setSets} />
         <Field label="reps" options={REPS_OPTIONS} value={reps} onChange={setReps} />
         <button onClick={() => onSave(expandLine(weight, sets, reps))} className="rounded-lg bg-black text-white px-4 py-2 font-semibold">Log</button>
       </div>

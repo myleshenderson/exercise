@@ -87,3 +87,8 @@ test("reps uses a native select picker", () => {
   render(<SetEditor initialWeight={100} initialSets={3} initialReps={10} onSave={() => {}} />);
   expect(screen.getByLabelText("reps").tagName).toBe("SELECT");
 });
+
+test("sets uses a native select picker", () => {
+  render(<SetEditor initialWeight={100} initialSets={3} initialReps={10} onSave={() => {}} />);
+  expect(screen.getByLabelText("sets").tagName).toBe("SELECT");
+});
