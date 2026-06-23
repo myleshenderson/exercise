@@ -1,11 +1,18 @@
+import { useEffect, useState } from "react";
 import { Routes, Route, Link } from "react-router-dom";
 import Home from "./screens/Home";
 import Session from "./screens/Session";
 import Summary from "./screens/Summary";
 import ManageDays from "./screens/ManageDays";
 import History from "./screens/History";
+import { AuthProvider, useAuth } from "./auth/AuthContext";
+import Login from "./auth/Login";
+import { ensureSeeded } from "./data/ensureSeeded";
+import { db } from "./data";
 
-export default function App() {
+const requireAuth = (import.meta.env.VITE_DATA_BACKEND ?? "mock") === "supabase";
+
+function Shell() {
   return (
     <div className="min-h-screen max-w-md mx-auto pb-16">
       <Routes>
@@ -20,5 +27,28 @@ export default function App() {
         <Link to="/days" className="p-2">Days</Link>
       </nav>
     </div>
+  );
+}
+
+function Gate() {
+  const { session, loading } = useAuth();
+  const [seeded, setSeeded] = useState(false);
+
+  useEffect(() => {
+    if (session) ensureSeeded(db).then(() => setSeeded(true));
+  }, [session]);
+
+  if (loading) return <div className="p-4">Loading…</div>;
+  if (!session) return <Login />;
+  if (!seeded) return <div className="p-4">Setting up…</div>;
+  return <Shell />;
+}
+
+export default function App() {
+  if (!requireAuth) return <Shell />;
+  return (
+    <AuthProvider>
+      <Gate />
+    </AuthProvider>
   );
 }
