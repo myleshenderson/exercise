@@ -53,3 +53,15 @@ test("createMockDataLayer({ seed: false }) starts empty", async () => {
   expect(await db.getWorkoutDays()).toEqual([]);
   expect(await db.listExercises()).toEqual([]);
 });
+
+test("getLastSessionForDay returns the later session on same-day ties", async () => {
+  const db = createMockDataLayer({ seed: false });
+  const d = await db.createDay("X");
+  const ex = await db.createExercise({ name: "E", cue: "", defaultSets: 3, defaultRepLow: 8, defaultRepHigh: 12 });
+  const s1 = await db.startSession(d.id, "2026-06-10");
+  await db.logExercise(s1.id, ex.id, [{ setNumber: 1, weight: 100, reps: 10 }]);
+  const s2 = await db.startSession(d.id, "2026-06-10");
+  await db.logExercise(s2.id, ex.id, [{ setNumber: 1, weight: 120, reps: 10 }]);
+  const last = await db.getLastSessionForDay(d.id);
+  expect(last?.id).toBe(s2.id);
+});

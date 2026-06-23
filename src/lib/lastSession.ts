@@ -5,11 +5,12 @@ export function findLastSetsForExercise(
   exerciseId: string,
   beforeDate: string,
 ): SetEntry[] {
-  const candidates = sessions
-    .filter((s) => s.performedOn < beforeDate)
-    .filter((s) => s.exercises.some((e) => e.exerciseId === exerciseId))
-    .sort((a, b) => (a.performedOn < b.performedOn ? 1 : -1));
-  const latest = candidates[0];
-  if (!latest) return [];
-  return latest.exercises.find((e) => e.exerciseId === exerciseId)!.sets;
+  let best: Session | null = null;
+  for (const s of sessions) {
+    if (s.performedOn >= beforeDate) continue;
+    if (!s.exercises.some((e) => e.exerciseId === exerciseId)) continue;
+    // `>=` so that among equal dates the later-listed (later-recorded) session wins
+    if (!best || s.performedOn >= best.performedOn) best = s;
+  }
+  return best ? best.exercises.find((e) => e.exerciseId === exerciseId)!.sets : [];
 }

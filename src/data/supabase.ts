@@ -122,7 +122,8 @@ export function createSupabaseDataLayer(): DataLayer {
         .from("sessions")
         .select("id, performed_on")
         .lt("performed_on", beforeDate)
-        .order("performed_on", { ascending: false });
+        .order("performed_on", { ascending: false })
+        .order("created_at", { ascending: false });
       for (const sess of s ?? []) {
         const { data: sets } = await supabase
           .from("session_sets")
@@ -151,7 +152,8 @@ export function createSupabaseDataLayer(): DataLayer {
         .from("sessions")
         .select("id")
         .eq("workout_day_id", workoutDayId)
-        .order("performed_on", { ascending: false });
+        .order("performed_on", { ascending: false })
+        .order("created_at", { ascending: false });
       for (const sess of s ?? []) {
         const full = await loadSession(sess.id);
         if (full && full.exercises.length > 0) return full;

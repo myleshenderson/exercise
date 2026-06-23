@@ -66,11 +66,12 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
         .sort((a, b) => (a.performedOn < b.performedOn ? 1 : -1));
     },
     async getLastSessionForDay(workoutDayId) {
-      return (
-        sessions
-          .filter((s) => s.workoutDayId === workoutDayId && s.exercises.length > 0)
-          .sort((a, b) => (a.performedOn < b.performedOn ? 1 : -1))[0] ?? null
-      );
+      let best: Session | null = null;
+      for (const s of sessions) {
+        if (s.workoutDayId !== workoutDayId || s.exercises.length === 0) continue;
+        if (!best || s.performedOn >= best.performedOn) best = s;
+      }
+      return best;
     },
   };
 }

@@ -53,7 +53,7 @@ begin
     execute format('alter table %I enable row level security;', t);
     execute format($p$create policy "own_select" on %I for select using (user_id = auth.uid());$p$, t);
     execute format($p$create policy "own_insert" on %I for insert with check (user_id = auth.uid());$p$, t);
-    execute format($p$create policy "own_update" on %I for update using (user_id = auth.uid());$p$, t);
+    execute format($p$create policy "own_update" on %I for update using (user_id = auth.uid()) with check (user_id = auth.uid());$p$, t);
     execute format($p$create policy "own_delete" on %I for delete using (user_id = auth.uid());$p$, t);
   end loop;
 end $$;

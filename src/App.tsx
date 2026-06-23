@@ -33,13 +33,19 @@ function Shell() {
 function Gate() {
   const { session, loading } = useAuth();
   const [seeded, setSeeded] = useState(false);
+  const [seedError, setSeedError] = useState(false);
 
   useEffect(() => {
-    if (session) ensureSeeded(db).then(() => setSeeded(true));
+    if (session) {
+      ensureSeeded(db)
+        .then(() => setSeeded(true))
+        .catch(() => setSeedError(true));
+    }
   }, [session]);
 
   if (loading) return <div className="p-4">Loading…</div>;
   if (!session) return <Login />;
+  if (seedError) return <div className="p-4">Couldn't finish setting up — please reload.</div>;
   if (!seeded) return <div className="p-4">Setting up…</div>;
   return <Shell />;
 }
