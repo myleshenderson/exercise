@@ -47,3 +47,9 @@ test("getLastSessionForDay ignores freshly-started empty sessions", async () => 
   const last = await db.getLastSessionForDay("upper-day");
   expect(last?.performedOn).toBe("2026-06-20"); // still the seeded non-empty one
 });
+
+test("createMockDataLayer({ seed: false }) starts empty", async () => {
+  const db = createMockDataLayer({ seed: false });
+  expect(await db.getWorkoutDays()).toEqual([]);
+  expect(await db.listExercises()).toEqual([]);
+});

@@ -3,10 +3,11 @@ import type { Exercise, WorkoutDay, Session } from "../types";
 import { seedExercises, seedDays, seedSessions } from "./seed";
 import { findLastSetsForExercise } from "../lib/lastSession";
 
-export function createMockDataLayer(): DataLayer {
-  const exercises: Exercise[] = structuredClone(seedExercises);
-  const days: WorkoutDay[] = structuredClone(seedDays);
-  const sessions: Session[] = structuredClone(seedSessions);
+export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
+  const useSeed = opts?.seed !== false;
+  const exercises: Exercise[] = useSeed ? structuredClone(seedExercises) : [];
+  const days: WorkoutDay[] = useSeed ? structuredClone(seedDays) : [];
+  const sessions: Session[] = useSeed ? structuredClone(seedSessions) : [];
   let counter = 0;
   const nextId = (prefix: string) => `${prefix}-${++counter}`;
 
