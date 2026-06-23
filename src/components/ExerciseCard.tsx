@@ -20,16 +20,21 @@ export default function ExerciseCard({ exercise, lastSets, loggedSets, onLog }: 
 
   if (loggedSets && !editing) {
     return (
-      <div className="flex items-center justify-between rounded-xl border border-green-200 bg-green-50 p-3">
+      <button
+        type="button"
+        aria-label={`edit ${exercise.name}`}
+        onClick={() => setEditing(true)}
+        className="flex w-full items-center justify-between rounded-xl border border-green-200 bg-green-50 p-4 text-left active:bg-green-100"
+      >
         <div className="min-w-0">
           <span className="font-semibold">{exercise.name}</span>
           <span className="ml-2 text-sm text-green-800">{formatSets(loggedSets)}</span>
         </div>
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-4 shrink-0">
           <span aria-label="logged" className="text-green-600">✓</span>
-          <button onClick={() => setEditing(true)} className="text-sm text-gray-600 underline">Edit</button>
+          <span className="text-sm text-gray-500 underline">Edit</span>
         </div>
-      </div>
+      </button>
     );
   }
 
