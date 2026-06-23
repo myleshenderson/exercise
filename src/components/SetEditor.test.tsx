@@ -105,7 +105,13 @@ test("removing sets down to one returns to the single-set line view", () => {
   expect(screen.getByLabelText("weight")).toBeInTheDocument();
   expect(screen.getByLabelText("sets")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /adjust sets/i })).toBeInTheDocument();
-  // logging now saves a single set seeded from the remaining row
+  // collapsing restores the target sets count (initialSets = 3)
+  expect(screen.getByLabelText("sets")).toHaveValue("3");
+  // logging now saves the target number of sets, seeded from the remaining row
   fireEvent.click(screen.getByRole("button", { name: /^log$/i }));
-  expect(onSave).toHaveBeenCalledWith([{ setNumber: 1, weight: 100, reps: 10 }]);
+  expect(onSave).toHaveBeenCalledWith([
+    { setNumber: 1, weight: 100, reps: 10 },
+    { setNumber: 2, weight: 100, reps: 10 },
+    { setNumber: 3, weight: 100, reps: 10 },
+  ]);
 });

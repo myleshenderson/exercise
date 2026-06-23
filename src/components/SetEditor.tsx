@@ -48,7 +48,7 @@ export default function SetEditor({ initialWeight, initialSets, initialReps, ini
         setWeight(next[0].weight);
         setReps(next[0].reps);
       }
-      setSets(Math.max(1, next.length));
+      setSets(initialSets);
       setPerSet(false);
     }
   }
