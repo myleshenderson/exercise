@@ -24,7 +24,7 @@ export default function Home() {
     })();
   }, []);
 
-  async function start(dayId: string | null) {
+  async function start(dayId: string) {
     const session = await db.startSession(dayId, today());
     navigate(`/session/${session.id}`);
   }
@@ -44,12 +44,6 @@ export default function Home() {
           </span>
         </button>
       ))}
-      <button
-        onClick={() => start(null)}
-        className="w-full rounded-xl border border-dashed p-4 text-left text-gray-600"
-      >
-        Start blank session
-      </button>
     </div>
   );
 }

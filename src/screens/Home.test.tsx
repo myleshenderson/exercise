@@ -14,3 +14,9 @@ test("shows when each day was last done", async () => {
   await waitFor(() => expect(screen.getByText("Last done Thursday, Jun 18")).toBeInTheDocument());
   expect(screen.getByText("Last done Saturday, Jun 20")).toBeInTheDocument();
 });
+
+test("does not show a blank-session button", async () => {
+  render(<MemoryRouter><Home /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByText("Leg Day")).toBeInTheDocument());
+  expect(screen.queryByText(/blank session/i)).not.toBeInTheDocument();
+});
