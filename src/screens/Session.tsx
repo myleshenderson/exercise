@@ -16,13 +16,13 @@ export default function Session() {
     (async () => {
       const s = await db.getSession(id);
       if (!s) return;
-      setSession(s);
       const ex = s.workoutDayId ? await db.getDayExercises(s.workoutDayId) : [];
-      setExercises(ex);
       const last: Record<string, SetEntry[]> = {};
       for (const e of ex) {
         last[e.id] = await db.getLastSetsForExercise(e.id, s.performedOn);
       }
+      setSession(s);
+      setExercises(ex);
       setLastByEx(last);
     })();
   }, [id]);

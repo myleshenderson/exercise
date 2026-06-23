@@ -42,3 +42,52 @@ test("Finish workout navigates to the summary", async () => {
   fireEvent.click(screen.getByRole("button", { name: /finish workout/i }));
   await waitFor(() => expect(screen.getByText(/complete ✓/)).toBeInTheDocument());
 });
+
+test("loads last time's weight as the editor default (even when last-sets load slowly)", async () => {
+  // Force a delay so React renders once before lastByEx arrives — this reproduces
+  // the race the synchronous mock would otherwise hide.
+  const spy = vi.spyOn(db, "getLastSetsForExercise").mockImplementation(
+    () =>
+      new Promise((resolve) =>
+        setTimeout(
+          () =>
+            resolve([
+              { setNumber: 1, weight: 150, reps: 12 },
+              { setNumber: 2, weight: 150, reps: 12 },
+              { setNumber: 3, weight: 150, reps: 12 },
+            ]),
+          10,
+        ),
+      ),
+  );
+  const s = await db.startSession("leg-day", "2026-06-22");
+  render(
+    <MemoryRouter initialEntries={[`/session/${s.id}`]}>
+      <Routes>
+        <Route path="/session/:id" element={<Session />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  await waitFor(() => expect(screen.getByText("Leg Press")).toBeInTheDocument());
+  expect(screen.getAllByLabelText("weight")[0]).toHaveValue("150");
+  spy.mockRestore();
+});
+
+test("completed exercises load with their logged values", async () => {
+  const s = await db.startSession("leg-day", "2026-06-22");
+  await db.logExercise(s.id, "leg-press", [
+    { setNumber: 1, weight: 160, reps: 10 },
+    { setNumber: 2, weight: 160, reps: 10 },
+    { setNumber: 3, weight: 160, reps: 10 },
+  ]);
+  render(
+    <MemoryRouter initialEntries={[`/session/${s.id}`]}>
+      <Routes>
+        <Route path="/session/:id" element={<Session />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  await waitFor(() => expect(screen.getByText("Leg Press")).toBeInTheDocument());
+  // Logged → collapsed summary shows the logged values, not the defaults.
+  expect(screen.getByText("160 × 3 × 10")).toBeInTheDocument();
+});
