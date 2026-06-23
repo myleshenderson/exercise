@@ -7,7 +7,7 @@ test("does nothing when the user already has days", async () => {
   expect((await db.getWorkoutDays()).length).toBe(2);
 });
 
-test("seeds exercises, days, and history into an empty data layer", async () => {
+test("seeds exercises and day templates but no workout history", async () => {
   const db = createMockDataLayer({ seed: false });
   await ensureSeeded(db);
 
@@ -22,10 +22,9 @@ test("seeds exercises, days, and history into an empty data layer", async () => 
   expect(legExercises[0].name).toBe("Leg Press");
   expect(legExercises.length).toBe(6);
 
-  // history seeded: Leg Press last time was 150
+  // No history seeded — "last time" is empty on day one.
   const legPress = exercises.find((e) => e.name === "Leg Press")!;
-  const lastSets = await db.getLastSetsForExercise(legPress.id, "2026-06-22");
-  expect(lastSets[0].weight).toBe(150);
+  expect(await db.getLastSetsForExercise(legPress.id, "2026-06-22")).toEqual([]);
 });
 
 test("is idempotent (running twice does not duplicate)", async () => {
