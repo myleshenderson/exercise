@@ -11,6 +11,8 @@ import { ensureSeeded } from "./data/ensureSeeded";
 import { db } from "./data";
 
 const requireAuth = (import.meta.env.VITE_DATA_BACKEND ?? "mock") === "supabase";
+const supabaseConfigured =
+  !!import.meta.env.VITE_SUPABASE_URL && !!import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 function Shell() {
   return (
@@ -52,6 +54,19 @@ function Gate() {
 
 export default function App() {
   if (!requireAuth) return <Shell />;
+  if (!supabaseConfigured) {
+    return (
+      <div className="p-6 max-w-sm mx-auto space-y-2">
+        <h1 className="text-xl font-bold">Configuration error</h1>
+        <p className="text-sm text-gray-600">
+          The app is set to the Supabase backend but{" "}
+          <code>VITE_SUPABASE_URL</code> / <code>VITE_SUPABASE_PUBLISHABLE_KEY</code>{" "}
+          are missing from this build. Set them (and redeploy, since Vite bakes env
+          vars at build time).
+        </p>
+      </div>
+    );
+  }
   return (
     <AuthProvider>
       <Gate />
