@@ -58,11 +58,12 @@ export default function ExerciseCard({ exercise, lastSets, loggedSets, onLog }: 
           )}
         </div>
       </div>
-      <p className="text-sm text-gray-500">
-        Target: {exercise.defaultSets} × {exercise.defaultRepLow}–{exercise.defaultRepHigh}
-        {" · "}
+      <div className="mt-0.5 flex items-baseline justify-between text-sm">
+        <span className="text-gray-500">
+          Target: {exercise.defaultSets} × {exercise.defaultRepLow}–{exercise.defaultRepHigh}
+        </span>
         <span className="font-medium text-gray-900">Last: {lastLine || "—"}</span>
-      </p>
+      </div>
       <SetEditor
         initialWeight={(loggedSets ?? lastSets)[0]?.weight ?? 0}
         initialSets={loggedSets?.length ?? exercise.defaultSets}
