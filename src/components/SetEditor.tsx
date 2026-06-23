@@ -41,7 +41,16 @@ export default function SetEditor({ initialWeight, initialSets, initialReps, ini
     setRows((rs) => [...rs, rs[rs.length - 1] ?? { weight, reps }]);
   }
   function removeRow(i: number) {
-    setRows((rs) => rs.filter((_, idx) => idx !== i));
+    const next = rows.filter((_, idx) => idx !== i);
+    setRows(next);
+    if (next.length <= 1) {
+      if (next.length === 1) {
+        setWeight(next[0].weight);
+        setReps(next[0].reps);
+      }
+      setSets(Math.max(1, next.length));
+      setPerSet(false);
+    }
   }
   function toEntries(rs: Row[]): SetEntry[] {
     return rs.map((r, i) => ({ setNumber: i + 1, weight: r.weight, reps: r.reps }));

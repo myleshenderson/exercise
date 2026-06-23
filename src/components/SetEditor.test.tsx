@@ -92,3 +92,20 @@ test("sets uses a native select picker", () => {
   render(<SetEditor initialWeight={100} initialSets={3} initialReps={10} onSave={() => {}} />);
   expect(screen.getByLabelText("sets").tagName).toBe("SELECT");
 });
+
+test("removing sets down to one returns to the single-set line view", () => {
+  const onSave = vi.fn();
+  render(<SetEditor initialWeight={100} initialSets={3} initialReps={10} onSave={onSave} />);
+  fireEvent.click(screen.getByRole("button", { name: /adjust sets/i }));
+  expect(screen.getByLabelText("set 3 weight")).toBeInTheDocument();
+  fireEvent.click(screen.getByLabelText("remove set 3"));
+  fireEvent.click(screen.getByLabelText("remove set 2"));
+  // back to line view: per-set rows gone, line fields + Adjust sets present
+  expect(screen.queryByLabelText("set 1 weight")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("weight")).toBeInTheDocument();
+  expect(screen.getByLabelText("sets")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /adjust sets/i })).toBeInTheDocument();
+  // logging now saves a single set seeded from the remaining row
+  fireEvent.click(screen.getByRole("button", { name: /^log$/i }));
+  expect(onSave).toHaveBeenCalledWith([{ setNumber: 1, weight: 100, reps: 10 }]);
+});
