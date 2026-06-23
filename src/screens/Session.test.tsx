@@ -1,6 +1,7 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import Session from "./Session";
+import Summary from "./Summary";
 import { db } from "../data";
 
 async function renderSession() {
@@ -25,4 +26,19 @@ test("logging an exercise marks it done", async () => {
   const buttons = screen.getAllByRole("button", { name: /log/i });
   fireEvent.click(buttons[0]);
   await waitFor(() => expect(screen.getAllByLabelText("logged").length).toBeGreaterThan(0));
+});
+
+test("Finish workout navigates to the summary", async () => {
+  const s = await db.startSession("leg-day", "2026-06-22");
+  render(
+    <MemoryRouter initialEntries={[`/session/${s.id}`]}>
+      <Routes>
+        <Route path="/session/:id" element={<Session />} />
+        <Route path="/session/:id/summary" element={<Summary />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  await waitFor(() => expect(screen.getByText("Leg Press")).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /finish workout/i }));
+  await waitFor(() => expect(screen.getByText(/complete ✓/)).toBeInTheDocument());
 });

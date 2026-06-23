@@ -1,6 +1,7 @@
 import { Routes, Route, Link } from "react-router-dom";
 import Home from "./screens/Home";
 import Session from "./screens/Session";
+import Summary from "./screens/Summary";
 import ManageDays from "./screens/ManageDays";
 import History from "./screens/History";
 
@@ -10,6 +11,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/session/:id" element={<Session />} />
+        <Route path="/session/:id/summary" element={<Summary />} />
         <Route path="/days" element={<ManageDays />} />
         <Route path="/history/:exerciseId" element={<History />} />
       </Routes>

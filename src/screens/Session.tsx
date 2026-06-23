@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { db } from "../data";
 import type { Exercise, Session as SessionT, SetEntry } from "../types";
 import ExerciseCard from "../components/ExerciseCard";
 
 export default function Session() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [session, setSession] = useState<SessionT | null>(null);
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [lastByEx, setLastByEx] = useState<Record<string, SetEntry[]>>({});
@@ -50,6 +51,12 @@ export default function Session() {
           onLog={(sets) => log(e.id, sets)}
         />
       ))}
+      <button
+        onClick={() => navigate(`/session/${session.id}/summary`)}
+        className="w-full rounded-xl border-2 border-black p-4 font-semibold"
+      >
+        Finish workout
+      </button>
     </div>
   );
 }
