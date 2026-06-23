@@ -74,10 +74,10 @@ export default function SetEditor({
       <div className="mt-2 space-y-2">
         {rows.map((r, i) => (
           <div key={i} className="flex items-end gap-2">
-            <span className="text-xs text-gray-500 w-10 pb-2">Set {i + 1}</span>
-            <Field label={`set ${i + 1} weight`} display="weight" options={WEIGHT_OPTIONS} value={r.weight} onChange={(v) => updateRow(i, "weight", v)} />
-            <Field label={`set ${i + 1} reps`} display="reps" options={REPS_OPTIONS} value={r.reps} onChange={(v) => updateRow(i, "reps", v)} />
-            <button aria-label={`remove set ${i + 1}`} onClick={() => removeRow(i)} className="text-red-600 text-xl px-2 pb-1">−</button>
+            <span className="text-xs text-gray-500 w-10 pb-2 shrink-0">Set {i + 1}</span>
+            <Field label={`set ${i + 1} weight`} display="weight" options={WEIGHT_OPTIONS} grow value={r.weight} onChange={(v) => updateRow(i, "weight", v)} />
+            <Field label={`set ${i + 1} reps`} display="reps" options={REPS_OPTIONS} grow value={r.reps} onChange={(v) => updateRow(i, "reps", v)} />
+            <button aria-label={`remove set ${i + 1}`} onClick={() => removeRow(i)} className="shrink-0 text-red-600 text-xl px-2 pb-1">−</button>
           </div>
         ))}
         <div className="flex gap-2">
@@ -90,25 +90,22 @@ export default function SetEditor({
 
   return (
     <div className="mt-2 flex items-end gap-2">
-      <Field label="weight" options={WEIGHT_OPTIONS} value={weight} onChange={setWeight} />
-      <Field label="sets" options={SETS_OPTIONS} value={sets} onChange={setSets} />
-      <Field label="reps" options={REPS_OPTIONS} value={reps} onChange={setReps} />
-      <button onClick={() => onSave(expandLine(weight, sets, reps))} className="rounded-lg bg-black text-white px-4 py-2 font-semibold">Log</button>
+      <Field label="weight" options={WEIGHT_OPTIONS} grow value={weight} onChange={setWeight} />
+      <Field label="sets" options={SETS_OPTIONS} grow value={sets} onChange={setSets} />
+      <Field label="reps" options={REPS_OPTIONS} grow value={reps} onChange={setReps} />
+      <button onClick={() => onSave(expandLine(weight, sets, reps))} className="shrink-0 rounded-lg bg-black text-white px-4 py-2 font-semibold">Log</button>
     </div>
   );
 }
 
-function Field({ label, display, value, options, onChange }: { label: string; display?: string; value: number; options?: number[]; onChange(n: number): void }) {
+function Field({ label, display, value, options, grow, onChange }: { label: string; display?: string; value: number; options?: number[]; grow?: boolean; onChange(n: number): void }) {
+  const labelClass = grow ? "flex flex-1 flex-col text-xs text-gray-500" : "flex flex-col text-xs text-gray-500";
+  const controlClass = `${grow ? "w-full" : options ? "w-20" : "w-16"} rounded-lg border p-2 text-base text-black`;
   if (options) {
     return (
-      <label className="flex flex-col text-xs text-gray-500">
+      <label className={labelClass}>
         {display ?? label}
-        <select
-          aria-label={label}
-          value={value}
-          onChange={(e) => onChange(Number(e.target.value))}
-          className="w-20 rounded-lg border p-2 text-base text-black"
-        >
+        <select aria-label={label} value={value} onChange={(e) => onChange(Number(e.target.value))} className={controlClass}>
           {options.map((o) => (
             <option key={o} value={o}>{o}</option>
           ))}
@@ -117,16 +114,9 @@ function Field({ label, display, value, options, onChange }: { label: string; di
     );
   }
   return (
-    <label className="flex flex-col text-xs text-gray-500">
+    <label className={labelClass}>
       {display ?? label}
-      <input
-        aria-label={label}
-        type="number"
-        inputMode="numeric"
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-16 rounded-lg border p-2 text-base text-black"
-      />
+      <input aria-label={label} type="number" inputMode="numeric" value={value} onChange={(e) => onChange(Number(e.target.value))} className={controlClass} />
     </label>
   );
 }
