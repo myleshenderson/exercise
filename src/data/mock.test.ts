@@ -34,3 +34,16 @@ test("logged set becomes 'last time' for a later date", async () => {
   const sets = await db.getLastSetsForExercise("leg-press", "2026-06-23");
   expect(sets[0].weight).toBe(160);
 });
+
+test("getLastSessionForDay returns the most recent non-empty session for a day", async () => {
+  const db = createMockDataLayer();
+  const last = await db.getLastSessionForDay("leg-day");
+  expect(last?.performedOn).toBe("2026-06-18"); // seeded Leg Day session
+});
+
+test("getLastSessionForDay ignores freshly-started empty sessions", async () => {
+  const db = createMockDataLayer();
+  await db.startSession("upper-day", "2026-06-25"); // empty, newer
+  const last = await db.getLastSessionForDay("upper-day");
+  expect(last?.performedOn).toBe("2026-06-20"); // still the seeded non-empty one
+});

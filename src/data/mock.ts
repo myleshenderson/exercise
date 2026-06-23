@@ -64,5 +64,12 @@ export function createMockDataLayer(): DataLayer {
         .filter((s) => s.exercises.some((e) => e.exerciseId === exerciseId))
         .sort((a, b) => (a.performedOn < b.performedOn ? 1 : -1));
     },
+    async getLastSessionForDay(workoutDayId) {
+      return (
+        sessions
+          .filter((s) => s.workoutDayId === workoutDayId && s.exercises.length > 0)
+          .sort((a, b) => (a.performedOn < b.performedOn ? 1 : -1))[0] ?? null
+      );
+    },
   };
 }

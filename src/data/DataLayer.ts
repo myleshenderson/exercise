@@ -14,6 +14,7 @@ export interface DataLayer {
 
   startSession(workoutDayId: string | null, date: string): Promise<Session>;
   getSession(id: string): Promise<Session | null>;
+  getLastSessionForDay(workoutDayId: string): Promise<Session | null>;
   logExercise(sessionId: string, exerciseId: string, sets: SetEntry[]): Promise<void>;
   getExerciseHistory(exerciseId: string): Promise<Session[]>;
 }
