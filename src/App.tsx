@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Routes, Route, Link } from "react-router-dom";
 import Home from "./screens/Home";
 import Session from "./screens/Session";
@@ -36,9 +36,14 @@ function Gate() {
   const { session, loading } = useAuth();
   const [seeded, setSeeded] = useState(false);
   const [seedError, setSeedError] = useState(false);
+  // Seed exactly once: the auth listener fires several events (INITIAL_SESSION,
+  // SIGNED_IN, …), each changing `session`. Without this guard the effect would
+  // run ensureSeeded concurrently and double-seed before the first run finishes.
+  const seedStarted = useRef(false);
 
   useEffect(() => {
-    if (session) {
+    if (session && !seedStarted.current) {
+      seedStarted.current = true;
       ensureSeeded(db)
         .then(() => setSeeded(true))
         .catch(() => setSeedError(true));
