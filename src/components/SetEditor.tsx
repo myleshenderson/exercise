@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { SetEntry } from "../types";
 import { expandLine } from "../lib/sets";
 
@@ -7,6 +7,8 @@ interface Props {
   initialSets: number;
   initialReps: number;
   initialEntries?: SetEntry[];
+  perSet: boolean;
+  onPerSetChange(next: boolean): void;
   onSave(sets: SetEntry[]): void;
 }
 
@@ -16,24 +18,33 @@ const WEIGHT_OPTIONS = Array.from({ length: 101 }, (_, i) => i * 5); // 0..500 b
 const REPS_OPTIONS = Array.from({ length: 40 }, (_, i) => i + 1); // 1..40
 const SETS_OPTIONS = Array.from({ length: 10 }, (_, i) => i + 1); // 1..10
 
-export default function SetEditor({ initialWeight, initialSets, initialReps, initialEntries, onSave }: Props) {
+export default function SetEditor({
+  initialWeight,
+  initialSets,
+  initialReps,
+  initialEntries,
+  perSet,
+  onPerSetChange,
+  onSave,
+}: Props) {
   const seed = initialEntries && initialEntries.length > 0 ? initialEntries : null;
-  const seedNonUniform = seed
-    ? !seed.every((s) => s.weight === seed[0].weight && s.reps === seed[0].reps)
-    : false;
 
   const [weight, setWeight] = useState(seed ? seed[0].weight : initialWeight);
   const [sets, setSets] = useState(seed ? seed.length : initialSets);
   const [reps, setReps] = useState(seed ? seed[0].reps : initialReps);
-  const [perSet, setPerSet] = useState(seedNonUniform);
   const [rows, setRows] = useState<Row[]>(
-    seed && seedNonUniform ? seed.map((s) => ({ weight: s.weight, reps: s.reps })) : [],
+    seed && perSet ? seed.map((s) => ({ weight: s.weight, reps: s.reps })) : [],
   );
 
-  function expand() {
-    setRows(expandLine(weight, sets, reps).map((s) => ({ weight: s.weight, reps: s.reps })));
-    setPerSet(true);
-  }
+  // Entering per-set mode with no rows yet (e.g. the header "adjust sets" control
+  // was tapped) seeds the rows from the current line values.
+  useEffect(() => {
+    if (perSet && rows.length === 0) {
+      setRows(expandLine(weight, sets, reps).map((s) => ({ weight: s.weight, reps: s.reps })));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [perSet]);
+
   function updateRow(i: number, field: "weight" | "reps", value: number) {
     setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)));
   }
@@ -42,14 +53,16 @@ export default function SetEditor({ initialWeight, initialSets, initialReps, ini
   }
   function removeRow(i: number) {
     const next = rows.filter((_, idx) => idx !== i);
-    setRows(next);
     if (next.length <= 1) {
       if (next.length === 1) {
         setWeight(next[0].weight);
         setReps(next[0].reps);
       }
       setSets(initialSets);
-      setPerSet(false);
+      setRows([]);
+      onPerSetChange(false);
+    } else {
+      setRows(next);
     }
   }
   function toEntries(rs: Row[]): SetEntry[] {
@@ -76,14 +89,11 @@ export default function SetEditor({ initialWeight, initialSets, initialReps, ini
   }
 
   return (
-    <div className="mt-2">
-      <div className="flex items-end gap-2">
-        <Field label="weight" options={WEIGHT_OPTIONS} value={weight} onChange={setWeight} />
-        <Field label="sets" options={SETS_OPTIONS} value={sets} onChange={setSets} />
-        <Field label="reps" options={REPS_OPTIONS} value={reps} onChange={setReps} />
-        <button onClick={() => onSave(expandLine(weight, sets, reps))} className="rounded-lg bg-black text-white px-4 py-2 font-semibold">Log</button>
-      </div>
-      <button onClick={expand} className="mt-1 text-sm text-gray-500 underline">Adjust sets</button>
+    <div className="mt-2 flex items-end gap-2">
+      <Field label="weight" options={WEIGHT_OPTIONS} value={weight} onChange={setWeight} />
+      <Field label="sets" options={SETS_OPTIONS} value={sets} onChange={setSets} />
+      <Field label="reps" options={REPS_OPTIONS} value={reps} onChange={setReps} />
+      <button onClick={() => onSave(expandLine(weight, sets, reps))} className="rounded-lg bg-black text-white px-4 py-2 font-semibold">Log</button>
     </div>
   );
 }

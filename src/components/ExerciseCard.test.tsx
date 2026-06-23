@@ -57,3 +57,9 @@ test("does not render the exercise cue", () => {
   render(<ExerciseCard exercise={ex} lastSets={[]} loggedSets={null} onLog={() => {}} />);
   expect(screen.queryByText("main driver")).not.toBeInTheDocument();
 });
+
+test("the adjust-sets header icon expands the editor to per-set rows", () => {
+  render(<ExerciseCard exercise={ex} lastSets={[]} loggedSets={null} onLog={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: /adjust sets/i }));
+  expect(screen.getByLabelText("set 1 weight")).toBeInTheDocument();
+});
