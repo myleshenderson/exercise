@@ -24,16 +24,12 @@ export default function ExerciseCard({ exercise, lastSets, loggedSets, onLog }: 
         type="button"
         aria-label={`edit ${exercise.name}`}
         onClick={() => setEditing(true)}
-        className="flex w-full items-center justify-between rounded-xl border border-green-200 bg-green-50 p-4 text-left active:bg-green-100"
+        className="flex w-full items-center gap-3 rounded-xl border border-green-200 bg-green-50 p-4 text-left active:bg-green-100"
       >
-        <div className="min-w-0">
-          <span className="font-semibold">{exercise.name}</span>
-          <span className="ml-2 text-sm text-green-800">{formatSets(loggedSets)}</span>
-        </div>
-        <div className="flex items-center gap-4 shrink-0">
-          <span aria-label="logged" className="text-green-600">✓</span>
-          <span className="text-sm text-gray-500 underline">Edit</span>
-        </div>
+        <span className="min-w-0 flex-1 truncate font-semibold">{exercise.name}</span>
+        <span className="shrink-0 text-sm text-green-800 tabular-nums">{formatSets(loggedSets)}</span>
+        <span aria-label="logged" className="shrink-0 text-green-600">✓</span>
+        <span className="shrink-0 text-sm text-gray-500 underline">Edit</span>
       </button>
     );
   }
