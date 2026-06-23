@@ -33,3 +33,9 @@ test("is idempotent (running twice does not duplicate)", async () => {
   await ensureSeeded(db);
   expect((await db.getWorkoutDays()).length).toBe(2);
 });
+
+test("concurrent calls seed only once (no duplicate templates)", async () => {
+  const db = createMockDataLayer({ seed: false });
+  await Promise.all([ensureSeeded(db), ensureSeeded(db), ensureSeeded(db)]);
+  expect((await db.getWorkoutDays()).length).toBe(2);
+});
