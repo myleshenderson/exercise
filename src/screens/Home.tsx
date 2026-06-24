@@ -40,6 +40,14 @@ export default function Home() {
           type="date"
           value={date}
           onChange={(e) => setDate(e.target.value)}
+          onClick={(e) => {
+            // Open the native picker when tapping anywhere in the field, not just the icon.
+            try {
+              e.currentTarget.showPicker?.();
+            } catch {
+              /* showPicker unsupported / not allowed — fall back to default behavior */
+            }
+          }}
           className="mt-1 block w-full rounded-lg border p-2 text-base text-black"
         />
       </label>
