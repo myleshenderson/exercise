@@ -9,6 +9,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export default function Home() {
   const [days, setDays] = useState<WorkoutDay[]>([]);
   const [lastByDay, setLastByDay] = useState<Record<string, string | null>>({});
+  const [date, setDate] = useState(today());
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -25,13 +26,23 @@ export default function Home() {
   }, []);
 
   async function start(dayId: string) {
-    const session = await db.startSession(dayId, today());
+    const session = await db.startSession(dayId, date);
     navigate(`/session/${session.id}`);
   }
 
   return (
     <div className="p-4 space-y-3">
       <h1 className="text-2xl font-bold">Today's Workout</h1>
+      <label className="block text-sm text-gray-500">
+        Workout date
+        <input
+          aria-label="Workout date"
+          type="date"
+          value={date}
+          onChange={(e) => setDate(e.target.value)}
+          className="mt-1 block w-full rounded-lg border p-2 text-base text-black"
+        />
+      </label>
       {days.map((d) => (
         <button
           key={d.id}
