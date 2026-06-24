@@ -5,6 +5,7 @@ import Session from "./screens/Session";
 import Summary from "./screens/Summary";
 import ManageDays from "./screens/ManageDays";
 import History from "./screens/History";
+import Progress from "./screens/Progress";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import Login from "./auth/Login";
 import { ensureSeeded } from "./data/ensureSeeded";
@@ -23,10 +24,12 @@ function Shell() {
         <Route path="/session/:id/summary" element={<Summary />} />
         <Route path="/days" element={<ManageDays />} />
         <Route path="/history/:exerciseId" element={<History />} />
+        <Route path="/progress" element={<Progress />} />
       </Routes>
       <nav className="fixed bottom-0 inset-x-0 max-w-md mx-auto flex justify-around bg-white border-t py-2">
         <Link to="/" className="p-2">Home</Link>
         <Link to="/days" className="p-2">Days</Link>
+        <Link to="/progress" className="p-2">Progress</Link>
       </nav>
     </div>
   );
