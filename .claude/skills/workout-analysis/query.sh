@@ -12,7 +12,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
-SUPABASE_PASSWORD="$(grep -E '^SUPABASE_PASSWORD=' "$ENV_FILE" | head -n1 | cut -d= -f2-)"
+SUPABASE_PASSWORD="$(grep -E '^SUPABASE_PASSWORD=' "$ENV_FILE" | head -n1 | cut -d= -f2- || true)"
 if [[ -z "$SUPABASE_PASSWORD" ]]; then
   echo "error: SUPABASE_PASSWORD not set in $ENV_FILE" >&2
   exit 1
@@ -27,10 +27,11 @@ fi
 # session read-only; any INSERT/UPDATE/DELETE/DDL errors out server-side.
 CONN="postgresql://postgres@db.aeolejvpsavbbmluysnm.supabase.co:5432/postgres?options=-c%20default_transaction_read_only%3Don"
 
+export PGPASSWORD="$SUPABASE_PASSWORD"
+export PGCONNECT_TIMEOUT=10
+
 if [[ $# -ge 1 ]]; then
-  exec env PGPASSWORD="$SUPABASE_PASSWORD" PGCONNECT_TIMEOUT=10 \
-    psql "$CONN" --set=ON_ERROR_STOP=1 -P pager=off -c "$1"
+  exec psql "$CONN" --set=ON_ERROR_STOP=1 -P pager=off -c "$1"
 else
-  exec env PGPASSWORD="$SUPABASE_PASSWORD" PGCONNECT_TIMEOUT=10 \
-    psql "$CONN" --set=ON_ERROR_STOP=1 -P pager=off -f -
+  exec psql "$CONN" --set=ON_ERROR_STOP=1 -P pager=off -f -
 fi
