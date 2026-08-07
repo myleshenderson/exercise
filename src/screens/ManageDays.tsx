@@ -33,6 +33,13 @@ export default function ManageDays() {
     await load();
   }
 
+  async function createAndAdd(day: WorkoutDay, input: Omit<Exercise, "id">) {
+    const ex = await db.createExercise(input);
+    await db.updateDayExercises(day.id, [...day.exerciseIds, ex.id]);
+    setAddingDayId(null);
+    await load();
+  }
+
   return (
     <div className="p-4 space-y-4">
       <h1 className="text-xl font-bold">Manage Days</h1>
@@ -74,6 +81,7 @@ export default function ManageDays() {
               day={day}
               available={allExercises.filter((e) => !day.exerciseIds.includes(e.id))}
               onAdd={(exerciseId) => addExisting(day, exerciseId)}
+              onCreate={(input) => createAndAdd(day, input)}
               onClose={() => setAddingDayId(null)}
             />
           ) : (
@@ -90,16 +98,26 @@ export default function ManageDays() {
   );
 }
 
-function AddExerciseSection({ day, available, onAdd, onClose }: {
+function AddExerciseSection({ day, available, onAdd, onCreate, onClose }: {
   day: WorkoutDay;
   available: Exercise[];
   onAdd: (exerciseId: string) => void;
+  onCreate: (input: Omit<Exercise, "id">) => void;
   onClose: () => void;
 }) {
+  const [mode, setMode] = useState<"pick" | "create">(available.length > 0 ? "pick" : "create");
   const [selectedId, setSelectedId] = useState(available[0]?.id ?? "");
-  return (
-    <div className="mt-2 space-y-2">
-      {available.length > 0 && (
+  const [name, setName] = useState("");
+  const [cue, setCue] = useState("");
+  const [sets, setSets] = useState(3);
+  const [repLow, setRepLow] = useState(8);
+  const [repHigh, setRepHigh] = useState(12);
+
+  const createValid = name.trim().length > 0 && sets >= 1 && repLow >= 1 && repLow <= repHigh;
+
+  if (mode === "pick") {
+    return (
+      <div className="mt-2 space-y-2">
         <div className="flex gap-2 items-center">
           <select
             aria-label={`exercise picker for ${day.name}`}
@@ -118,8 +136,68 @@ function AddExerciseSection({ day, available, onAdd, onClose }: {
             Add
           </button>
         </div>
-      )}
-      <button onClick={onClose} className="text-sm px-2 text-gray-500">Cancel</button>
+        <div className="flex gap-3">
+          <button
+            aria-label={`create new exercise for ${day.name}`}
+            onClick={() => setMode("create")}
+            className="text-sm px-2 text-blue-600">
+            Create new exercise
+          </button>
+          <button onClick={onClose} className="text-sm px-2 text-gray-500">Cancel</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 space-y-2">
+      <input
+        aria-label="new exercise name"
+        value={name}
+        onChange={(ev) => setName(ev.target.value)}
+        placeholder="Exercise name"
+        className="border rounded px-2 py-1 w-full"
+      />
+      <input
+        aria-label="new exercise cue"
+        value={cue}
+        onChange={(ev) => setCue(ev.target.value)}
+        placeholder="Cue (optional)"
+        className="border rounded px-2 py-1 w-full"
+      />
+      <div className="flex gap-2">
+        <input
+          aria-label="new exercise sets"
+          type="number"
+          value={sets}
+          onChange={(ev) => setSets(Number(ev.target.value))}
+          className="border rounded px-2 py-1 w-16"
+        />
+        <input
+          aria-label="new exercise rep low"
+          type="number"
+          value={repLow}
+          onChange={(ev) => setRepLow(Number(ev.target.value))}
+          className="border rounded px-2 py-1 w-16"
+        />
+        <input
+          aria-label="new exercise rep high"
+          type="number"
+          value={repHigh}
+          onChange={(ev) => setRepHigh(Number(ev.target.value))}
+          className="border rounded px-2 py-1 w-16"
+        />
+      </div>
+      <div className="flex gap-3">
+        <button
+          aria-label={`create and add to ${day.name}`}
+          disabled={!createValid}
+          onClick={() => onCreate({ name: name.trim(), cue, defaultSets: sets, defaultRepLow: repLow, defaultRepHigh: repHigh })}
+          className="text-sm px-2 py-1 border rounded disabled:opacity-50">
+          Create &amp; add
+        </button>
+        <button onClick={onClose} className="text-sm px-2 text-gray-500">Cancel</button>
+      </div>
     </div>
   );
 }

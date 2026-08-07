@@ -56,3 +56,21 @@ test("adding an existing exercise puts it in the day", async () => {
   // section closes after adding
   expect(screen.queryByRole("combobox", { name: /exercise picker for leg day/i })).not.toBeInTheDocument();
 });
+
+test("creating a new exercise adds it to the day", async () => {
+  render(<MemoryRouter><ManageDays /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByText("Upper Day")).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /^add exercise to upper day$/i }));
+  fireEvent.click(screen.getByRole("button", { name: /^create new exercise for upper day$/i }));
+  fireEvent.change(screen.getByRole("textbox", { name: /new exercise name/i }), { target: { value: "Face Pull" } });
+  fireEvent.click(screen.getByRole("button", { name: /^create and add to upper day$/i }));
+  await waitFor(() => expect(screen.getByText("Face Pull")).toBeInTheDocument());
+});
+
+test("create button is disabled until the name is filled in", async () => {
+  render(<MemoryRouter><ManageDays /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByText("Upper Day")).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /^add exercise to upper day$/i }));
+  fireEvent.click(screen.getByRole("button", { name: /^create new exercise for upper day$/i }));
+  expect(screen.getByRole("button", { name: /^create and add to upper day$/i })).toBeDisabled();
+});
