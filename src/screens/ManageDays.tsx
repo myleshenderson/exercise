@@ -6,6 +6,8 @@ export default function ManageDays() {
   const [days, setDays] = useState<WorkoutDay[]>([]);
   const [exByDay, setExByDay] = useState<Record<string, Exercise[]>>({});
   const [confirming, setConfirming] = useState<{ dayId: string; exerciseId: string } | null>(null);
+  const [allExercises, setAllExercises] = useState<Exercise[]>([]);
+  const [addingDayId, setAddingDayId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const d = await db.getWorkoutDays();
@@ -13,6 +15,7 @@ export default function ManageDays() {
     const map: Record<string, Exercise[]> = {};
     for (const day of d) map[day.id] = await db.getDayExercises(day.id);
     setExByDay(map);
+    setAllExercises(await db.listExercises());
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -21,6 +24,12 @@ export default function ManageDays() {
     const remaining = day.exerciseIds.filter((id) => id !== exerciseId);
     await db.updateDayExercises(day.id, remaining);
     setConfirming(null);
+    await load();
+  }
+
+  async function addExisting(day: WorkoutDay, exerciseId: string) {
+    await db.updateDayExercises(day.id, [...day.exerciseIds, exerciseId]);
+    setAddingDayId(null);
     await load();
   }
 
@@ -52,7 +61,7 @@ export default function ManageDays() {
                 ) : (
                   <button
                     aria-label={`remove ${e.name}`}
-                    onClick={() => setConfirming({ dayId: day.id, exerciseId: e.id })}
+                    onClick={() => { setConfirming({ dayId: day.id, exerciseId: e.id }); setAddingDayId(null); }}
                     className="text-red-600 text-sm px-2">
                     Remove
                   </button>
@@ -60,8 +69,57 @@ export default function ManageDays() {
               </li>
             ))}
           </ul>
+          {addingDayId === day.id ? (
+            <AddExerciseSection
+              day={day}
+              available={allExercises.filter((e) => !day.exerciseIds.includes(e.id))}
+              onAdd={(exerciseId) => addExisting(day, exerciseId)}
+              onClose={() => setAddingDayId(null)}
+            />
+          ) : (
+            <button
+              aria-label={`add exercise to ${day.name}`}
+              onClick={() => { setAddingDayId(day.id); setConfirming(null); }}
+              className="mt-2 text-sm text-blue-600 px-2">
+              + Add exercise
+            </button>
+          )}
         </div>
       ))}
+    </div>
+  );
+}
+
+function AddExerciseSection({ day, available, onAdd, onClose }: {
+  day: WorkoutDay;
+  available: Exercise[];
+  onAdd: (exerciseId: string) => void;
+  onClose: () => void;
+}) {
+  const [selectedId, setSelectedId] = useState(available[0]?.id ?? "");
+  return (
+    <div className="mt-2 space-y-2">
+      {available.length > 0 && (
+        <div className="flex gap-2 items-center">
+          <select
+            aria-label={`exercise picker for ${day.name}`}
+            value={selectedId}
+            onChange={(ev) => setSelectedId(ev.target.value)}
+            className="border rounded px-2 py-1 flex-1">
+            {available.map((e) => (
+              <option key={e.id} value={e.id}>{e.name}</option>
+            ))}
+          </select>
+          <button
+            aria-label={`add selected exercise to ${day.name}`}
+            disabled={!selectedId}
+            onClick={() => onAdd(selectedId)}
+            className="text-sm px-2 py-1 border rounded">
+            Add
+          </button>
+        </div>
+      )}
+      <button onClick={onClose} className="text-sm px-2 text-gray-500">Cancel</button>
     </div>
   );
 }

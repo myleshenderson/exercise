@@ -34,3 +34,25 @@ test("confirming removes the exercise", async () => {
   fireEvent.click(screen.getByRole("button", { name: /^confirm remove leg press$/i }));
   await waitFor(() => expect(screen.queryByText("Leg Press")).not.toBeInTheDocument());
 });
+
+test("picker excludes exercises already in the day", async () => {
+  render(<MemoryRouter><ManageDays /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByText("Leg Day")).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /^add exercise to leg day$/i }));
+  const picker = screen.getByRole("combobox", { name: /exercise picker for leg day/i });
+  const options = Array.from(picker.querySelectorAll("option")).map((o) => o.textContent);
+  expect(options).toContain("Bicep Curl");
+  expect(options).not.toContain("Leg Curl");
+});
+
+test("adding an existing exercise puts it in the day", async () => {
+  render(<MemoryRouter><ManageDays /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByText("Leg Day")).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /^add exercise to leg day$/i }));
+  const picker = screen.getByRole("combobox", { name: /exercise picker for leg day/i });
+  fireEvent.change(picker, { target: { value: "bicep-curl" } });
+  fireEvent.click(screen.getByRole("button", { name: /^add selected exercise to leg day$/i }));
+  await waitFor(() => expect(screen.getByText("Bicep Curl")).toBeInTheDocument());
+  // section closes after adding
+  expect(screen.queryByRole("combobox", { name: /exercise picker for leg day/i })).not.toBeInTheDocument();
+});
