@@ -112,6 +112,7 @@ function AddExerciseSection({ day, available, onAdd, onCreate, onClose }: {
   const [sets, setSets] = useState(3);
   const [repLow, setRepLow] = useState(8);
   const [repHigh, setRepHigh] = useState(12);
+  const [submitting, setSubmitting] = useState(false);
 
   const createValid = name.trim().length > 0 && sets >= 1 && repLow >= 1 && repLow <= repHigh;
 
@@ -130,8 +131,8 @@ function AddExerciseSection({ day, available, onAdd, onCreate, onClose }: {
           </select>
           <button
             aria-label={`add selected exercise to ${day.name}`}
-            disabled={!selectedId}
-            onClick={() => onAdd(selectedId)}
+            disabled={!selectedId || submitting}
+            onClick={() => { setSubmitting(true); onAdd(selectedId); }}
             className="text-sm px-2 py-1 border rounded">
             Add
           </button>
@@ -191,8 +192,8 @@ function AddExerciseSection({ day, available, onAdd, onCreate, onClose }: {
       <div className="flex gap-3">
         <button
           aria-label={`create and add to ${day.name}`}
-          disabled={!createValid}
-          onClick={() => onCreate({ name: name.trim(), cue, defaultSets: sets, defaultRepLow: repLow, defaultRepHigh: repHigh })}
+          disabled={!createValid || submitting}
+          onClick={() => { setSubmitting(true); onCreate({ name: name.trim(), cue: cue.trim(), defaultSets: sets, defaultRepLow: repLow, defaultRepHigh: repHigh }); }}
           className="text-sm px-2 py-1 border rounded disabled:opacity-50">
           Create &amp; add
         </button>

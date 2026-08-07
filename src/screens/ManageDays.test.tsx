@@ -2,6 +2,11 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import ManageDays from "./ManageDays";
 
+// NOTE: the mocked `db` module is a singleton shared across every test in this
+// file, so these tests are order-dependent and must not be reordered. The
+// non-destructive tests use Leg Curl; the destructive removal test uses Leg
+// Press; later tests rely on mutations made by earlier ones.
+
 test("shows days and their exercises", async () => {
   render(<MemoryRouter><ManageDays /></MemoryRouter>);
   await waitFor(() => expect(screen.getByText("Leg Day")).toBeInTheDocument());
@@ -52,9 +57,10 @@ test("adding an existing exercise puts it in the day", async () => {
   const picker = screen.getByRole("combobox", { name: /exercise picker for leg day/i });
   fireEvent.change(picker, { target: { value: "bicep-curl" } });
   fireEvent.click(screen.getByRole("button", { name: /^add selected exercise to leg day$/i }));
-  await waitFor(() => expect(screen.getByText("Bicep Curl")).toBeInTheDocument());
-  // section closes after adding
-  expect(screen.queryByRole("combobox", { name: /exercise picker for leg day/i })).not.toBeInTheDocument();
+  // wait for the section to close, since the picker's own option would
+  // otherwise satisfy a "Bicep Curl" text match before the add completes
+  await waitFor(() => expect(screen.queryByRole("combobox", { name: /exercise picker for leg day/i })).not.toBeInTheDocument());
+  expect(screen.getByText("Bicep Curl")).toBeInTheDocument();
 });
 
 test("creating a new exercise adds it to the day", async () => {
