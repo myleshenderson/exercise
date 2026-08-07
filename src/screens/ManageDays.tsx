@@ -5,6 +5,7 @@ import type { WorkoutDay, Exercise } from "../types";
 export default function ManageDays() {
   const [days, setDays] = useState<WorkoutDay[]>([]);
   const [exByDay, setExByDay] = useState<Record<string, Exercise[]>>({});
+  const [confirming, setConfirming] = useState<{ dayId: string; exerciseId: string } | null>(null);
 
   const load = useCallback(async () => {
     const d = await db.getWorkoutDays();
@@ -19,6 +20,7 @@ export default function ManageDays() {
   async function remove(day: WorkoutDay, exerciseId: string) {
     const remaining = day.exerciseIds.filter((id) => id !== exerciseId);
     await db.updateDayExercises(day.id, remaining);
+    setConfirming(null);
     await load();
   }
 
@@ -32,12 +34,29 @@ export default function ManageDays() {
             {(exByDay[day.id] ?? []).map((e) => (
               <li key={e.id} className="flex justify-between items-center">
                 <span>{e.name}</span>
-                <button
-                  aria-label={`remove ${e.name}`}
-                  onClick={() => remove(day, e.id)}
-                  className="text-red-600 text-sm px-2">
-                  Remove
-                </button>
+                {confirming?.dayId === day.id && confirming.exerciseId === e.id ? (
+                  <span className="flex gap-2">
+                    <button
+                      aria-label={`confirm remove ${e.name}`}
+                      onClick={() => remove(day, e.id)}
+                      className="text-white bg-red-600 rounded text-sm px-2">
+                      Confirm
+                    </button>
+                    <button
+                      aria-label={`cancel remove ${e.name}`}
+                      onClick={() => setConfirming(null)}
+                      className="text-sm px-2 border rounded">
+                      Cancel
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    aria-label={`remove ${e.name}`}
+                    onClick={() => setConfirming({ dayId: day.id, exerciseId: e.id })}
+                    className="text-red-600 text-sm px-2">
+                    Remove
+                  </button>
+                )}
               </li>
             ))}
           </ul>
