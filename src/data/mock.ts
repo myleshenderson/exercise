@@ -42,6 +42,10 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
       const day = days.find((d) => d.id === dayId);
       if (day) day.exerciseIds = exerciseIds.slice();
     },
+    async updateDayName(dayId, name) {
+      const day = days.find((d) => d.id === dayId);
+      if (day) day.name = name;
+    },
     async getLastSetsForExercise(exerciseId, beforeDate) {
       return findLastSetsForExercise(sessions, exerciseId, beforeDate);
     },

@@ -8,6 +8,8 @@ export default function ManageDays() {
   const [confirming, setConfirming] = useState<{ dayId: string; exerciseId: string } | null>(null);
   const [allExercises, setAllExercises] = useState<Exercise[]>([]);
   const [addingDayId, setAddingDayId] = useState<string | null>(null);
+  const [editingDayId, setEditingDayId] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState("");
 
   const load = useCallback(async () => {
     const d = await db.getWorkoutDays();
@@ -40,12 +42,66 @@ export default function ManageDays() {
     await load();
   }
 
+  function startEdit(day: WorkoutDay) {
+    setDraftName(day.name);
+    setEditingDayId(day.id);
+    setConfirming(null);
+    setAddingDayId(null);
+  }
+
+  function cancelEdit() {
+    setEditingDayId(null);
+    setDraftName("");
+  }
+
+  async function saveName(day: WorkoutDay) {
+    const trimmed = draftName.trim();
+    if (!trimmed) return;
+    await db.updateDayName(day.id, trimmed);
+    setEditingDayId(null);
+    await load();
+  }
+
   return (
     <div className="p-4 space-y-4">
       <h1 className="text-xl font-bold">Manage Days</h1>
       {days.map((day) => (
         <div key={day.id} className="rounded-xl border p-4">
-          <h2 className="font-semibold">{day.name}</h2>
+          <div className="flex items-center gap-2">
+            {editingDayId === day.id ? (
+              <>
+                <input
+                  aria-label={`day name for ${day.name}`}
+                  value={draftName}
+                  onChange={(ev) => setDraftName(ev.target.value)}
+                  className="border rounded px-2 py-1 font-semibold flex-1"
+                />
+                <button
+                  aria-label={`save name for ${day.name}`}
+                  disabled={!draftName.trim()}
+                  onClick={() => saveName(day)}
+                  className="text-sm px-2 py-1 border rounded disabled:opacity-50">
+                  Save
+                </button>
+                <button
+                  aria-label={`cancel rename ${day.name}`}
+                  onClick={cancelEdit}
+                  className="text-sm px-2 text-gray-500">
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <>
+                <h2 className="font-semibold">{day.name}</h2>
+                <button
+                  aria-label={`edit name of ${day.name}`}
+                  onClick={() => startEdit(day)}
+                  className="text-sm text-blue-600 px-2">
+                  Edit
+                </button>
+              </>
+            )}
+          </div>
           <ul className="mt-2 space-y-1">
             {(exByDay[day.id] ?? []).map((e) => (
               <li key={e.id} className="flex justify-between items-center">
@@ -68,7 +124,7 @@ export default function ManageDays() {
                 ) : (
                   <button
                     aria-label={`remove ${e.name}`}
-                    onClick={() => { setConfirming({ dayId: day.id, exerciseId: e.id }); setAddingDayId(null); }}
+                    onClick={() => { setConfirming({ dayId: day.id, exerciseId: e.id }); setAddingDayId(null); setEditingDayId(null); }}
                     className="text-red-600 text-sm px-2">
                     Remove
                   </button>
@@ -87,7 +143,7 @@ export default function ManageDays() {
           ) : (
             <button
               aria-label={`add exercise to ${day.name}`}
-              onClick={() => { setAddingDayId(day.id); setConfirming(null); }}
+              onClick={() => { setAddingDayId(day.id); setConfirming(null); setEditingDayId(null); }}
               className="mt-2 text-sm text-blue-600 px-2">
               + Add exercise
             </button>
