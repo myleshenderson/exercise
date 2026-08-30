@@ -68,3 +68,5 @@
 sync.remote: "git+https://github.com/myleshenderson/exercise.git"
 export:
     auto: true
+dolt:
+    port: 65436
