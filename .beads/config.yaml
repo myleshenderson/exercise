@@ -70,3 +70,4 @@ export:
     auto: true
 dolt:
     port: 65436
+    auto-push: true
