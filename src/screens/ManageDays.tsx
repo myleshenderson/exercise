@@ -10,6 +10,8 @@ export default function ManageDays() {
   const [addingDayId, setAddingDayId] = useState<string | null>(null);
   const [editingDayId, setEditingDayId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
+  const [addingDay, setAddingDay] = useState(false);
+  const [newDayName, setNewDayName] = useState("");
 
   const load = useCallback(async () => {
     const d = await db.getWorkoutDays();
@@ -59,6 +61,28 @@ export default function ManageDays() {
     if (!trimmed) return;
     await db.updateDayName(day.id, trimmed);
     setEditingDayId(null);
+    await load();
+  }
+
+  function startAddDay() {
+    setNewDayName("");
+    setAddingDay(true);
+    setEditingDayId(null);
+    setConfirming(null);
+    setAddingDayId(null);
+  }
+
+  function cancelAddDay() {
+    setAddingDay(false);
+    setNewDayName("");
+  }
+
+  async function createDay() {
+    const trimmed = newDayName.trim();
+    if (!trimmed) return;
+    await db.createDay(trimmed);
+    setAddingDay(false);
+    setNewDayName("");
     await load();
   }
 
@@ -150,6 +174,37 @@ export default function ManageDays() {
           )}
         </div>
       ))}
+      {addingDay ? (
+        <div className="rounded-xl border p-4 flex items-center gap-2">
+          <input
+            aria-label="new day name"
+            value={newDayName}
+            onChange={(ev) => setNewDayName(ev.target.value)}
+            placeholder="Day name"
+            className="border rounded px-2 py-1 flex-1"
+          />
+          <button
+            aria-label="save new day"
+            disabled={!newDayName.trim()}
+            onClick={createDay}
+            className="text-sm px-2 py-1 border rounded disabled:opacity-50">
+            Add
+          </button>
+          <button
+            aria-label="cancel add day"
+            onClick={cancelAddDay}
+            className="text-sm px-2 text-gray-500">
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <button
+          aria-label="add day"
+          onClick={startAddDay}
+          className="text-sm text-blue-600 px-2">
+          + Add day
+        </button>
+      )}
     </div>
   );
 }

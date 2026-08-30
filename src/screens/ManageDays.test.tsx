@@ -110,3 +110,22 @@ test("renaming a day persists the new name", async () => {
   fireEvent.click(screen.getByRole("button", { name: /^save name for leg day$/i }));
   await waitFor(() => expect(screen.getByText("Leg Day 2")).toBeInTheDocument());
 });
+
+test("creating a new day adds it to the list", async () => {
+  render(<MemoryRouter><ManageDays /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByText("Upper Day")).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /^add day$/i }));
+  const input = screen.getByRole("textbox", { name: /new day name/i });
+  fireEvent.change(input, { target: { value: "Pull Day" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save new day$/i }));
+  await waitFor(() => expect(screen.getByText("Pull Day")).toBeInTheDocument());
+});
+
+test("save new day is disabled until the name is non-empty", async () => {
+  render(<MemoryRouter><ManageDays /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByText("Upper Day")).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /^add day$/i }));
+  const input = screen.getByRole("textbox", { name: /new day name/i });
+  fireEvent.change(input, { target: { value: "   " } });
+  expect(screen.getByRole("button", { name: /^save new day$/i })).toBeDisabled();
+});
