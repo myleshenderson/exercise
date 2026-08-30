@@ -80,3 +80,33 @@ test("create button is disabled until the name is filled in", async () => {
   fireEvent.click(screen.getByRole("button", { name: /^create new exercise for upper day$/i }));
   expect(screen.getByRole("button", { name: /^create and add to upper day$/i })).toBeDisabled();
 });
+
+test("save is disabled until the new name is non-empty", async () => {
+  render(<MemoryRouter><ManageDays /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByText("Upper Day")).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /^edit name of upper day$/i }));
+  const input = screen.getByRole("textbox", { name: /day name for upper day/i });
+  fireEvent.change(input, { target: { value: "   " } });
+  expect(screen.getByRole("button", { name: /^save name for upper day$/i })).toBeDisabled();
+});
+
+test("canceling a rename restores the original name with no write", async () => {
+  render(<MemoryRouter><ManageDays /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByText("Upper Day")).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /^edit name of upper day$/i }));
+  const input = screen.getByRole("textbox", { name: /day name for upper day/i });
+  fireEvent.change(input, { target: { value: "Push Day" } });
+  fireEvent.click(screen.getByRole("button", { name: /^cancel rename upper day$/i }));
+  expect(screen.getByText("Upper Day")).toBeInTheDocument();
+  expect(screen.queryByText("Push Day")).not.toBeInTheDocument();
+});
+
+test("renaming a day persists the new name", async () => {
+  render(<MemoryRouter><ManageDays /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByText("Leg Day")).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /^edit name of leg day$/i }));
+  const input = screen.getByRole("textbox", { name: /day name for leg day/i });
+  fireEvent.change(input, { target: { value: "Leg Day 2" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save name for leg day$/i }));
+  await waitFor(() => expect(screen.getByText("Leg Day 2")).toBeInTheDocument());
+});

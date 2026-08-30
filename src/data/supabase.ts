@@ -117,6 +117,10 @@ export function createSupabaseDataLayer(): DataLayer {
         );
       }
     },
+    async updateDayName(dayId, name) {
+      const { error } = await supabase.from("workout_days").update({ name }).eq("id", dayId);
+      if (error) throw error;
+    },
     async getLastSetsForExercise(exerciseId, beforeDate) {
       const { data: s } = await supabase
         .from("sessions")
