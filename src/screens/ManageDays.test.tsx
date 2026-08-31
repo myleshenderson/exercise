@@ -129,3 +129,57 @@ test("save new day is disabled until the name is non-empty", async () => {
   fireEvent.change(input, { target: { value: "   " } });
   expect(screen.getByRole("button", { name: /^save new day$/i })).toBeDisabled();
 });
+
+test("adding a scheme to an exercise shows its summary", async () => {
+  render(<MemoryRouter><ManageDays /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByText("Leg Curl")).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /^add scheme for leg curl on leg day 2$/i }));
+  fireEvent.change(screen.getByLabelText(/^scheme set 1 weight for leg curl on leg day 2$/i), { target: { value: "105" } });
+  fireEvent.change(screen.getByLabelText(/^scheme set 1 reps for leg curl on leg day 2$/i), { target: { value: "10" } });
+  fireEvent.click(screen.getByRole("button", { name: /^add scheme set for leg curl on leg day 2$/i }));
+  fireEvent.change(screen.getByLabelText(/^scheme set 2 weight for leg curl on leg day 2$/i), { target: { value: "115" } });
+  fireEvent.change(screen.getByLabelText(/^scheme set 2 reps for leg curl on leg day 2$/i), { target: { value: "8" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save scheme for leg curl on leg day 2$/i }));
+  await waitFor(() => expect(screen.getByText("Scheme: 105×10, 115×8")).toBeInTheDocument());
+});
+
+test("editing an existing scheme reopens pre-filled with its saved values", async () => {
+  render(<MemoryRouter><ManageDays /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByText("Scheme: 105×10, 115×8")).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /^edit scheme for leg curl on leg day 2$/i }));
+  expect(screen.getByLabelText(/^scheme set 2 weight for leg curl on leg day 2$/i)).toHaveValue(115);
+});
+
+test("canceling a scheme edit discards changes", async () => {
+  render(<MemoryRouter><ManageDays /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByText("Scheme: 105×10, 115×8")).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /^edit scheme for leg curl on leg day 2$/i }));
+  fireEvent.change(screen.getByLabelText(/^scheme set 1 weight for leg curl on leg day 2$/i), { target: { value: "999" } });
+  fireEvent.click(screen.getByRole("button", { name: /^cancel scheme for leg curl on leg day 2$/i }));
+  expect(screen.getByText("Scheme: 105×10, 115×8")).toBeInTheDocument();
+});
+
+test("removing a scheme clears the summary", async () => {
+  render(<MemoryRouter><ManageDays /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByText("Scheme: 105×10, 115×8")).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /^edit scheme for leg curl on leg day 2$/i }));
+  fireEvent.click(screen.getByRole("button", { name: /^remove scheme for leg curl on leg day 2$/i }));
+  await waitFor(() => expect(screen.queryByText(/Scheme:/)).not.toBeInTheDocument());
+  expect(screen.getByRole("button", { name: /^add scheme for leg curl on leg day 2$/i })).toBeInTheDocument();
+});
+
+test("defining a scheme on one day doesn't affect the same exercise on another day", async () => {
+  render(<MemoryRouter><ManageDays /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByText("Upper Day")).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /^add scheme for chest press on upper day$/i }));
+  fireEvent.change(screen.getByLabelText(/^scheme set 1 weight for chest press on upper day$/i), { target: { value: "185" } });
+  fireEvent.change(screen.getByLabelText(/^scheme set 1 reps for chest press on upper day$/i), { target: { value: "5" } });
+  fireEvent.click(screen.getByRole("button", { name: /^add scheme set for chest press on upper day$/i }));
+  fireEvent.change(screen.getByLabelText(/^scheme set 2 weight for chest press on upper day$/i), { target: { value: "205" } });
+  fireEvent.change(screen.getByLabelText(/^scheme set 2 reps for chest press on upper day$/i), { target: { value: "3" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save scheme for chest press on upper day$/i }));
+  // Two differing rows -> formatSets' "different weight and reps" branch: "185×5, 205×3".
+  await waitFor(() => expect(screen.getByText("Scheme: 185×5, 205×3")).toBeInTheDocument());
+  // Leg Curl on Leg Day 2 still has no scheme — unaffected by Chest Press's scheme on Upper Day.
+  expect(screen.getByRole("button", { name: /^add scheme for leg curl on leg day 2$/i })).toBeInTheDocument();
+});
