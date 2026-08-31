@@ -49,8 +49,16 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
   let identityPromise: Promise<IdentityResult> | undefined;
   function getIdentity(): Promise<IdentityResult> {
     if (!identityPromise) {
-      const authClient = createClient(requiredEnv("SUPABASE_URL"), requiredEnv("SUPABASE_SERVICE_ROLE_KEY"));
-      identityPromise = resolveIdentity(bearerToken, { client: authClient });
+      const url = requiredEnv("SUPABASE_URL");
+      const key = requiredEnv("SUPABASE_SERVICE_ROLE_KEY");
+      // Two separate client instances, not one shared: resolveIdentity calls
+      // .auth.refreshSession() on authClient, which would otherwise silently swap
+      // the service-role identity for the refreshed user's on every subsequent
+      // .from() call on the same client (see mcp-auth.ts's AuthDeps comment).
+      identityPromise = resolveIdentity(bearerToken, {
+        client: createClient(url, key),
+        authClient: createClient(url, key),
+      });
     }
     return identityPromise;
   }

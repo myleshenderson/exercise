@@ -6,7 +6,16 @@ export type IdentityResult =
   | { ok: false; error: string };
 
 interface AuthDeps {
-  client: Pick<SupabaseClient, "auth" | "from">;
+  // Never call .auth methods on this client: supabase-js updates a client's ambient
+  // session whenever its own .auth.refreshSession()/setSession() succeeds, and every
+  // subsequent .from() call on that same client instance then authenticates as that
+  // session's user instead of the service-role key it was created with. mcp_sessions
+  // grants only service_role, not authenticated, so that swap breaks this write with
+  // 42501 "permission denied for table mcp_sessions" — reproduced only in production,
+  // since unit tests mock .from and .auth on one object and can't see the real
+  // cross-call session mutation. Use authClient for the refresh exchange instead.
+  client: Pick<SupabaseClient, "from">;
+  authClient: Pick<SupabaseClient, "auth">;
 }
 
 interface SessionRow {
@@ -61,7 +70,7 @@ export async function resolveIdentity(bearerToken: string | undefined, deps: Aut
 
   let current = row;
   for (let attempt = 1; attempt <= MAX_REFRESH_ATTEMPTS; attempt++) {
-    const { data: refreshed, error: refreshError } = await deps.client.auth.refreshSession({
+    const { data: refreshed, error: refreshError } = await deps.authClient.auth.refreshSession({
       refresh_token: current.refresh_token,
     });
 

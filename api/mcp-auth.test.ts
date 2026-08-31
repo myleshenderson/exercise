@@ -11,6 +11,8 @@ function fakeClient(overrides: {
 }) {
   const update = vi.fn(() => ({ eq: vi.fn(async () => ({ error: overrides.updateError ?? null })) }));
   return {
+    // Deliberately has no .auth — mirrors AuthDeps.client's type, so a regression that
+    // calls deps.client.auth.refreshSession() again fails to typecheck, not just at runtime.
     client: {
       from: vi.fn(() => ({
         select: () => ({
@@ -20,6 +22,10 @@ function fakeClient(overrides: {
         }),
         update,
       })),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any,
+    // Deliberately has no .from — refreshSession must never be asked to persist anything.
+    authClient: {
       auth: {
         refreshSession:
           overrides.refreshSession ??
@@ -36,23 +42,23 @@ function fakeClient(overrides: {
 
 describe("resolveIdentity", () => {
   it("rejects a missing bearer token without touching the session store", async () => {
-    const { client } = fakeClient({});
-    const result = await resolveIdentity(undefined, { client });
+    const { client, authClient } = fakeClient({});
+    const result = await resolveIdentity(undefined, { client, authClient });
     expect(result).toEqual({ ok: false, error: expect.stringContaining("Missing bearer token") });
     expect(client.from).not.toHaveBeenCalled();
   });
 
   it("rejects a bearer token with no matching session row", async () => {
-    const { client } = fakeClient({ row: null });
-    const result = await resolveIdentity("nope", { client });
+    const { client, authClient } = fakeClient({ row: null });
+    const result = await resolveIdentity("nope", { client, authClient });
     expect(result).toEqual({ ok: false, error: expect.stringContaining("Invalid bearer token") });
   });
 
   it("reports a transient session-store lookup failure distinctly from an invalid token", async () => {
-    const { client } = fakeClient({ row: null, lookupError: { message: "connection reset" } });
+    const { client, authClient } = fakeClient({ row: null, lookupError: { message: "connection reset" } });
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const result = await resolveIdentity("token", { client });
+    const result = await resolveIdentity("token", { client, authClient });
 
     expect(result).toEqual({ ok: false, error: expect.not.stringContaining("Invalid bearer token") });
     expect((result as { error: string }).error).toContain("try again");
@@ -60,33 +66,52 @@ describe("resolveIdentity", () => {
   });
 
   it("rejects when the stored refresh_token has already been used/expired", async () => {
-    const { client } = fakeClient({
+    const { client, authClient } = fakeClient({
       row: { id: "row-1", user_id: "user-1", refresh_token: "stale" },
       refreshSession: async () => ({ data: { session: null }, error: { message: "invalid grant" } }),
     });
 
-    const result = await resolveIdentity("token", { client });
+    const result = await resolveIdentity("token", { client, authClient });
     expect(result).toEqual({ ok: false, error: expect.stringContaining("session has expired") });
   });
 
   it("surfaces an error when the rotated refresh_token can't be persisted", async () => {
-    const { client } = fakeClient({
+    const { client, authClient } = fakeClient({
       row: { id: "row-1", user_id: "user-1", refresh_token: "old" },
       updateError: { message: "db down" },
     });
 
-    const result = await resolveIdentity("token", { client });
+    const result = await resolveIdentity("token", { client, authClient });
     expect(result).toEqual({ ok: false, error: expect.stringContaining("Could not persist") });
   });
 
   it("resolves the caller's identity and writes the rotated refresh_token back", async () => {
-    const { client, update } = fakeClient({
+    const { client, authClient, update } = fakeClient({
       row: { id: "row-1", user_id: "user-1", refresh_token: "old" },
     });
 
-    const result = await resolveIdentity("token", { client });
+    const result = await resolveIdentity("token", { client, authClient });
 
     expect(result).toEqual({ ok: true, userId: "user-1", accessToken: "fresh-access" });
+    expect(update).toHaveBeenCalledWith({ refresh_token: "rotated-refresh" });
+  });
+
+  it("persists the rotated refresh_token via the table client even after the auth client's session changes", async () => {
+    // Regression test for the production bug: resolveIdentity used to call
+    // .auth.refreshSession() and .from().update() on the SAME client instance.
+    // supabase-js swaps that client's ambient session on a successful refresh, so the
+    // update silently ran as the refreshed user (role "authenticated") instead of the
+    // service-role identity — mcp_sessions only grants service_role, so the write hit
+    // 42501 in production while every mocked test (which shares one object) stayed green.
+    // authClient here exposes no .from at all, so persisting through it isn't just
+    // wrong, it's a type error — this test's assertion is the runtime half of that guard.
+    const { client, authClient, update } = fakeClient({
+      row: { id: "row-1", user_id: "user-1", refresh_token: "old" },
+    });
+
+    await resolveIdentity("token", { client, authClient });
+
+    expect(client.from).toHaveBeenCalledWith("mcp_sessions");
     expect(update).toHaveBeenCalledWith({ refresh_token: "rotated-refresh" });
   });
 
@@ -114,6 +139,9 @@ describe("resolveIdentity", () => {
           },
         }),
       }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+    const authClient = {
       auth: {
         refreshSession: async ({ refresh_token }: { refresh_token: string }) => {
           refreshCalls.push(refresh_token);
@@ -127,7 +155,7 @@ describe("resolveIdentity", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any;
 
-    const result = await resolveIdentity("token", { client });
+    const result = await resolveIdentity("token", { client, authClient });
 
     expect(result).toEqual({ ok: true, userId: "user-1", accessToken: "fresh-access" });
     expect(refreshCalls).toEqual(["attempt-0", "attempt-1"]);
@@ -152,6 +180,9 @@ describe("resolveIdentity", () => {
         }),
         update: () => ({ eq: async () => ({ error: null }) }),
       }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+    const authClient = {
       auth: {
         refreshSession: async ({ refresh_token }: { refresh_token: string }) => {
           refreshCalls.push(refresh_token);
@@ -162,7 +193,7 @@ describe("resolveIdentity", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any;
 
-    const result = await resolveIdentity("token", { client });
+    const result = await resolveIdentity("token", { client, authClient });
 
     expect(result).toEqual({ ok: false, error: expect.stringContaining("session has expired") });
     expect(refreshCalls).toEqual(["gen-0", "gen-1", "gen-2"]);
@@ -172,11 +203,14 @@ describe("resolveIdentity", () => {
     const eq = vi.fn(() => ({ maybeSingle: async () => ({ data: null, error: null }) }));
     const client = {
       from: () => ({ select: () => ({ eq }), update: () => ({ eq: async () => ({ error: null }) }) }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+    const authClient = {
       auth: { refreshSession: vi.fn() },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any;
 
-    await resolveIdentity("raw-token", { client });
+    await resolveIdentity("raw-token", { client, authClient });
 
     expect(eq).toHaveBeenCalledWith("token", sha256Hex("raw-token"));
   });
