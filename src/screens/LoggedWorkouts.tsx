@@ -28,16 +28,17 @@ export default function LoggedWorkouts() {
   const emptySessions = sessions.filter((s) => s.exercises.length === 0);
 
   async function confirmDelete(id: string) {
-    await db.deleteSession(id);
     setConfirmingId(null);
+    setSessions((prev) => prev.filter((s) => s.id !== id));
+    await db.deleteSession(id);
     await load();
   }
 
   async function confirmBulkDelete() {
-    for (const s of emptySessions) {
-      await db.deleteSession(s.id);
-    }
+    const idsToDelete = emptySessions.map((s) => s.id);
     setBulkConfirming(false);
+    setSessions((prev) => prev.filter((s) => !idsToDelete.includes(s.id)));
+    await Promise.all(idsToDelete.map((id) => db.deleteSession(id)));
     await load();
   }
 

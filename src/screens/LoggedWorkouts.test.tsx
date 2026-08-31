@@ -81,14 +81,37 @@ test("cancel keeps the session and restores the Delete button", async () => {
   expect(screen.getByRole("button", { name: /^delete session on wednesday, jul 1$/i })).toBeInTheDocument();
 });
 
-test("confirming per-row delete removes only that session", async () => {
+test("confirming per-row delete removes only that session synchronously, before deleteSession resolves", async () => {
   renderScreen();
   await waitFor(() => expect(screen.getByText("Wednesday, Jul 1")).toBeInTheDocument());
+
+  // Delay the real deleteSession so we can prove the row disappears from local
+  // state before this promise settles, not after.
+  const originalDeleteSession = db.deleteSession.bind(db);
+  let settled = false;
+  const spy = vi.spyOn(db, "deleteSession").mockImplementation(
+    (id) =>
+      new Promise<void>((resolve) =>
+        setTimeout(() => originalDeleteSession(id).then(() => { settled = true; resolve(); }), 10),
+      ),
+  );
+
   fireEvent.click(screen.getByRole("button", { name: /^delete session on wednesday, jul 1$/i }));
   fireEvent.click(screen.getByRole("button", { name: /^confirm delete session on wednesday, jul 1$/i }));
-  await waitFor(() => expect(screen.queryByText("Wednesday, Jul 1")).not.toBeInTheDocument());
+
+  // Synchronous assertions: no waitFor, no await — the deleteSession promise
+  // above has not resolved yet (it's waiting on a 10ms timer).
+  expect(settled).toBe(false);
+  expect(screen.queryByText("Wednesday, Jul 1")).not.toBeInTheDocument();
   expect(screen.getByText("Saturday, Jun 20")).toBeInTheDocument();
   expect(screen.getByText("Thursday, Jun 18")).toBeInTheDocument();
+  expect(spy).toHaveBeenCalledTimes(1);
+
+  await waitFor(() => expect(settled).toBe(true));
+  spy.mockRestore();
+
+  // Reconciliation load() still runs afterward and the row stays gone.
+  expect(screen.queryByText("Wednesday, Jul 1")).not.toBeInTheDocument();
 });
 
 test("bulk delete-empty action appears once an empty session exists", async () => {
@@ -113,18 +136,41 @@ test("bulk delete-empty confirm/cancel is independent of per-row confirm state",
   fireEvent.click(screen.getByRole("button", { name: /^cancel delete session on saturday, jun 20$/i }));
 });
 
-test("confirming bulk delete removes only empty sessions, leaving non-empty ones", async () => {
+test("confirming bulk delete removes all matching sessions synchronously, before the deletes resolve", async () => {
   const nonEmpty = await db.startSession("leg-day", "2026-07-06");
   await db.logExercise(nonEmpty.id, "leg-press", [{ setNumber: 1, weight: 100, reps: 10 }]);
   renderScreen();
   await waitFor(() => expect(screen.getByText("Monday, Jul 6")).toBeInTheDocument());
+
+  // Delay the real deleteSession so we can prove the rows disappear from local
+  // state before these promises settle, not after.
+  const originalDeleteSession = db.deleteSession.bind(db);
+  let settledCount = 0;
+  const spy = vi.spyOn(db, "deleteSession").mockImplementation(
+    (id) =>
+      new Promise<void>((resolve) =>
+        setTimeout(() => originalDeleteSession(id).then(() => { settledCount++; resolve(); }), 10),
+      ),
+  );
+
   fireEvent.click(screen.getByRole("button", { name: /^delete all empty sessions$/i }));
   fireEvent.click(screen.getByRole("button", { name: /^confirm delete all empty sessions$/i }));
-  await waitFor(() => expect(screen.queryByText("Sunday, Jul 5")).not.toBeInTheDocument());
+
+  // Synchronous assertions: no waitFor, no await — none of the deleteSession
+  // promises above have resolved yet (they're waiting on a 10ms timer).
+  expect(settledCount).toBe(0);
+  expect(screen.queryByText("Sunday, Jul 5")).not.toBeInTheDocument();
   expect(screen.getByText("Monday, Jul 6")).toBeInTheDocument();
   expect(screen.getByText("Saturday, Jun 20")).toBeInTheDocument();
   expect(screen.getByText("Thursday, Jun 18")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /^delete all empty sessions$/i })).not.toBeInTheDocument();
+  expect(spy).toHaveBeenCalledTimes(1);
+
+  await waitFor(() => expect(settledCount).toBe(1));
+  spy.mockRestore();
+
+  // Reconciliation load() still runs afterward and the rows stay gone.
+  expect(screen.queryByText("Sunday, Jul 5")).not.toBeInTheDocument();
 });
 
 test("marks a session with no logged exercises as Empty, but not one with exercises", async () => {
