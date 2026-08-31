@@ -9,6 +9,7 @@ export default function MCPLogin() {
   async function generateToken() {
     setLoading(true);
     setError(null);
+    setToken(null);
     try {
       const { data } = await getSupabase().auth.getSession();
       const session = data.session;
@@ -25,7 +26,11 @@ export default function MCPLogin() {
         setError("Could not create a token. Please try again.");
         return;
       }
-      const body = await res.json();
+      const body = (await res.json()) as { token?: string };
+      if (!body.token) {
+        setError("Could not create a token. Please try again.");
+        return;
+      }
       setToken(body.token);
     } catch {
       setError("Could not create a token. Please try again.");

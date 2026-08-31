@@ -40,6 +40,16 @@ test("shows an error when the request fails", async () => {
   await waitFor(() => expect(screen.getByText(/could not create a token/i)).toBeInTheDocument());
 });
 
+test("shows an error when the response has no token", async () => {
+  getSession.mockResolvedValue({ data: { session: { access_token: "at", refresh_token: "rt" } } });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+
+  render(<MCPLogin />);
+  fireEvent.click(screen.getByRole("button", { name: /generate token/i }));
+
+  await waitFor(() => expect(screen.getByText(/could not create a token/i)).toBeInTheDocument());
+});
+
 test("shows an error when there is no active session", async () => {
   getSession.mockResolvedValue({ data: { session: null } });
 
