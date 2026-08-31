@@ -61,6 +61,29 @@ test("updateDayName renames a day", async () => {
   expect(days.find((d) => d.id === "leg-day")?.name).toBe("Leg Day Renamed");
 });
 
+test("listSessions returns sessions newest-first", async () => {
+  const db = createMockDataLayer();
+  const sessions = await db.listSessions();
+  expect(sessions.map((s) => s.id)).toEqual(["seed-upper", "seed-leg"]);
+});
+
+test("listSessions puts a just-started session ahead of earlier same-date sessions", async () => {
+  const db = createMockDataLayer({ seed: false });
+  const d = await db.createDay("X");
+  const s1 = await db.startSession(d.id, "2026-06-10");
+  const s2 = await db.startSession(d.id, "2026-06-10");
+  const sessions = await db.listSessions();
+  expect(sessions.map((s) => s.id)).toEqual([s2.id, s1.id]);
+});
+
+test("deleteSession removes only the targeted session", async () => {
+  const db = createMockDataLayer();
+  await db.deleteSession("seed-leg");
+  expect(await db.getSession("seed-leg")).toBeNull();
+  expect(await db.getSession("seed-upper")).not.toBeNull();
+  expect((await db.listSessions()).map((s) => s.id)).toEqual(["seed-upper"]);
+});
+
 test("getLastSessionForDay returns the later session on same-day ties", async () => {
   const db = createMockDataLayer({ seed: false });
   const d = await db.createDay("X");

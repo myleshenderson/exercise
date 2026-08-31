@@ -1,0 +1,76 @@
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
+import MCPLogin from "./MCPLogin";
+
+const getSession = vi.fn();
+vi.mock("../data/supabaseClient", () => ({
+  getSupabase: () => ({ auth: { getSession } }),
+}));
+
+afterEach(() => {
+  getSession.mockReset();
+  vi.unstubAllGlobals();
+});
+
+test("generates and displays a token", async () => {
+  getSession.mockResolvedValue({ data: { session: { access_token: "at", refresh_token: "rt" } } });
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ token: "opaque-token-123" }) });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<MCPLogin />);
+  fireEvent.click(screen.getByRole("button", { name: /generate token/i }));
+
+  await waitFor(() => expect(screen.getByDisplayValue("opaque-token-123")).toBeInTheDocument());
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/mcp-login",
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ access_token: "at", refresh_token: "rt" }),
+    }),
+  );
+});
+
+test("shows an error when the request fails", async () => {
+  getSession.mockResolvedValue({ data: { session: { access_token: "at", refresh_token: "rt" } } });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }));
+
+  render(<MCPLogin />);
+  fireEvent.click(screen.getByRole("button", { name: /generate token/i }));
+
+  await waitFor(() => expect(screen.getByText(/could not create a token/i)).toBeInTheDocument());
+});
+
+test("shows an error when the response has no token", async () => {
+  getSession.mockResolvedValue({ data: { session: { access_token: "at", refresh_token: "rt" } } });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+
+  render(<MCPLogin />);
+  fireEvent.click(screen.getByRole("button", { name: /generate token/i }));
+
+  await waitFor(() => expect(screen.getByText(/could not create a token/i)).toBeInTheDocument());
+});
+
+test("shows an error when there is no active session", async () => {
+  getSession.mockResolvedValue({ data: { session: null } });
+
+  render(<MCPLogin />);
+  fireEvent.click(screen.getByRole("button", { name: /generate token/i }));
+
+  await waitFor(() => expect(screen.getByText(/session has expired/i)).toBeInTheDocument());
+});
+
+test("allows generating a new token after the first one", async () => {
+  getSession.mockResolvedValue({ data: { session: { access_token: "at", refresh_token: "rt" } } });
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce({ ok: true, json: async () => ({ token: "first" }) })
+    .mockResolvedValueOnce({ ok: true, json: async () => ({ token: "second" }) });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<MCPLogin />);
+  fireEvent.click(screen.getByRole("button", { name: /generate token/i }));
+  await waitFor(() => expect(screen.getByDisplayValue("first")).toBeInTheDocument());
+
+  fireEvent.click(screen.getByRole("button", { name: /generate new token/i }));
+  await waitFor(() => expect(screen.getByDisplayValue("second")).toBeInTheDocument());
+});
