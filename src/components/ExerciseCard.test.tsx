@@ -63,3 +63,47 @@ test("the adjust-sets header icon expands the editor to per-set rows", () => {
   fireEvent.click(screen.getByRole("button", { name: /adjust sets/i }));
   expect(screen.getByLabelText("set 1 weight")).toBeInTheDocument();
 });
+
+test("seeds per-set mode from a day's target scheme when nothing is logged yet", () => {
+  const targetSets = [
+    { setNumber: 1, weight: 225, reps: 5 },
+    { setNumber: 2, weight: 225, reps: 5 },
+    { setNumber: 3, weight: 275, reps: 3 },
+  ];
+  render(<ExerciseCard exercise={ex} lastSets={[]} loggedSets={null} targetSets={targetSets} onLog={() => {}} />);
+  expect(screen.getByLabelText("set 3 weight")).toHaveValue("275");
+  expect(screen.getByLabelText("set 3 reps")).toHaveValue("3");
+});
+
+test("logging a targetSets-seeded exercise logs the scheme's values unless edited", () => {
+  const onLog = vi.fn();
+  const targetSets = [
+    { setNumber: 1, weight: 225, reps: 5 },
+    { setNumber: 2, weight: 225, reps: 5 },
+  ];
+  render(<ExerciseCard exercise={ex} lastSets={[]} loggedSets={null} targetSets={targetSets} onLog={onLog} />);
+  fireEvent.click(screen.getByRole("button", { name: /^log$/i }));
+  expect(onLog).toHaveBeenCalledWith(targetSets);
+});
+
+test("a logged exercise ignores the day's target scheme and reopens with its logged values", () => {
+  const onLog = vi.fn();
+  const logged = [
+    { setNumber: 1, weight: 200, reps: 5 },
+    { setNumber: 2, weight: 200, reps: 5 },
+  ];
+  const targetSets = [
+    { setNumber: 1, weight: 225, reps: 5 },
+    { setNumber: 2, weight: 225, reps: 5 },
+  ];
+  render(<ExerciseCard exercise={ex} lastSets={[]} loggedSets={logged} targetSets={targetSets} onLog={onLog} />);
+  fireEvent.click(screen.getByRole("button", { name: /edit/i }));
+  // logged is uniform, so it reopens in line mode (not per-set) — "weight", not "set 1 weight".
+  expect(screen.getByLabelText("weight")).toHaveValue("200");
+});
+
+test("no target scheme behaves exactly as before (uniform line mode)", () => {
+  render(<ExerciseCard exercise={ex} lastSets={[]} loggedSets={null} targetSets={null} onLog={() => {}} />);
+  expect(screen.getByLabelText("weight")).toBeInTheDocument();
+  expect(screen.queryByLabelText("set 1 weight")).not.toBeInTheDocument();
+});
