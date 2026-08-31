@@ -67,6 +67,7 @@ test("shows the MCP endpoint URL", () => {
 test("shows the available tools", () => {
   render(<MCPLogin />);
   expect(screen.getByText("progression_for_exercise")).toBeInTheDocument();
+  expect(screen.getByText("sets_for_exercise")).toBeInTheDocument();
   expect(screen.getByText("weekly_volume")).toBeInTheDocument();
   expect(screen.getByText("training_gaps")).toBeInTheDocument();
   expect(screen.getByText("get_day_templates")).toBeInTheDocument();

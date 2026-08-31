@@ -88,6 +88,24 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
   );
 
   server.registerTool(
+    "sets_for_exercise",
+    {
+      title: "Sets for exercise",
+      description:
+        "Every individual logged set for an exercise (matched by partial name), ungrouped — performed_on, set_number, weight, and reps — for the authenticated user.",
+      inputSchema: { exercise_name: z.string() },
+    },
+    async ({ exercise_name }) =>
+      withIdentity(async (accessToken) => {
+        const { data, error } = await createUserScopedClient(accessToken).rpc("sets_for_exercise", {
+          exercise_name,
+        });
+        if (error) return toolError(`sets_for_exercise failed: ${error.message}`);
+        return toolResult(data);
+      }),
+  );
+
+  server.registerTool(
     "weekly_volume",
     {
       title: "Weekly volume",
