@@ -111,7 +111,7 @@ export default function ManageDays() {
 
   return (
     <div className="p-4 space-y-4">
-      <h1 className="text-xl font-bold">Manage Days</h1>
+      <h1 className="text-xl font-bold">Manage Schedule</h1>
       {days.map((day) => (
         <div key={day.id} className="rounded-xl border p-4">
           <div className="flex items-center gap-2">
