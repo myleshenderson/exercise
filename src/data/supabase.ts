@@ -203,5 +203,22 @@ export function createSupabaseDataLayer(): DataLayer {
       }
       return sessions.sort((a, b) => (a.performedOn < b.performedOn ? 1 : -1));
     },
+    async listSessions() {
+      const { data: s } = await supabase
+        .from("sessions")
+        .select("id")
+        .order("performed_on", { ascending: false })
+        .order("created_at", { ascending: false });
+      const sessions: Session[] = [];
+      for (const row of s ?? []) {
+        const sess = await loadSession(row.id);
+        if (sess) sessions.push(sess);
+      }
+      return sessions;
+    },
+    async deleteSession(id) {
+      const { error } = await supabase.from("sessions").delete().eq("id", id);
+      if (error) throw error;
+    },
   };
 }
