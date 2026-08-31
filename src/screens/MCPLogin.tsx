@@ -1,10 +1,40 @@
 import { useState } from "react";
 import { getSupabase } from "../data/supabaseClient";
 
+const TOOLS = [
+  {
+    name: "progression_for_exercise",
+    description: "Per-session set count, top weight, and volume for an exercise (matched by partial name).",
+  },
+  { name: "weekly_volume", description: "Sessions and total volume per week." },
+  { name: "training_gaps", description: "Days elapsed between consecutive training sessions." },
+];
+
+function selectOnFocus(e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) {
+  e.currentTarget.select();
+}
+
 export default function MCPLogin() {
   const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const endpointUrl = `${window.location.origin}/api/mcp`;
+  const tokenPlaceholder = token ?? "YOUR_TOKEN";
+  const cliSnippet = `claude mcp add --transport http exercise-mcp ${endpointUrl} --header "Authorization: Bearer ${tokenPlaceholder}"`;
+  const jsonSnippet = JSON.stringify(
+    {
+      mcpServers: {
+        "exercise-mcp": {
+          type: "http",
+          url: endpointUrl,
+          headers: { Authorization: `Bearer ${tokenPlaceholder}` },
+        },
+      },
+    },
+    null,
+    2,
+  );
 
   async function generateToken() {
     setLoading(true);
@@ -68,6 +98,60 @@ export default function MCPLogin() {
           />
         </div>
       )}
+
+      <div className="space-y-4 border-t pt-4">
+        <div className="space-y-1">
+          <label className="block text-sm" htmlFor="mcp-endpoint">
+            MCP endpoint URL
+          </label>
+          <input
+            id="mcp-endpoint"
+            readOnly
+            value={endpointUrl}
+            onFocus={selectOnFocus}
+            className="w-full rounded-lg border p-3 font-mono text-sm"
+          />
+        </div>
+
+        <div className="space-y-1">
+          <label className="block text-sm" htmlFor="mcp-cli-snippet">
+            Claude Code CLI
+          </label>
+          <textarea
+            id="mcp-cli-snippet"
+            readOnly
+            rows={2}
+            value={cliSnippet}
+            onFocus={selectOnFocus}
+            className="w-full rounded-lg border p-3 font-mono text-xs"
+          />
+        </div>
+
+        <div className="space-y-1">
+          <label className="block text-sm" htmlFor="mcp-json-snippet">
+            mcpServers JSON
+          </label>
+          <textarea
+            id="mcp-json-snippet"
+            readOnly
+            rows={9}
+            value={jsonSnippet}
+            onFocus={selectOnFocus}
+            className="w-full rounded-lg border p-3 font-mono text-xs"
+          />
+        </div>
+
+        <div className="space-y-1">
+          <p className="text-sm font-semibold">Available tools</p>
+          <ul className="space-y-1 text-sm text-gray-600">
+            {TOOLS.map((tool) => (
+              <li key={tool.name}>
+                <span className="font-mono text-xs">{tool.name}</span> — {tool.description}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
     </div>
   );
 }
