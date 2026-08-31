@@ -17,6 +17,7 @@ const sessionsById = new Map<string, SessionRow>();
 const tokenHashToId = new Map<string, string>();
 const validRefreshTokens = new Map<string, string>();
 const accessTokenOwner = new Map<string, string>();
+const rpcCalls: Array<{ name: string; args?: Record<string, unknown> }> = [];
 let seq = 0;
 
 const FIXTURES: Record<
@@ -63,7 +64,8 @@ function makeSupabaseClient(_url: string, _key: string, options?: any) {
   if (authHeader) {
     const accessToken = authHeader.replace(/^Bearer /, "");
     return {
-      rpc: async (name: string, _args?: Record<string, unknown>) => {
+      rpc: async (name: string, args?: Record<string, unknown>) => {
+        rpcCalls.push({ name, args });
         const userId = accessTokenOwner.get(accessToken);
         if (!userId) return { data: null, error: { message: "invalid access token" } };
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -150,6 +152,7 @@ describe("api/mcp handler", () => {
     tokenHashToId.clear();
     validRefreshTokens.clear();
     accessTokenOwner.clear();
+    rpcCalls.length = 0;
     seq = 0;
     seedSession("user-a", "token-a");
     seedSession("user-b", "token-b");
@@ -290,6 +293,46 @@ describe("api/mcp handler", () => {
 
     await clientA.close();
     await clientB.close();
+  });
+
+  it("get_workout_history forwards no filters when called with no arguments, preserving the full-dump default", async () => {
+    const client = await connectAs("token-a");
+
+    await client.callTool({ name: "get_workout_history", arguments: {} });
+
+    expect(rpcCalls).toContainEqual({
+      name: "get_workout_history",
+      args: { start_date: null, end_date: null, exercise_name: null },
+    });
+
+    await client.close();
+  });
+
+  it("get_workout_history forwards start_date, end_date, and exercise_name filters to the RPC call", async () => {
+    const client = await connectAs("token-a");
+
+    await client.callTool({
+      name: "get_workout_history",
+      arguments: { start_date: "2026-08-01", end_date: "2026-08-31", exercise_name: "bench" },
+    });
+
+    expect(rpcCalls).toContainEqual({
+      name: "get_workout_history",
+      args: { start_date: "2026-08-01", end_date: "2026-08-31", exercise_name: "bench" },
+    });
+
+    await client.close();
+  });
+
+  it("get_workout_history succeeds when the client omits the arguments field entirely (spec-compliant, not just {})", async () => {
+    const client = await connectAs("token-a");
+
+    const result = await client.callTool({ name: "get_workout_history" });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.content).toEqual([{ type: "text", text: JSON.stringify(FIXTURES["user-a"].get_workout_history, null, 2) }]);
+
+    await client.close();
   });
 
   it("writes the rotated refresh_token back so a session survives repeated calls after Supabase rotates it", async () => {

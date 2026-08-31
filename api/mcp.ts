@@ -25,6 +25,26 @@ function toolResult(data: unknown): CallToolResult {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
 
+// The MCP spec makes a tools/call request's `arguments` field optional, so a
+// spec-compliant client calling a tool whose schema is all-optional fields (e.g.
+// get_workout_history's filters) may omit it entirely rather than sending `{}`.
+// The SDK's zod-based validation requires an actual object once a tool has any
+// inputSchema, though, and rejects `undefined` even when every field is optional -
+// so default it here before it reaches that validation. Handles both a single
+// JSON-RPC message and a batched array of them.
+function withDefaultToolArguments(body: unknown): unknown {
+  const messages = Array.isArray(body) ? body : [body];
+  for (const message of messages) {
+    if (message && typeof message === "object" && (message as Record<string, unknown>).method === "tools/call") {
+      const params = (message as Record<string, unknown>).params;
+      if (params && typeof params === "object" && (params as Record<string, unknown>).arguments === undefined) {
+        (params as Record<string, unknown>).arguments = {};
+      }
+    }
+  }
+  return body;
+}
+
 // apikey only gates Supabase's API gateway; the Postgres role PostgREST assumes comes
 // from the Authorization JWT. Presenting the resolved user's access_token there (while
 // apikey stays the service-role key) makes auth.uid() and RLS on the security-invoker
@@ -153,11 +173,20 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
     {
       title: "Workout history",
       description:
-        "The authenticated user's full raw session history: every session with its date, associated day, and every logged set, unaggregated.",
+        "The authenticated user's full raw session history: every session with its date, associated day, and every logged set, unaggregated. Optionally filter by date range (start_date/end_date) and/or a partial exercise-name match; omit all filters for the full history.",
+      inputSchema: {
+        start_date: z.string().optional().describe("Only include sessions performed on or after this date (YYYY-MM-DD)."),
+        end_date: z.string().optional().describe("Only include sessions performed on or before this date (YYYY-MM-DD)."),
+        exercise_name: z.string().optional().describe("Only include sets for exercises whose name partially matches this (case-insensitive)."),
+      },
     },
-    async () =>
+    async ({ start_date, end_date, exercise_name }) =>
       withIdentity(async (accessToken) => {
-        const { data, error } = await createUserScopedClient(accessToken).rpc("get_workout_history");
+        const { data, error } = await createUserScopedClient(accessToken).rpc("get_workout_history", {
+          start_date: start_date ?? null,
+          end_date: end_date ?? null,
+          exercise_name: exercise_name ?? null,
+        });
         if (error) return toolError(`get_workout_history failed: ${error.message}`);
         return toolResult(data);
       }),
@@ -195,5 +224,5 @@ export default async function handler(req: VercelRequest, res: ServerResponse): 
   });
 
   await server.connect(transport);
-  await transport.handleRequest(req, res, req.body);
+  await transport.handleRequest(req, res, withDefaultToolArguments(req.body));
 }
