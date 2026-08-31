@@ -77,10 +77,18 @@ export default function LoggedWorkouts() {
       <ul className="space-y-2">
         {sessions.map((s) => {
           const label = formatSessionDate(s.performedOn);
+          const isEmpty = s.exercises.length === 0;
           return (
             <li key={s.id} className="flex justify-between items-center border-b py-2">
               <div>
-                <div className="font-medium">{label}</div>
+                <div className={`font-medium ${isEmpty ? "text-gray-400" : ""}`}>
+                  {label}
+                  {isEmpty && (
+                    <span className="ml-2 text-xs font-normal text-gray-400 border border-gray-300 rounded px-1 py-0.5">
+                      Empty
+                    </span>
+                  )}
+                </div>
                 <div className="text-sm text-gray-500">{dayName(s.workoutDayId)}</div>
               </div>
               {confirmingId === s.id ? (
