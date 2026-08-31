@@ -126,3 +126,14 @@ test("confirming bulk delete removes only empty sessions, leaving non-empty ones
   expect(screen.getByText("Thursday, Jun 18")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /^delete all empty sessions$/i })).not.toBeInTheDocument();
 });
+
+test("marks a session with no logged exercises as Empty, but not one with exercises", async () => {
+  await db.startSession(null, "2026-07-10");
+  renderScreen();
+  await waitFor(() => expect(screen.getByText("Friday, Jul 10")).toBeInTheDocument());
+  const rows = screen.getAllByRole("listitem");
+  const emptyRow = rows.find((r) => r.textContent?.includes("Friday, Jul 10"));
+  const nonEmptyRow = rows.find((r) => r.textContent?.includes("Monday, Jul 6"));
+  expect(emptyRow).toHaveTextContent("Empty");
+  expect(nonEmptyRow).not.toHaveTextContent("Empty");
+});
