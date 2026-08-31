@@ -6,6 +6,7 @@ dist
 *.log
 *.tsbuildinfo
 data/
+supabase/.temp/
 
 # Beads / Dolt files (added by bd init)
 .dolt/
