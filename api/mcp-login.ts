@@ -1,6 +1,6 @@
 import { randomBytes, createHash } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { requiredEnv } from "./_env";
+import { requiredEnv } from "./_env.js";
 
 interface VercelLikeRequest {
   method?: string;

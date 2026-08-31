@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { sha256Hex } from "./mcp-login";
+import { sha256Hex } from "./mcp-login.js";
 
 // Fake mcp_sessions store + GoTrue refresh + per-user RPC fixtures, keyed the same way
 // the real Supabase tables are: a session row maps a hashed bearer token to a

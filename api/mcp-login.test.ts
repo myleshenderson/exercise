@@ -8,7 +8,7 @@ vi.mock("@supabase/supabase-js", () => ({
 }));
 
 import { createClient } from "@supabase/supabase-js";
-import handler, { generateOpaqueToken, mintMcpToken, sha256Hex } from "./mcp-login";
+import handler, { generateOpaqueToken, mintMcpToken, sha256Hex } from "./mcp-login.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
