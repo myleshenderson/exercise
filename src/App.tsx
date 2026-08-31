@@ -6,6 +6,7 @@ import Summary from "./screens/Summary";
 import ManageDays from "./screens/ManageDays";
 import History from "./screens/History";
 import LoggedWorkouts from "./screens/LoggedWorkouts";
+import MCPLogin from "./screens/MCPLogin";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import Login from "./auth/Login";
 import { ensureSeeded } from "./data/ensureSeeded";
@@ -25,11 +26,13 @@ function Shell() {
         <Route path="/days" element={<ManageDays />} />
         <Route path="/history/:exerciseId" element={<History />} />
         <Route path="/workouts" element={<LoggedWorkouts />} />
+        <Route path="/mcp-login" element={<MCPLogin />} />
       </Routes>
       <nav className="fixed bottom-0 inset-x-0 max-w-md mx-auto flex justify-around bg-white border-t py-2">
         <Link to="/" className="p-2">Home</Link>
         <Link to="/days" className="p-2">Days</Link>
         <Link to="/workouts" className="p-2">Workouts</Link>
+        <Link to="/mcp-login" className="p-2">MCP</Link>
       </nav>
     </div>
   );
