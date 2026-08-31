@@ -1,5 +1,5 @@
 import type { DataLayer } from "./DataLayer";
-import type { Exercise, WorkoutDay, Session } from "../types";
+import type { Exercise, WorkoutDay, Session, SetEntry } from "../types";
 import { seedExercises, seedDays, seedSessions } from "./seed";
 import { findLastSetsForExercise } from "../lib/lastSession";
 
@@ -8,6 +8,7 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
   const exercises: Exercise[] = useSeed ? structuredClone(seedExercises) : [];
   const days: WorkoutDay[] = useSeed ? structuredClone(seedDays) : [];
   const sessions: Session[] = useSeed ? structuredClone(seedSessions) : [];
+  const targets: Record<string, Record<string, SetEntry[]>> = {};
   let counter = 0;
   const nextId = (prefix: string) => `${prefix}-${++counter}`;
 
@@ -41,10 +42,24 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
     async updateDayExercises(dayId, exerciseIds) {
       const day = days.find((d) => d.id === dayId);
       if (day) day.exerciseIds = exerciseIds.slice();
+      const dayTargets = targets[dayId];
+      if (dayTargets) {
+        for (const exId of Object.keys(dayTargets)) {
+          if (!exerciseIds.includes(exId)) delete dayTargets[exId];
+        }
+      }
     },
     async updateDayName(dayId, name) {
       const day = days.find((d) => d.id === dayId);
       if (day) day.name = name;
+    },
+    async getDayExerciseTargets(dayId) {
+      return { ...(targets[dayId] ?? {}) };
+    },
+    async setDayExerciseTarget(dayId, exerciseId, sets) {
+      const dayTargets = (targets[dayId] ??= {});
+      if (sets && sets.length > 0) dayTargets[exerciseId] = sets.slice();
+      else delete dayTargets[exerciseId];
     },
     async getLastSetsForExercise(exerciseId, beforeDate) {
       return findLastSetsForExercise(sessions, exerciseId, beforeDate);

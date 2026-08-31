@@ -10,6 +10,7 @@ export default function Session() {
   const [session, setSession] = useState<SessionT | null>(null);
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [lastByEx, setLastByEx] = useState<Record<string, SetEntry[]>>({});
+  const [targetByEx, setTargetByEx] = useState<Record<string, SetEntry[]>>({});
 
   useEffect(() => {
     if (!id) return;
@@ -21,9 +22,11 @@ export default function Session() {
       for (const e of ex) {
         last[e.id] = await db.getLastSetsForExercise(e.id, s.performedOn);
       }
+      const targets = s.workoutDayId ? await db.getDayExerciseTargets(s.workoutDayId) : {};
       setSession(s);
       setExercises(ex);
       setLastByEx(last);
+      setTargetByEx(targets);
     })();
   }, [id]);
 
@@ -48,6 +51,7 @@ export default function Session() {
           exercise={e}
           lastSets={lastByEx[e.id] ?? []}
           loggedSets={loggedFor(e.id)}
+          targetSets={targetByEx[e.id] ?? null}
           onLog={(sets) => log(e.id, sets)}
         />
       ))}

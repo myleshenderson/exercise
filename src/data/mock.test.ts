@@ -95,3 +95,70 @@ test("getLastSessionForDay returns the later session on same-day ties", async ()
   const last = await db.getLastSessionForDay(d.id);
   expect(last?.id).toBe(s2.id);
 });
+
+test("setDayExerciseTarget scopes a scheme to one day, not the exercise globally", async () => {
+  const db = createMockDataLayer({ seed: false });
+  const ex = await db.createExercise({ name: "Back Squat", cue: "", defaultSets: 5, defaultRepLow: 5, defaultRepHigh: 5 });
+  const dayA = await db.createDay("Day 1");
+  const dayB = await db.createDay("Day 5");
+  await db.updateDayExercises(dayA.id, [ex.id]);
+  await db.updateDayExercises(dayB.id, [ex.id]);
+
+  const dayAScheme = [
+    { setNumber: 1, weight: 225, reps: 5 },
+    { setNumber: 2, weight: 225, reps: 5 },
+  ];
+  const dayBScheme = [
+    { setNumber: 1, weight: 275, reps: 5 },
+    { setNumber: 2, weight: 275, reps: 3 },
+    { setNumber: 3, weight: 315, reps: 1 },
+  ];
+  await db.setDayExerciseTarget(dayA.id, ex.id, dayAScheme);
+  await db.setDayExerciseTarget(dayB.id, ex.id, dayBScheme);
+
+  expect(await db.getDayExerciseTargets(dayA.id)).toEqual({ [ex.id]: dayAScheme });
+  expect(await db.getDayExerciseTargets(dayB.id)).toEqual({ [ex.id]: dayBScheme });
+});
+
+test("setDayExerciseTarget with null removes a previously-defined scheme", async () => {
+  const db = createMockDataLayer({ seed: false });
+  const ex = await db.createExercise({ name: "Back Squat", cue: "", defaultSets: 5, defaultRepLow: 5, defaultRepHigh: 5 });
+  const day = await db.createDay("Day 1");
+  await db.updateDayExercises(day.id, [ex.id]);
+  await db.setDayExerciseTarget(day.id, ex.id, [{ setNumber: 1, weight: 225, reps: 5 }]);
+  expect(await db.getDayExerciseTargets(day.id)).toEqual({ [ex.id]: [{ setNumber: 1, weight: 225, reps: 5 }] });
+
+  await db.setDayExerciseTarget(day.id, ex.id, null);
+  expect(await db.getDayExerciseTargets(day.id)).toEqual({});
+});
+
+test("getDayExerciseTargets returns {} for a day with no schemes defined", async () => {
+  const db = createMockDataLayer();
+  expect(await db.getDayExerciseTargets("leg-day")).toEqual({});
+});
+
+test("updateDayExercises drops a scheme for an exercise removed from the day", async () => {
+  const db = createMockDataLayer({ seed: false });
+  const ex = await db.createExercise({ name: "Back Squat", cue: "", defaultSets: 5, defaultRepLow: 5, defaultRepHigh: 5 });
+  const day = await db.createDay("Day 1");
+  await db.updateDayExercises(day.id, [ex.id]);
+  await db.setDayExerciseTarget(day.id, ex.id, [{ setNumber: 1, weight: 225, reps: 5 }]);
+
+  await db.updateDayExercises(day.id, []); // remove the exercise from the day
+  expect(await db.getDayExerciseTargets(day.id)).toEqual({});
+});
+
+test("updateDayExercises preserves a scheme for an exercise that stays on the day", async () => {
+  const db = createMockDataLayer({ seed: false });
+  const ex1 = await db.createExercise({ name: "Back Squat", cue: "", defaultSets: 5, defaultRepLow: 5, defaultRepHigh: 5 });
+  const day = await db.createDay("Day 1");
+  await db.updateDayExercises(day.id, [ex1.id]);
+  await db.setDayExerciseTarget(day.id, ex1.id, [{ setNumber: 1, weight: 225, reps: 5 }]);
+
+  const ex2 = await db.createExercise({ name: "Bench Press", cue: "", defaultSets: 5, defaultRepLow: 5, defaultRepHigh: 5 });
+  await db.updateDayExercises(day.id, [ex1.id, ex2.id]); // add a second exercise alongside it
+
+  expect(await db.getDayExerciseTargets(day.id)).toEqual({
+    [ex1.id]: [{ setNumber: 1, weight: 225, reps: 5 }],
+  });
+});

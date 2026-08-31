@@ -7,6 +7,7 @@ interface Props {
   exercise: Exercise;
   lastSets: SetEntry[];
   loggedSets: SetEntry[] | null;
+  targetSets?: SetEntry[] | null;
   onLog(sets: SetEntry[]): void;
 }
 
@@ -14,9 +15,12 @@ function isUniform(sets: SetEntry[]): boolean {
   return sets.every((s) => s.weight === sets[0].weight && s.reps === sets[0].reps);
 }
 
-export default function ExerciseCard({ exercise, lastSets, loggedSets, onLog }: Props) {
+export default function ExerciseCard({ exercise, lastSets, loggedSets, targetSets, onLog }: Props) {
   const [editing, setEditing] = useState(false);
-  const [perSet, setPerSet] = useState(() => (loggedSets ? !isUniform(loggedSets) : false));
+  const [perSet, setPerSet] = useState(() => {
+    if (loggedSets) return !isUniform(loggedSets);
+    return !!targetSets && targetSets.length > 0;
+  });
 
   if (loggedSets && !editing) {
     return (
@@ -35,6 +39,7 @@ export default function ExerciseCard({ exercise, lastSets, loggedSets, onLog }: 
   }
 
   const lastLine = formatSets(lastSets);
+  const seedEntries = loggedSets ?? (targetSets && targetSets.length > 0 ? targetSets : null);
   return (
     <div className="rounded-xl border p-4">
       <div className="flex justify-between items-center">
@@ -66,10 +71,10 @@ export default function ExerciseCard({ exercise, lastSets, loggedSets, onLog }: 
         <span className="font-medium text-gray-900">Last: {lastLine || "—"}</span>
       </div>
       <SetEditor
-        initialWeight={(loggedSets ?? lastSets)[0]?.weight ?? 0}
-        initialSets={loggedSets?.length ?? exercise.defaultSets}
-        initialReps={(loggedSets ?? lastSets)[0]?.reps ?? exercise.defaultRepLow}
-        initialEntries={loggedSets ?? undefined}
+        initialWeight={(seedEntries ?? lastSets)[0]?.weight ?? 0}
+        initialSets={seedEntries?.length ?? exercise.defaultSets}
+        initialReps={(seedEntries ?? lastSets)[0]?.reps ?? exercise.defaultRepLow}
+        initialEntries={seedEntries ?? undefined}
         perSet={perSet}
         onPerSetChange={setPerSet}
         onSave={(sets) => {

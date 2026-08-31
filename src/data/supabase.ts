@@ -110,15 +110,52 @@ export function createSupabaseDataLayer(): DataLayer {
       return { id: data.id, name: data.name, position: data.position, exerciseIds: [] };
     },
     async updateDayExercises(dayId, exerciseIds) {
+      const { data: existing, error: selectError } = await supabase
+        .from("workout_day_exercises")
+        .select("exercise_id, target_sets")
+        .eq("workout_day_id", dayId);
+      if (selectError) throw selectError;
+      const targetsByExercise: Record<string, unknown> = {};
+      for (const row of existing ?? []) {
+        if (row.target_sets) targetsByExercise[row.exercise_id] = row.target_sets;
+      }
       await supabase.from("workout_day_exercises").delete().eq("workout_day_id", dayId);
       if (exerciseIds.length) {
         await supabase.from("workout_day_exercises").insert(
-          exerciseIds.map((exercise_id, position) => ({ workout_day_id: dayId, exercise_id, position })),
+          exerciseIds.map((exercise_id, position) => ({
+            workout_day_id: dayId,
+            exercise_id,
+            position,
+            target_sets: targetsByExercise[exercise_id] ?? null,
+          })),
         );
       }
     },
     async updateDayName(dayId, name) {
       const { error } = await supabase.from("workout_days").update({ name }).eq("id", dayId);
+      if (error) throw error;
+    },
+    async getDayExerciseTargets(dayId) {
+      const { data } = await supabase
+        .from("workout_day_exercises")
+        .select("exercise_id, target_sets")
+        .eq("workout_day_id", dayId);
+      const out: Record<string, SetEntry[]> = {};
+      for (const row of data ?? []) {
+        const raw = row.target_sets as { weight: number; reps: number }[] | null;
+        if (raw && raw.length > 0) {
+          out[row.exercise_id] = raw.map((s, i) => ({ setNumber: i + 1, weight: s.weight, reps: s.reps }));
+        }
+      }
+      return out;
+    },
+    async setDayExerciseTarget(dayId, exerciseId, sets) {
+      const target_sets = sets && sets.length > 0 ? sets.map((s) => ({ weight: s.weight, reps: s.reps })) : null;
+      const { error } = await supabase
+        .from("workout_day_exercises")
+        .update({ target_sets })
+        .eq("workout_day_id", dayId)
+        .eq("exercise_id", exerciseId);
       if (error) throw error;
     },
     async getLastSetsForExercise(exerciseId, beforeDate) {
