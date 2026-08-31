@@ -164,6 +164,18 @@ export function createSupabaseDataLayer(): DataLayer {
       }
       return null;
     },
+    async getSessionForDayAndDate(workoutDayId, date) {
+      const { data: s } = await supabase
+        .from("sessions")
+        .select("id")
+        .eq("workout_day_id", workoutDayId)
+        .eq("performed_on", date)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!s) return null;
+      return loadSession(s.id);
+    },
     async logExercise(sessionId, exerciseId, sets) {
       await supabase.from("session_sets").delete().eq("session_id", sessionId).eq("exercise_id", exerciseId);
       if (sets.length) {
