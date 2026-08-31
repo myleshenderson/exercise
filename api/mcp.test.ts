@@ -23,6 +23,7 @@ const FIXTURES: Record<
   string,
   {
     progression_for_exercise: unknown;
+    sets_for_exercise: unknown;
     weekly_volume: unknown;
     training_gaps: unknown;
     get_day_templates: unknown;
@@ -31,6 +32,7 @@ const FIXTURES: Record<
 > = {
   "user-a": {
     progression_for_exercise: [{ performed_on: "2026-08-01", sets: 3, top_weight: 100, volume: 3000 }],
+    sets_for_exercise: [{ performed_on: "2026-08-01", set_number: 1, weight: 95, reps: 5 }],
     weekly_volume: [{ week: "2026-08-24", sessions: 2, total_volume: 8000 }],
     training_gaps: [{ performed_on: "2026-08-24", days_since_prev: null }],
     get_day_templates: [{ workout_day_id: "day-a", workout_day_name: "Push", exercise_name: "Bench" }],
@@ -38,6 +40,7 @@ const FIXTURES: Record<
   },
   "user-b": {
     progression_for_exercise: [{ performed_on: "2026-08-02", sets: 5, top_weight: 200, volume: 6000 }],
+    sets_for_exercise: [{ performed_on: "2026-08-02", set_number: 1, weight: 185, reps: 5 }],
     weekly_volume: [{ week: "2026-08-24", sessions: 1, total_volume: 4000 }],
     training_gaps: [{ performed_on: "2026-08-26", days_since_prev: null }],
     get_day_templates: [{ workout_day_id: "day-b", workout_day_name: "Pull", exercise_name: "Row" }],
@@ -177,7 +180,7 @@ describe("api/mcp handler", () => {
     return client;
   }
 
-  it("lists the progression, weekly-volume, training-gaps, day-templates, and workout-history tools", async () => {
+  it("lists the progression, sets, weekly-volume, training-gaps, day-templates, and workout-history tools", async () => {
     const client = await connectAs("token-a");
 
     const { tools } = await client.listTools();
@@ -185,6 +188,7 @@ describe("api/mcp handler", () => {
       "get_day_templates",
       "get_workout_history",
       "progression_for_exercise",
+      "sets_for_exercise",
       "training_gaps",
       "weekly_volume",
     ]);
@@ -210,6 +214,7 @@ describe("api/mcp handler", () => {
       "get_day_templates",
       "get_workout_history",
       "progression_for_exercise",
+      "sets_for_exercise",
       "training_gaps",
       "weekly_volume",
     ]);
@@ -245,15 +250,17 @@ describe("api/mcp handler", () => {
     const clientA = await connectAs("token-a");
     const clientB = await connectAs("token-b");
 
-    const [progressionA, weeklyA, gapsA, templatesA, historyA] = await Promise.all([
+    const [progressionA, setsA, weeklyA, gapsA, templatesA, historyA] = await Promise.all([
       clientA.callTool({ name: "progression_for_exercise", arguments: { exercise_name: "bench" } }),
+      clientA.callTool({ name: "sets_for_exercise", arguments: { exercise_name: "bench" } }),
       clientA.callTool({ name: "weekly_volume", arguments: {} }),
       clientA.callTool({ name: "training_gaps", arguments: {} }),
       clientA.callTool({ name: "get_day_templates", arguments: {} }),
       clientA.callTool({ name: "get_workout_history", arguments: {} }),
     ]);
-    const [progressionB, weeklyB, gapsB, templatesB, historyB] = await Promise.all([
+    const [progressionB, setsB, weeklyB, gapsB, templatesB, historyB] = await Promise.all([
       clientB.callTool({ name: "progression_for_exercise", arguments: { exercise_name: "bench" } }),
+      clientB.callTool({ name: "sets_for_exercise", arguments: { exercise_name: "bench" } }),
       clientB.callTool({ name: "weekly_volume", arguments: {} }),
       clientB.callTool({ name: "training_gaps", arguments: {} }),
       clientB.callTool({ name: "get_day_templates", arguments: {} }),
@@ -262,12 +269,16 @@ describe("api/mcp handler", () => {
 
     expect(progressionA.isError).not.toBe(true);
     expect(progressionB.isError).not.toBe(true);
+    expect(setsA.isError).not.toBe(true);
+    expect(setsB.isError).not.toBe(true);
     expect(templatesA.isError).not.toBe(true);
     expect(templatesB.isError).not.toBe(true);
     expect(historyA.isError).not.toBe(true);
     expect(historyB.isError).not.toBe(true);
     expect(progressionA.content).toEqual([{ type: "text", text: JSON.stringify(FIXTURES["user-a"].progression_for_exercise, null, 2) }]);
     expect(progressionB.content).toEqual([{ type: "text", text: JSON.stringify(FIXTURES["user-b"].progression_for_exercise, null, 2) }]);
+    expect(setsA.content).toEqual([{ type: "text", text: JSON.stringify(FIXTURES["user-a"].sets_for_exercise, null, 2) }]);
+    expect(setsB.content).toEqual([{ type: "text", text: JSON.stringify(FIXTURES["user-b"].sets_for_exercise, null, 2) }]);
     expect(weeklyA.content).toEqual([{ type: "text", text: JSON.stringify(FIXTURES["user-a"].weekly_volume, null, 2) }]);
     expect(weeklyB.content).toEqual([{ type: "text", text: JSON.stringify(FIXTURES["user-b"].weekly_volume, null, 2) }]);
     expect(gapsA.content).toEqual([{ type: "text", text: JSON.stringify(FIXTURES["user-a"].training_gaps, null, 2) }]);

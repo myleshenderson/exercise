@@ -6,6 +6,10 @@ const TOOLS = [
     name: "progression_for_exercise",
     description: "Per-session set count, top weight, and volume for an exercise (matched by partial name).",
   },
+  {
+    name: "sets_for_exercise",
+    description: "Every individual logged set for an exercise (matched by partial name), ungrouped.",
+  },
   { name: "weekly_volume", description: "Sessions and total volume per week." },
   { name: "training_gaps", description: "Days elapsed between consecutive training sessions." },
   {
