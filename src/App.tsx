@@ -30,7 +30,7 @@ function Shell() {
       </Routes>
       <nav className="fixed bottom-0 inset-x-0 max-w-md mx-auto flex justify-around bg-white border-t py-2">
         <Link to="/" className="p-2">Home</Link>
-        <Link to="/days" className="p-2">Days</Link>
+        <Link to="/days" className="p-2">Schedule</Link>
         <Link to="/workouts" className="p-2">Workouts</Link>
         <Link to="/mcp-login" className="p-2">MCP</Link>
       </nav>
