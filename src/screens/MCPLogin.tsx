@@ -8,6 +8,14 @@ const TOOLS = [
   },
   { name: "weekly_volume", description: "Sessions and total volume per week." },
   { name: "training_gaps", description: "Days elapsed between consecutive training sessions." },
+  {
+    name: "get_day_templates",
+    description: "Day templates with their exercises and progressive schemes (or uniform defaults).",
+  },
+  {
+    name: "get_workout_history",
+    description: "Full raw, unaggregated session history: every session and every logged set.",
+  },
 ];
 
 function selectOnFocus(e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) {
