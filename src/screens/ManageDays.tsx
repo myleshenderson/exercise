@@ -376,7 +376,17 @@ function SchemeEditor({ day, exercise, initial, onSave, onRemove, onCancel }: {
       : [{ weight: 0, reps: exercise.defaultRepLow }],
   );
 
-  const valid = rows.length > 0 && rows.every((r) => r.weight >= 0 && r.reps >= 1);
+  const valid =
+    rows.length > 0 &&
+    rows.every(
+      (r) =>
+        r.weight >= 0 &&
+        r.weight <= 500 &&
+        r.weight % 5 === 0 &&
+        Number.isInteger(r.reps) &&
+        r.reps >= 1 &&
+        r.reps <= 40,
+    );
 
   function updateRow(i: number, field: "weight" | "reps", value: number) {
     setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)));
@@ -401,6 +411,9 @@ function SchemeEditor({ day, exercise, initial, onSave, onRemove, onCancel }: {
             <input
               aria-label={`scheme set ${i + 1} weight for ${exercise.name} on ${day.name}`}
               type="number"
+              step={5}
+              min={0}
+              max={500}
               value={r.weight}
               onChange={(ev) => updateRow(i, "weight", Number(ev.target.value))}
               className="border rounded px-2 py-1 w-full"
@@ -411,6 +424,9 @@ function SchemeEditor({ day, exercise, initial, onSave, onRemove, onCancel }: {
             <input
               aria-label={`scheme set ${i + 1} reps for ${exercise.name} on ${day.name}`}
               type="number"
+              step={1}
+              min={1}
+              max={40}
               value={r.reps}
               onChange={(ev) => updateRow(i, "reps", Number(ev.target.value))}
               className="border rounded px-2 py-1 w-full"

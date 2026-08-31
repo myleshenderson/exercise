@@ -110,10 +110,11 @@ export function createSupabaseDataLayer(): DataLayer {
       return { id: data.id, name: data.name, position: data.position, exerciseIds: [] };
     },
     async updateDayExercises(dayId, exerciseIds) {
-      const { data: existing } = await supabase
+      const { data: existing, error: selectError } = await supabase
         .from("workout_day_exercises")
         .select("exercise_id, target_sets")
         .eq("workout_day_id", dayId);
+      if (selectError) throw selectError;
       const targetsByExercise: Record<string, unknown> = {};
       for (const row of existing ?? []) {
         if (row.target_sets) targetsByExercise[row.exercise_id] = row.target_sets;

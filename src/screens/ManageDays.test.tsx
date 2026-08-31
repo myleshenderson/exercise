@@ -143,6 +143,18 @@ test("adding a scheme to an exercise shows its summary", async () => {
   await waitFor(() => expect(screen.getByText("Scheme: 105×10, 115×8")).toBeInTheDocument());
 });
 
+test("save is disabled for a scheme value off the SetEditor's weight/reps grid", async () => {
+  render(<MemoryRouter><ManageDays /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByText("Scheme: 105×10, 115×8")).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /^edit scheme for leg curl on leg day 2$/i }));
+  fireEvent.change(screen.getByLabelText(/^scheme set 1 weight for leg curl on leg day 2$/i), { target: { value: "107" } });
+  expect(screen.getByRole("button", { name: /^save scheme for leg curl on leg day 2$/i })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText(/^scheme set 1 weight for leg curl on leg day 2$/i), { target: { value: "105" } });
+  fireEvent.change(screen.getByLabelText(/^scheme set 1 reps for leg curl on leg day 2$/i), { target: { value: "45" } });
+  expect(screen.getByRole("button", { name: /^save scheme for leg curl on leg day 2$/i })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: /^cancel scheme for leg curl on leg day 2$/i }));
+});
+
 test("editing an existing scheme reopens pre-filled with its saved values", async () => {
   render(<MemoryRouter><ManageDays /></MemoryRouter>);
   await waitFor(() => expect(screen.getByText("Scheme: 105×10, 115×8")).toBeInTheDocument());
