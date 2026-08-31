@@ -91,3 +91,16 @@ test("completed exercises load with their logged values", async () => {
   // Logged → collapsed summary shows the logged values, not the defaults.
   expect(screen.getByText("160 × 3 × 10")).toBeInTheDocument();
 });
+
+test("a session for a day with a defined progressive scheme starts pre-filled per-set with the scheme's values", async () => {
+  await db.setDayExerciseTarget("leg-day", "leg-press", [
+    { setNumber: 1, weight: 225, reps: 5 },
+    { setNumber: 2, weight: 225, reps: 5 },
+    { setNumber: 3, weight: 275, reps: 3 },
+  ]);
+  await renderSession();
+  await waitFor(() => expect(screen.getByText("Leg Press")).toBeInTheDocument());
+  expect(screen.getByLabelText("set 3 weight")).toHaveValue("275");
+  expect(screen.getByLabelText("set 3 reps")).toHaveValue("3");
+  await db.setDayExerciseTarget("leg-day", "leg-press", null); // don't leak into other tests
+});
