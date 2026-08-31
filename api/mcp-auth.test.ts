@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { resolveIdentity } from "./mcp-auth";
-import { sha256Hex } from "./mcp-login";
+import { resolveIdentity } from "./mcp-auth.js";
+import { sha256Hex } from "./mcp-login.js";
 
 function fakeClient(overrides: {
   row?: { id: string; user_id: string; refresh_token: string } | null;

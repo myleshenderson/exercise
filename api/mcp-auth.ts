@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { sha256Hex } from "./mcp-login";
+import { sha256Hex } from "./mcp-login.js";
 
 export type IdentityResult =
   | { ok: true; userId: string; accessToken: string }

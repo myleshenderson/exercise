@@ -4,8 +4,8 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { requiredEnv } from "./_env";
-import { resolveIdentity, type IdentityResult } from "./mcp-auth";
+import { requiredEnv } from "./_env.js";
+import { resolveIdentity, type IdentityResult } from "./mcp-auth.js";
 
 // Vercel's Node runtime pre-parses JSON request bodies onto req.body before
 // invoking the handler; the SDK's Node types don't know about that.
