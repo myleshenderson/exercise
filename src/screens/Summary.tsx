@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { db } from "../data";
 import type { Session } from "../types";
 import { formatSets } from "../lib/sets";
@@ -9,6 +9,8 @@ import { formatSessionDate } from "../lib/date";
 export default function Summary() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnTo = (location.state as { from?: string } | null)?.from ?? "/";
   const [session, setSession] = useState<Session | null>(null);
   const [dayName, setDayName] = useState("Workout");
   const [names, setNames] = useState<Record<string, string>>({});
@@ -50,7 +52,7 @@ export default function Summary() {
       </div>
       <p className="text-lg font-semibold">Total volume: {totalVolume(session).toLocaleString()} lb</p>
       <button
-        onClick={() => navigate("/")}
+        onClick={() => navigate(returnTo)}
         className="w-full rounded-xl bg-black text-white p-4 font-semibold"
       >
         Done

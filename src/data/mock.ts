@@ -77,5 +77,15 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
       }
       return best;
     },
+    async listSessions() {
+      return sessions
+        .slice()
+        .reverse()
+        .sort((a, b) => (a.performedOn < b.performedOn ? 1 : a.performedOn > b.performedOn ? -1 : 0));
+    },
+    async deleteSession(id) {
+      const idx = sessions.findIndex((s) => s.id === id);
+      if (idx !== -1) sessions.splice(idx, 1);
+    },
   };
 }
