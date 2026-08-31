@@ -26,7 +26,8 @@ export default function Home() {
   }, []);
 
   async function start(dayId: string) {
-    const session = await db.startSession(dayId, date);
+    const existing = await db.getSessionForDayAndDate(dayId, date);
+    const session = existing ?? (await db.startSession(dayId, date));
     navigate(`/session/${session.id}`);
   }
 

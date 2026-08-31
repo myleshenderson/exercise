@@ -77,5 +77,12 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
       }
       return best;
     },
+    async getSessionForDayAndDate(workoutDayId, date) {
+      for (let i = sessions.length - 1; i >= 0; i--) {
+        const s = sessions[i];
+        if (s.workoutDayId === workoutDayId && s.performedOn === date) return s;
+      }
+      return null;
+    },
   };
 }
