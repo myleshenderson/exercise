@@ -69,6 +69,8 @@ test("shows the available tools", () => {
   expect(screen.getByText("progression_for_exercise")).toBeInTheDocument();
   expect(screen.getByText("weekly_volume")).toBeInTheDocument();
   expect(screen.getByText("training_gaps")).toBeInTheDocument();
+  expect(screen.getByText("get_day_templates")).toBeInTheDocument();
+  expect(screen.getByText("get_workout_history")).toBeInTheDocument();
 });
 
 test("shows a client config snippet with a placeholder before a token is generated", () => {

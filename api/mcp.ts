@@ -107,6 +107,36 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
       }),
   );
 
+  server.registerTool(
+    "get_day_templates",
+    {
+      title: "Day templates",
+      description:
+        "The authenticated user's day templates with their ordered exercises and each exercise's day-specific progressive scheme, or its uniform defaults when none is set.",
+    },
+    async () =>
+      withIdentity(async (accessToken) => {
+        const { data, error } = await createUserScopedClient(accessToken).rpc("get_day_templates");
+        if (error) return toolError(`get_day_templates failed: ${error.message}`);
+        return toolResult(data);
+      }),
+  );
+
+  server.registerTool(
+    "get_workout_history",
+    {
+      title: "Workout history",
+      description:
+        "The authenticated user's full raw session history: every session with its date, associated day, and every logged set, unaggregated.",
+    },
+    async () =>
+      withIdentity(async (accessToken) => {
+        const { data, error } = await createUserScopedClient(accessToken).rpc("get_workout_history");
+        if (error) return toolError(`get_workout_history failed: ${error.message}`);
+        return toolResult(data);
+      }),
+  );
+
   return server;
 }
 
