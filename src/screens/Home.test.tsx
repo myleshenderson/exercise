@@ -45,3 +45,25 @@ test("starts a session on the chosen date", async () => {
   await waitFor(() => expect(spy).toHaveBeenCalledWith("leg-day", "2026-05-01"));
   spy.mockRestore();
 });
+
+test("tapping the same day twice resumes the existing session instead of creating a new one", async () => {
+  const startSpy = vi.spyOn(db, "startSession");
+  const lookupSpy = vi.spyOn(db, "getSessionForDayAndDate");
+  render(
+    <MemoryRouter>
+      <Home />
+    </MemoryRouter>,
+  );
+  await waitFor(() => expect(screen.getByText("Leg Day")).toBeInTheDocument());
+  fireEvent.change(screen.getByLabelText(/workout date/i), { target: { value: "2026-05-02" } });
+
+  fireEvent.click(screen.getByText("Leg Day"));
+  await waitFor(() => expect(lookupSpy).toHaveBeenCalledTimes(1));
+
+  fireEvent.click(screen.getByText("Leg Day"));
+  await waitFor(() => expect(lookupSpy).toHaveBeenCalledTimes(2));
+
+  expect(startSpy).toHaveBeenCalledTimes(1);
+  startSpy.mockRestore();
+  lookupSpy.mockRestore();
+});
