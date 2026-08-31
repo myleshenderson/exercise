@@ -1,5 +1,6 @@
 import { randomBytes, createHash } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { requiredEnv } from "./_env";
 
 interface VercelLikeRequest {
   method?: string;
@@ -50,12 +51,6 @@ export async function mintMcpToken(
   }
 
   return { ok: true, token };
-}
-
-function requiredEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) throw new Error(`Missing required env var ${name}`);
-  return value;
 }
 
 export default async function handler(req: VercelLikeRequest, res: VercelLikeResponse): Promise<void> {
