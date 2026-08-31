@@ -10,6 +10,8 @@ export interface DataLayer {
   createDay(name: string): Promise<WorkoutDay>;
   updateDayExercises(dayId: string, exerciseIds: string[]): Promise<void>;
   updateDayName(dayId: string, name: string): Promise<void>;
+  getDayExerciseTargets(dayId: string): Promise<Record<string, SetEntry[]>>;
+  setDayExerciseTarget(dayId: string, exerciseId: string, sets: SetEntry[] | null): Promise<void>;
 
   getLastSetsForExercise(exerciseId: string, beforeDate: string): Promise<SetEntry[]>;
 
