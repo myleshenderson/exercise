@@ -18,7 +18,8 @@ const TOOLS = [
   },
   {
     name: "get_workout_history",
-    description: "Full raw, unaggregated session history: every session and every logged set.",
+    description:
+      "Full raw, unaggregated session history: every session and every logged set. Optionally filter by date range and/or exercise name.",
   },
 ];
 
