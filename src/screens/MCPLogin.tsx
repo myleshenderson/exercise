@@ -21,6 +21,11 @@ const TOOLS = [
     description:
       "Full raw, unaggregated session history: every session and every logged set. Optionally filter by date range and/or exercise name.",
   },
+  {
+    name: "scheme_history_for_day_exercise",
+    description:
+      "Every recorded progressive-scheme version for a day/exercise pair, ordered by recorded_at, for point-in-time lookup.",
+  },
 ];
 
 function selectOnFocus(e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) {

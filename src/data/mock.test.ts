@@ -148,6 +148,42 @@ test("updateDayExercises drops a scheme for an exercise removed from the day", a
   expect(await db.getDayExerciseTargets(day.id)).toEqual({});
 });
 
+test("setDayExerciseTarget records a scheme-history entry on write", async () => {
+  const db = createMockDataLayer({ seed: false });
+  const ex = await db.createExercise({ name: "Back Squat", cue: "", defaultSets: 5, defaultRepLow: 5, defaultRepHigh: 5 });
+  const day = await db.createDay("Day 1");
+  const scheme = [{ setNumber: 1, weight: 225, reps: 5 }];
+
+  await db.setDayExerciseTarget(day.id, ex.id, scheme);
+
+  const history = await db.getSchemeHistory(day.id, ex.id);
+  expect(history).toHaveLength(1);
+  expect(history[0].targetSets).toEqual(scheme);
+  expect(typeof history[0].recordedAt).toBe("string");
+});
+
+test("setDayExerciseTarget appends a new history entry on every write, in order, including clears", async () => {
+  const db = createMockDataLayer({ seed: false });
+  const ex = await db.createExercise({ name: "Back Squat", cue: "", defaultSets: 5, defaultRepLow: 5, defaultRepHigh: 5 });
+  const day = await db.createDay("Day 1");
+
+  await db.setDayExerciseTarget(day.id, ex.id, [{ setNumber: 1, weight: 225, reps: 5 }]);
+  await db.setDayExerciseTarget(day.id, ex.id, [{ setNumber: 1, weight: 245, reps: 5 }]);
+  await db.setDayExerciseTarget(day.id, ex.id, null);
+
+  const history = await db.getSchemeHistory(day.id, ex.id);
+  expect(history.map((h) => h.targetSets)).toEqual([
+    [{ setNumber: 1, weight: 225, reps: 5 }],
+    [{ setNumber: 1, weight: 245, reps: 5 }],
+    null,
+  ]);
+});
+
+test("getSchemeHistory returns [] for a day/exercise pair with no recorded schemes", async () => {
+  const db = createMockDataLayer({ seed: false });
+  expect(await db.getSchemeHistory("nope", "nope")).toEqual([]);
+});
+
 test("updateDayExercises preserves a scheme for an exercise that stays on the day", async () => {
   const db = createMockDataLayer({ seed: false });
   const ex1 = await db.createExercise({ name: "Back Squat", cue: "", defaultSets: 5, defaultRepLow: 5, defaultRepHigh: 5 });

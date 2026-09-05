@@ -192,6 +192,25 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
       }),
   );
 
+  server.registerTool(
+    "scheme_history_for_day_exercise",
+    {
+      title: "Scheme history for day/exercise",
+      description:
+        "Every recorded progressive-scheme version for a (workout_day_id, exercise_id) pair, ordered by recorded_at, for the authenticated user — use a <= filter on recorded_at and take the latest row to find which scheme was in effect at or before a given date.",
+      inputSchema: { workout_day_id: z.string(), exercise_id: z.string() },
+    },
+    async ({ workout_day_id, exercise_id }) =>
+      withIdentity(async (accessToken) => {
+        const { data, error } = await createUserScopedClient(accessToken).rpc("scheme_history_for_day_exercise", {
+          workout_day_id,
+          exercise_id,
+        });
+        if (error) return toolError(`scheme_history_for_day_exercise failed: ${error.message}`);
+        return toolResult(data);
+      }),
+  );
+
   return server;
 }
 

@@ -157,6 +157,27 @@ export function createSupabaseDataLayer(): DataLayer {
         .eq("workout_day_id", dayId)
         .eq("exercise_id", exerciseId);
       if (error) throw error;
+
+      const { error: historyError } = await supabase.from("workout_day_exercise_scheme_history").insert({
+        workout_day_id: dayId,
+        exercise_id: exerciseId,
+        target_sets,
+      });
+      if (historyError) throw historyError;
+    },
+    async getSchemeHistory(dayId, exerciseId) {
+      const { data, error } = await supabase
+        .from("workout_day_exercise_scheme_history")
+        .select("target_sets, recorded_at")
+        .eq("workout_day_id", dayId)
+        .eq("exercise_id", exerciseId)
+        .order("recorded_at");
+      if (error) throw error;
+      return (data ?? []).map((row) => {
+        const raw = row.target_sets as { weight: number; reps: number }[] | null;
+        const targetSets = raw && raw.length > 0 ? raw.map((s, i) => ({ setNumber: i + 1, weight: s.weight, reps: s.reps })) : null;
+        return { targetSets, recordedAt: row.recorded_at as string };
+      });
     },
     async getLastSetsForExercise(exerciseId, beforeDate) {
       const { data: s } = await supabase
