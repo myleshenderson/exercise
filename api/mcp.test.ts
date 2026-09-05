@@ -404,6 +404,7 @@ describe("api/mcp handler", () => {
       "progression_for_exercise",
       "remove_exercise_from_day",
       "rename_day_template",
+      "reorder_day_exercises",
       "scheme_history_for_day_exercise",
       "sets_for_exercise",
       "training_gaps",
@@ -438,6 +439,7 @@ describe("api/mcp handler", () => {
       "progression_for_exercise",
       "remove_exercise_from_day",
       "rename_day_template",
+      "reorder_day_exercises",
       "scheme_history_for_day_exercise",
       "sets_for_exercise",
       "training_gaps",
@@ -850,6 +852,78 @@ describe("api/mcp handler", () => {
 
       expect(result.isError).toBe(true);
       expect(TABLES.workout_day_exercises).toHaveLength(1);
+
+      await client.close();
+    });
+
+    it("reorder_day_exercises rewrites order and preserves target_sets across the round-trip", async () => {
+      seedDay("user-a", "day-a", "Push");
+      seedExercise("user-a", "ex-a", "Bench Press");
+      seedExercise("user-a", "ex-c", "Incline Press");
+      seedDayExercise("user-a", "day-a", "ex-a", 0, [{ weight: 185, reps: 5 }]);
+      seedDayExercise("user-a", "day-a", "ex-c", 1);
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "reorder_day_exercises",
+        arguments: { day_id: "day-a", exercise_ids: ["ex-c", "ex-a"] },
+      });
+
+      expect(result.isError).not.toBe(true);
+      const rows = TABLES.workout_day_exercises
+        .filter((r) => r.workout_day_id === "day-a")
+        .sort((a, b) => (a.position as number) - (b.position as number));
+      expect(rows.map((r) => r.exercise_id)).toEqual(["ex-c", "ex-a"]);
+      expect(rows.find((r) => r.exercise_id === "ex-a")?.target_sets).toEqual([{ weight: 185, reps: 5 }]);
+
+      await client.close();
+    });
+
+    it("reorder_day_exercises rejects a list missing a current member", async () => {
+      seedDay("user-a", "day-a", "Push");
+      seedExercise("user-a", "ex-a", "Bench Press");
+      seedExercise("user-a", "ex-c", "Incline Press");
+      seedDayExercise("user-a", "day-a", "ex-a", 0);
+      seedDayExercise("user-a", "day-a", "ex-c", 1);
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "reorder_day_exercises",
+        arguments: { day_id: "day-a", exercise_ids: ["ex-a"] },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text:
+            "reorder_day_exercises failed: exercise_ids missing [ex-c]. Use add_exercise_to_day/remove_exercise_from_day to change membership instead.",
+        },
+      ]);
+      expect(TABLES.workout_day_exercises.filter((r) => r.workout_day_id === "day-a")).toHaveLength(2);
+
+      await client.close();
+    });
+
+    it("reorder_day_exercises rejects a list with an id not on the day", async () => {
+      seedDay("user-a", "day-a", "Push");
+      seedExercise("user-a", "ex-a", "Bench Press");
+      seedDayExercise("user-a", "day-a", "ex-a", 0);
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "reorder_day_exercises",
+        arguments: { day_id: "day-a", exercise_ids: ["ex-a", "ex-z"] },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text:
+            "reorder_day_exercises failed: exercise_ids unexpected [ex-z]. Use add_exercise_to_day/remove_exercise_from_day to change membership instead.",
+        },
+      ]);
 
       await client.close();
     });

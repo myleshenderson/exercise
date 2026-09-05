@@ -6,7 +6,15 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { requiredEnv } from "./_env.js";
 import { resolveIdentity, type IdentityResult } from "./mcp-auth.js";
-import { createDay, updateDayName, deleteDay, createExercise, addExerciseToDay, removeExerciseFromDay } from "../src/data/supabase.js";
+import {
+  createDay,
+  updateDayName,
+  deleteDay,
+  createExercise,
+  addExerciseToDay,
+  removeExerciseFromDay,
+  updateDayExercises,
+} from "../src/data/supabase.js";
 
 // Vercel's Node runtime pre-parses JSON request bodies onto req.body before
 // invoking the handler; the SDK's Node types don't know about that.
@@ -383,6 +391,44 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
 
         await removeExerciseFromDay(client, day_id, exercise_id);
         return toolResult({ day_id, exercise_id, removed: true });
+      }),
+  );
+
+  server.registerTool(
+    "reorder_day_exercises",
+    {
+      title: "Reorder day exercises",
+      description:
+        "Rewrites a day template's exercise order for the authenticated user. exercise_ids must be exactly the day's current exercise-id set (same members, any order); membership changes must go through add_exercise_to_day/remove_exercise_from_day instead.",
+      inputSchema: { day_id: z.string(), exercise_ids: z.array(z.string()) },
+    },
+    async ({ day_id, exercise_ids }) =>
+      withIdentity(async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const day = await findDay(client, day_id);
+        if (!day) return toolError(`reorder_day_exercises failed: Day template ${day_id} not found.`);
+
+        const { data: current, error: selectError } = await client
+          .from("workout_day_exercises")
+          .select("exercise_id")
+          .eq("workout_day_id", day_id);
+        if (selectError) return toolError(`reorder_day_exercises failed: ${selectError.message}`);
+
+        const currentIds = new Set((current ?? []).map((r: { exercise_id: string }) => r.exercise_id));
+        const requestedIds = new Set(exercise_ids);
+        const missing = [...currentIds].filter((id) => !requestedIds.has(id));
+        const extra = [...requestedIds].filter((id) => !currentIds.has(id));
+        if (missing.length || extra.length) {
+          const parts: string[] = [];
+          if (missing.length) parts.push(`missing [${missing.join(", ")}]`);
+          if (extra.length) parts.push(`unexpected [${extra.join(", ")}]`);
+          return toolError(
+            `reorder_day_exercises failed: exercise_ids ${parts.join(" and ")}. Use add_exercise_to_day/remove_exercise_from_day to change membership instead.`,
+          );
+        }
+
+        await updateDayExercises(client, day_id, exercise_ids);
+        return toolResult({ day_id, exercise_ids });
       }),
   );
 
