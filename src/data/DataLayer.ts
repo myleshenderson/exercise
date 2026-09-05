@@ -1,4 +1,4 @@
-import type { Exercise, WorkoutDay, Session, SetEntry } from "../types";
+import type { Exercise, WorkoutDay, Session, SetEntry } from "../types.js";
 
 export interface DataLayer {
   listExercises(): Promise<Exercise[]>;

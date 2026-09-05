@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { DataLayer } from "./DataLayer";
-import type { Exercise, WorkoutDay, Session, SetEntry } from "../types";
-import { getSupabase } from "./supabaseClient";
+import type { DataLayer } from "./DataLayer.js";
+import type { Exercise, WorkoutDay, Session, SetEntry } from "../types.js";
+import { getSupabase } from "./supabaseClient.js";
 
 interface ExerciseRow {
   id: string;
