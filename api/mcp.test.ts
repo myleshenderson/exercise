@@ -396,6 +396,7 @@ describe("api/mcp handler", () => {
     expect(tools.map((t) => t.name).sort()).toEqual([
       "adherence_for_day",
       "create_day_template",
+      "create_exercise",
       "delete_day_template",
       "get_day_templates",
       "get_workout_history",
@@ -427,6 +428,7 @@ describe("api/mcp handler", () => {
     expect(tools.map((t) => t.name).sort()).toEqual([
       "adherence_for_day",
       "create_day_template",
+      "create_exercise",
       "delete_day_template",
       "get_day_templates",
       "get_workout_history",
@@ -709,6 +711,64 @@ describe("api/mcp handler", () => {
 
       expect(result.isError).toBe(true);
       expect(TABLES.workout_days.find((d) => d.id === "day-b")).toBeDefined();
+
+      await client.close();
+    });
+
+    it("create_exercise creates a catalog exercise with defaults applied", async () => {
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "create_exercise", arguments: { name: "Overhead Press" } });
+
+      expect(result.isError).not.toBe(true);
+      const [content] = result.content as [{ type: "text"; text: string }];
+      const exercise = JSON.parse(content.text);
+      expect(exercise).toEqual({
+        id: expect.any(String),
+        name: "Overhead Press",
+        cue: "",
+        defaultSets: 3,
+        defaultRepLow: 10,
+        defaultRepHigh: 12,
+      });
+
+      await client.close();
+    });
+
+    it("create_exercise honors explicit optional fields", async () => {
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "create_exercise",
+        arguments: { name: "Deadlift", cue: "neutral spine", default_sets: 5, default_rep_low: 3, default_rep_high: 5 },
+      });
+
+      expect(result.isError).not.toBe(true);
+      const [content] = result.content as [{ type: "text"; text: string }];
+      expect(JSON.parse(content.text)).toEqual({
+        id: expect.any(String),
+        name: "Deadlift",
+        cue: "neutral spine",
+        defaultSets: 5,
+        defaultRepLow: 3,
+        defaultRepHigh: 5,
+      });
+
+      await client.close();
+    });
+
+    it("create_exercise rejects an out-of-range default_rep_high", async () => {
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "create_exercise",
+        arguments: { name: "Curl", default_rep_high: 41 },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "create_exercise failed: default_rep_high must be an integer between 1 and 40." },
+      ]);
 
       await client.close();
     });

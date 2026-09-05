@@ -6,7 +6,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { requiredEnv } from "./_env.js";
 import { resolveIdentity, type IdentityResult } from "./mcp-auth.js";
-import { createDay, updateDayName, deleteDay } from "../src/data/supabase.js";
+import { createDay, updateDayName, deleteDay, createExercise } from "../src/data/supabase.js";
 
 // Vercel's Node runtime pre-parses JSON request bodies onto req.body before
 // invoking the handler; the SDK's Node types don't know about that.
@@ -63,6 +63,11 @@ async function findDay(
 ): Promise<{ id: string; name: string; position: number } | null> {
   const { data } = await client.from("workout_days").select("id, name, position").eq("id", dayId).maybeSingle();
   return (data as { id: string; name: string; position: number } | null) ?? null;
+}
+
+function validateReps(value: number): string | undefined {
+  if (!Number.isInteger(value) || value < 1 || value > 40) return "must be an integer between 1 and 40.";
+  return undefined;
 }
 
 function createMcpServer(bearerToken: string | undefined): McpServer {
@@ -290,6 +295,40 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         if (!day) return toolError(`delete_day_template failed: Day template ${day_id} not found.`);
         await deleteDay(client, day_id);
         return toolResult({ id: day.id, name: day.name, deleted: true });
+      }),
+  );
+
+  server.registerTool(
+    "create_exercise",
+    {
+      title: "Create exercise",
+      description:
+        "Creates a catalog exercise not yet attached to any day, for the authenticated user. Omitted optionals fall back to the same defaults as the exercises table's own column defaults.",
+      inputSchema: {
+        name: z.string(),
+        cue: z.string().optional(),
+        default_sets: z.number().optional(),
+        default_rep_low: z.number().optional(),
+        default_rep_high: z.number().optional(),
+      },
+    },
+    async ({ name, cue, default_sets, default_rep_low, default_rep_high }) =>
+      withIdentity(async (accessToken) => {
+        const repLow = default_rep_low ?? 10;
+        const repHigh = default_rep_high ?? 12;
+        const repLowError = validateReps(repLow);
+        if (repLowError) return toolError(`create_exercise failed: default_rep_low ${repLowError}`);
+        const repHighError = validateReps(repHigh);
+        if (repHighError) return toolError(`create_exercise failed: default_rep_high ${repHighError}`);
+
+        const exercise = await createExercise(createUserScopedClient(accessToken), {
+          name,
+          cue: cue ?? "",
+          defaultSets: default_sets ?? 3,
+          defaultRepLow: repLow,
+          defaultRepHigh: repHigh,
+        });
+        return toolResult(exercise);
       }),
   );
 
