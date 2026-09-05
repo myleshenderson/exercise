@@ -6,6 +6,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { requiredEnv } from "./_env.js";
 import { resolveIdentity, type IdentityResult } from "./mcp-auth.js";
+import { createDay, updateDayName, deleteDay } from "../src/data/supabase.js";
 
 // Vercel's Node runtime pre-parses JSON request bodies onto req.body before
 // invoking the handler; the SDK's Node types don't know about that.
@@ -54,6 +55,14 @@ function createUserScopedClient(accessToken: string): SupabaseClient {
     auth: { persistSession: false },
     global: { headers: { Authorization: `Bearer ${accessToken}` } },
   });
+}
+
+async function findDay(
+  client: SupabaseClient,
+  dayId: string,
+): Promise<{ id: string; name: string; position: number } | null> {
+  const { data } = await client.from("workout_days").select("id, name, position").eq("id", dayId).maybeSingle();
+  return (data as { id: string; name: string; position: number } | null) ?? null;
 }
 
 function createMcpServer(bearerToken: string | undefined): McpServer {
@@ -232,6 +241,55 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         });
         if (error) return toolError(`adherence_for_day failed: ${error.message}`);
         return toolResult(data);
+      }),
+  );
+
+  server.registerTool(
+    "create_day_template",
+    {
+      title: "Create day template",
+      description: "Creates a new, empty day template for the authenticated user. Returns the new day, including its id.",
+      inputSchema: { name: z.string() },
+    },
+    async ({ name }) =>
+      withIdentity(async (accessToken) => {
+        const day = await createDay(createUserScopedClient(accessToken), name);
+        return toolResult(day);
+      }),
+  );
+
+  server.registerTool(
+    "rename_day_template",
+    {
+      title: "Rename day template",
+      description: "Renames an existing day template belonging to the authenticated user, targeted by id.",
+      inputSchema: { day_id: z.string(), name: z.string() },
+    },
+    async ({ day_id, name }) =>
+      withIdentity(async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const day = await findDay(client, day_id);
+        if (!day) return toolError(`rename_day_template failed: Day template ${day_id} not found.`);
+        await updateDayName(client, day_id, name);
+        return toolResult({ id: day.id, name, position: day.position });
+      }),
+  );
+
+  server.registerTool(
+    "delete_day_template",
+    {
+      title: "Delete day template",
+      description:
+        "Hard-deletes a day template belonging to the authenticated user, targeted by id. Its exercise attachments cascade-delete; any session that referenced this day keeps its history with workout_day_id set to null.",
+      inputSchema: { day_id: z.string() },
+    },
+    async ({ day_id }) =>
+      withIdentity(async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const day = await findDay(client, day_id);
+        if (!day) return toolError(`delete_day_template failed: Day template ${day_id} not found.`);
+        await deleteDay(client, day_id);
+        return toolResult({ id: day.id, name: day.name, deleted: true });
       }),
   );
 
