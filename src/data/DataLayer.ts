@@ -12,6 +12,7 @@ export interface DataLayer {
   updateDayName(dayId: string, name: string): Promise<void>;
   getDayExerciseTargets(dayId: string): Promise<Record<string, SetEntry[]>>;
   setDayExerciseTarget(dayId: string, exerciseId: string, sets: SetEntry[] | null): Promise<void>;
+  getSchemeHistory(dayId: string, exerciseId: string): Promise<{ targetSets: SetEntry[] | null; recordedAt: string }[]>;
 
   getLastSetsForExercise(exerciseId: string, beforeDate: string): Promise<SetEntry[]>;
 

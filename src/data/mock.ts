@@ -9,6 +9,7 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
   const days: WorkoutDay[] = useSeed ? structuredClone(seedDays) : [];
   const sessions: Session[] = useSeed ? structuredClone(seedSessions) : [];
   const targets: Record<string, Record<string, SetEntry[]>> = {};
+  const schemeHistory: Record<string, { targetSets: SetEntry[] | null; recordedAt: string }[]> = {};
   let counter = 0;
   const nextId = (prefix: string) => `${prefix}-${++counter}`;
 
@@ -60,6 +61,15 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
       const dayTargets = (targets[dayId] ??= {});
       if (sets && sets.length > 0) dayTargets[exerciseId] = sets.slice();
       else delete dayTargets[exerciseId];
+
+      const key = `${dayId}:${exerciseId}`;
+      (schemeHistory[key] ??= []).push({
+        targetSets: sets && sets.length > 0 ? sets.slice() : null,
+        recordedAt: new Date().toISOString(),
+      });
+    },
+    async getSchemeHistory(dayId, exerciseId) {
+      return (schemeHistory[`${dayId}:${exerciseId}`] ?? []).slice();
     },
     async getLastSetsForExercise(exerciseId, beforeDate) {
       return findLastSetsForExercise(sessions, exerciseId, beforeDate);
