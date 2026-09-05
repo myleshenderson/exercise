@@ -30,6 +30,7 @@ const FIXTURES: Record<
     get_day_templates: unknown;
     get_workout_history: unknown;
     scheme_history_for_day_exercise: unknown;
+    adherence_for_day: unknown;
   }
 > = {
   "user-a": {
@@ -40,6 +41,9 @@ const FIXTURES: Record<
     get_day_templates: [{ workout_day_id: "day-a", workout_day_name: "Push", exercise_name: "Bench" }],
     get_workout_history: [{ session_id: "sess-a", performed_on: "2026-08-24", exercise_name: "Bench" }],
     scheme_history_for_day_exercise: [{ target_sets: [{ weight: 225, reps: 5 }], recorded_at: "2026-08-01T00:00:00Z" }],
+    adherence_for_day: [
+      { session_id: "sess-a", performed_on: "2026-08-24", exercise_name: "Bench", sets_status: "match", reps_status: "match", weight_status: "under" },
+    ],
   },
   "user-b": {
     progression_for_exercise: [{ performed_on: "2026-08-02", sets: 5, top_weight: 200, volume: 6000 }],
@@ -49,6 +53,9 @@ const FIXTURES: Record<
     get_day_templates: [{ workout_day_id: "day-b", workout_day_name: "Pull", exercise_name: "Row" }],
     get_workout_history: [{ session_id: "sess-b", performed_on: "2026-08-26", exercise_name: "Row" }],
     scheme_history_for_day_exercise: [{ target_sets: [{ weight: 185, reps: 5 }], recorded_at: "2026-08-02T00:00:00Z" }],
+    adherence_for_day: [
+      { session_id: "sess-b", performed_on: "2026-08-26", exercise_name: "Row", sets_status: "over", reps_status: "match", weight_status: "match" },
+    ],
   },
 };
 
@@ -191,6 +198,7 @@ describe("api/mcp handler", () => {
 
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
+      "adherence_for_day",
       "get_day_templates",
       "get_workout_history",
       "progression_for_exercise",
@@ -218,6 +226,7 @@ describe("api/mcp handler", () => {
 
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
+      "adherence_for_day",
       "get_day_templates",
       "get_workout_history",
       "progression_for_exercise",
@@ -258,7 +267,7 @@ describe("api/mcp handler", () => {
     const clientA = await connectAs("token-a");
     const clientB = await connectAs("token-b");
 
-    const [progressionA, setsA, weeklyA, gapsA, templatesA, historyA, schemeHistoryA] = await Promise.all([
+    const [progressionA, setsA, weeklyA, gapsA, templatesA, historyA, schemeHistoryA, adherenceA] = await Promise.all([
       clientA.callTool({ name: "progression_for_exercise", arguments: { exercise_name: "bench" } }),
       clientA.callTool({ name: "sets_for_exercise", arguments: { exercise_name: "bench" } }),
       clientA.callTool({ name: "weekly_volume", arguments: {} }),
@@ -266,8 +275,9 @@ describe("api/mcp handler", () => {
       clientA.callTool({ name: "get_day_templates", arguments: {} }),
       clientA.callTool({ name: "get_workout_history", arguments: {} }),
       clientA.callTool({ name: "scheme_history_for_day_exercise", arguments: { workout_day_id: "day-a", exercise_id: "ex-a" } }),
+      clientA.callTool({ name: "adherence_for_day", arguments: {} }),
     ]);
-    const [progressionB, setsB, weeklyB, gapsB, templatesB, historyB, schemeHistoryB] = await Promise.all([
+    const [progressionB, setsB, weeklyB, gapsB, templatesB, historyB, schemeHistoryB, adherenceB] = await Promise.all([
       clientB.callTool({ name: "progression_for_exercise", arguments: { exercise_name: "bench" } }),
       clientB.callTool({ name: "sets_for_exercise", arguments: { exercise_name: "bench" } }),
       clientB.callTool({ name: "weekly_volume", arguments: {} }),
@@ -275,6 +285,7 @@ describe("api/mcp handler", () => {
       clientB.callTool({ name: "get_day_templates", arguments: {} }),
       clientB.callTool({ name: "get_workout_history", arguments: {} }),
       clientB.callTool({ name: "scheme_history_for_day_exercise", arguments: { workout_day_id: "day-b", exercise_id: "ex-b" } }),
+      clientB.callTool({ name: "adherence_for_day", arguments: {} }),
     ]);
 
     expect(progressionA.isError).not.toBe(true);
@@ -287,6 +298,8 @@ describe("api/mcp handler", () => {
     expect(historyB.isError).not.toBe(true);
     expect(schemeHistoryA.isError).not.toBe(true);
     expect(schemeHistoryB.isError).not.toBe(true);
+    expect(adherenceA.isError).not.toBe(true);
+    expect(adherenceB.isError).not.toBe(true);
     expect(progressionA.content).toEqual([{ type: "text", text: JSON.stringify(FIXTURES["user-a"].progression_for_exercise, null, 2) }]);
     expect(progressionB.content).toEqual([{ type: "text", text: JSON.stringify(FIXTURES["user-b"].progression_for_exercise, null, 2) }]);
     expect(setsA.content).toEqual([{ type: "text", text: JSON.stringify(FIXTURES["user-a"].sets_for_exercise, null, 2) }]);
@@ -301,9 +314,51 @@ describe("api/mcp handler", () => {
     expect(historyB.content).toEqual([{ type: "text", text: JSON.stringify(FIXTURES["user-b"].get_workout_history, null, 2) }]);
     expect(schemeHistoryA.content).toEqual([{ type: "text", text: JSON.stringify(FIXTURES["user-a"].scheme_history_for_day_exercise, null, 2) }]);
     expect(schemeHistoryB.content).toEqual([{ type: "text", text: JSON.stringify(FIXTURES["user-b"].scheme_history_for_day_exercise, null, 2) }]);
+    expect(adherenceA.content).toEqual([{ type: "text", text: JSON.stringify(FIXTURES["user-a"].adherence_for_day, null, 2) }]);
+    expect(adherenceB.content).toEqual([{ type: "text", text: JSON.stringify(FIXTURES["user-b"].adherence_for_day, null, 2) }]);
 
     await clientA.close();
     await clientB.close();
+  });
+
+  it("adherence_for_day forwards no filters when called with no arguments", async () => {
+    const client = await connectAs("token-a");
+
+    await client.callTool({ name: "adherence_for_day", arguments: {} });
+
+    expect(rpcCalls).toContainEqual({
+      name: "adherence_for_day",
+      args: { for_workout_day_id: null, start_date: null, end_date: null },
+    });
+
+    await client.close();
+  });
+
+  it("adherence_for_day forwards workout_day_id, start_date, and end_date filters to the RPC call", async () => {
+    const client = await connectAs("token-a");
+
+    await client.callTool({
+      name: "adherence_for_day",
+      arguments: { workout_day_id: "day-a", start_date: "2026-08-01", end_date: "2026-08-31" },
+    });
+
+    expect(rpcCalls).toContainEqual({
+      name: "adherence_for_day",
+      args: { for_workout_day_id: "day-a", start_date: "2026-08-01", end_date: "2026-08-31" },
+    });
+
+    await client.close();
+  });
+
+  it("adherence_for_day succeeds when the client omits the arguments field entirely", async () => {
+    const client = await connectAs("token-a");
+
+    const result = await client.callTool({ name: "adherence_for_day" });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.content).toEqual([{ type: "text", text: JSON.stringify(FIXTURES["user-a"].adherence_for_day, null, 2) }]);
+
+    await client.close();
   });
 
   it("scheme_history_for_day_exercise forwards workout_day_id and exercise_id to the RPC call", async () => {

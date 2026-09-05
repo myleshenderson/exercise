@@ -211,6 +211,30 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
       }),
   );
 
+  server.registerTool(
+    "adherence_for_day",
+    {
+      title: "Adherence for day",
+      description:
+        "Compares the authenticated user's actual logged sets against the prescribed target for the same (day, exercise) pairing and session date - the scheme actually in effect on that date (via point-in-time history), falling back to the exercise's uniform defaults when no scheme was ever defined. Flags under-/over-shooting on sets, reps, and weight. Optionally filter by workout_day_id and/or a date range (start_date/end_date); omit all filters for every day and date.",
+      inputSchema: {
+        workout_day_id: z.string().optional().describe("Only include sessions for this workout day."),
+        start_date: z.string().optional().describe("Only include sessions performed on or after this date (YYYY-MM-DD)."),
+        end_date: z.string().optional().describe("Only include sessions performed on or before this date (YYYY-MM-DD)."),
+      },
+    },
+    async ({ workout_day_id, start_date, end_date }) =>
+      withIdentity(async (accessToken) => {
+        const { data, error } = await createUserScopedClient(accessToken).rpc("adherence_for_day", {
+          for_workout_day_id: workout_day_id ?? null,
+          start_date: start_date ?? null,
+          end_date: end_date ?? null,
+        });
+        if (error) return toolError(`adherence_for_day failed: ${error.message}`);
+        return toolResult(data);
+      }),
+  );
+
   return server;
 }
 

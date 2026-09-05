@@ -32,6 +32,11 @@ const TOOLS = [
     description:
       "Every recorded progressive-scheme version for a day/exercise pair, ordered by recorded_at, for point-in-time lookup.",
   },
+  {
+    name: "adherence_for_day",
+    description:
+      "Actual logged sets vs. the prescribed target in effect on each session's date, flagging under-/over-shooting on sets, reps, and weight. Optionally filter by day and/or date range.",
+  },
 ];
 
 function selectOnFocus(e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) {
