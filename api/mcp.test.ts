@@ -406,6 +406,7 @@ describe("api/mcp handler", () => {
       "rename_day_template",
       "reorder_day_exercises",
       "scheme_history_for_day_exercise",
+      "set_day_exercise_scheme",
       "sets_for_exercise",
       "training_gaps",
       "weekly_volume",
@@ -441,6 +442,7 @@ describe("api/mcp handler", () => {
       "rename_day_template",
       "reorder_day_exercises",
       "scheme_history_for_day_exercise",
+      "set_day_exercise_scheme",
       "sets_for_exercise",
       "training_gaps",
       "weekly_volume",
@@ -923,6 +925,94 @@ describe("api/mcp handler", () => {
           text:
             "reorder_day_exercises failed: exercise_ids unexpected [ex-z]. Use add_exercise_to_day/remove_exercise_from_day to change membership instead.",
         },
+      ]);
+
+      await client.close();
+    });
+
+    it("set_day_exercise_scheme sets a scheme for one exercise on one day", async () => {
+      seedDay("user-a", "day-a", "Push");
+      seedExercise("user-a", "ex-a", "Bench Press");
+      seedDayExercise("user-a", "day-a", "ex-a", 0);
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "set_day_exercise_scheme",
+        arguments: { day_id: "day-a", exercise_id: "ex-a", sets: [{ weight: 185, reps: 5 }, { weight: 185, reps: 5 }] },
+      });
+
+      expect(result.isError).not.toBe(true);
+      // The workout_day_exercises.target_sets column stores {weight, reps} pairs only —
+      // setNumber is derived from array index on read (see getDayExerciseTargets in
+      // supabase.ts), so the stored row must NOT carry setNumber even though the tool's
+      // own JSON response (asserted below) does, as a convenience for the caller.
+      const row = TABLES.workout_day_exercises.find((r) => r.exercise_id === "ex-a");
+      expect(row?.target_sets).toEqual([
+        { weight: 185, reps: 5 },
+        { weight: 185, reps: 5 },
+      ]);
+      const [content] = result.content as [{ type: "text"; text: string }];
+      expect(JSON.parse(content.text)).toEqual({
+        day_id: "day-a",
+        exercise_id: "ex-a",
+        sets: [
+          { setNumber: 1, weight: 185, reps: 5 },
+          { setNumber: 2, weight: 185, reps: 5 },
+        ],
+      });
+
+      await client.close();
+    });
+
+    it("set_day_exercise_scheme with null clears an existing scheme", async () => {
+      seedDay("user-a", "day-a", "Push");
+      seedExercise("user-a", "ex-a", "Bench Press");
+      seedDayExercise("user-a", "day-a", "ex-a", 0, [{ weight: 185, reps: 5 }]);
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "set_day_exercise_scheme",
+        arguments: { day_id: "day-a", exercise_id: "ex-a", sets: null },
+      });
+
+      expect(result.isError).not.toBe(true);
+      const row = TABLES.workout_day_exercises.find((r) => r.exercise_id === "ex-a");
+      expect(row?.target_sets).toBeNull();
+
+      await client.close();
+    });
+
+    it("set_day_exercise_scheme rejects an out-of-range weight", async () => {
+      seedDay("user-a", "day-a", "Push");
+      seedExercise("user-a", "ex-a", "Bench Press");
+      seedDayExercise("user-a", "day-a", "ex-a", 0);
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "set_day_exercise_scheme",
+        arguments: { day_id: "day-a", exercise_id: "ex-a", sets: [{ weight: 501, reps: 5 }] },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "set_day_exercise_scheme failed: set 1 weight must be between 0 and 500." },
+      ]);
+
+      await client.close();
+    });
+
+    it("set_day_exercise_scheme errors on a nonexistent exercise id", async () => {
+      seedDay("user-a", "day-a", "Push");
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "set_day_exercise_scheme",
+        arguments: { day_id: "day-a", exercise_id: "no-such-exercise", sets: null },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "set_day_exercise_scheme failed: Exercise no-such-exercise not found." },
       ]);
 
       await client.close();

@@ -14,6 +14,7 @@ import {
   addExerciseToDay,
   removeExerciseFromDay,
   updateDayExercises,
+  setDayExerciseTarget,
 } from "../src/data/supabase.js";
 
 // Vercel's Node runtime pre-parses JSON request bodies onto req.body before
@@ -80,6 +81,11 @@ async function findExercise(client: SupabaseClient, exerciseId: string): Promise
 
 function validateReps(value: number): string | undefined {
   if (!Number.isInteger(value) || value < 1 || value > 40) return "must be an integer between 1 and 40.";
+  return undefined;
+}
+
+function validateWeight(value: number): string | undefined {
+  if (!(value >= 0 && value <= 500)) return "must be between 0 and 500.";
   return undefined;
 }
 
@@ -429,6 +435,42 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
 
         await updateDayExercises(client, day_id, exercise_ids);
         return toolResult({ day_id, exercise_ids });
+      }),
+  );
+
+  server.registerTool(
+    "set_day_exercise_scheme",
+    {
+      title: "Set day exercise scheme",
+      description:
+        "Sets the day-specific rep/weight scheme for one exercise on one day, for the authenticated user. null (or an empty array) clears it, reverting that exercise to its own uniform defaults on that day.",
+      inputSchema: {
+        day_id: z.string(),
+        exercise_id: z.string(),
+        sets: z.array(z.object({ weight: z.number(), reps: z.number() })).nullable(),
+      },
+    },
+    async ({ day_id, exercise_id, sets }) =>
+      withIdentity(async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const day = await findDay(client, day_id);
+        if (!day) return toolError(`set_day_exercise_scheme failed: Day template ${day_id} not found.`);
+        const exercise = await findExercise(client, exercise_id);
+        if (!exercise) return toolError(`set_day_exercise_scheme failed: Exercise ${exercise_id} not found.`);
+
+        if (sets) {
+          for (const [i, s] of sets.entries()) {
+            const weightError = validateWeight(s.weight);
+            if (weightError) return toolError(`set_day_exercise_scheme failed: set ${i + 1} weight ${weightError}`);
+            const repsError = validateReps(s.reps);
+            if (repsError) return toolError(`set_day_exercise_scheme failed: set ${i + 1} reps ${repsError}`);
+          }
+        }
+
+        const setEntries =
+          sets && sets.length > 0 ? sets.map((s, i) => ({ setNumber: i + 1, weight: s.weight, reps: s.reps })) : null;
+        await setDayExerciseTarget(client, day_id, exercise_id, setEntries);
+        return toolResult({ day_id, exercise_id, sets: setEntries });
       }),
   );
 
