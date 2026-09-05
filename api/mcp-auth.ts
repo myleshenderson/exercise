@@ -88,7 +88,7 @@ export async function resolveIdentity(bearerToken: string | undefined, deps: Aut
 
     const { error: updateError } = await deps.client
       .from("mcp_sessions")
-      .update({ refresh_token: refreshed.session.refresh_token })
+      .update({ refresh_token: refreshed.session.refresh_token, last_used_at: new Date().toISOString() })
       .eq("id", current.id);
 
     if (updateError) {

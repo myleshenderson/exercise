@@ -93,7 +93,22 @@ describe("resolveIdentity", () => {
     const result = await resolveIdentity("token", { client, authClient });
 
     expect(result).toEqual({ ok: true, userId: "user-1", accessToken: "fresh-access" });
-    expect(update).toHaveBeenCalledWith({ refresh_token: "rotated-refresh" });
+    expect(update).toHaveBeenCalledWith({ refresh_token: "rotated-refresh", last_used_at: expect.any(String) });
+  });
+
+  it("records last_used_at as the current time whenever a session is used", async () => {
+    const { client, authClient, update } = fakeClient({
+      row: { id: "row-1", user_id: "user-1", refresh_token: "old" },
+    });
+
+    const before = Date.now();
+    await resolveIdentity("token", { client, authClient });
+    const after = Date.now();
+
+    const patch = update.mock.calls[0][0] as { last_used_at: string };
+    const recorded = new Date(patch.last_used_at).getTime();
+    expect(recorded).toBeGreaterThanOrEqual(before);
+    expect(recorded).toBeLessThanOrEqual(after);
   });
 
   it("persists the rotated refresh_token via the table client even after the auth client's session changes", async () => {
@@ -112,7 +127,7 @@ describe("resolveIdentity", () => {
     await resolveIdentity("token", { client, authClient });
 
     expect(client.from).toHaveBeenCalledWith("mcp_sessions");
-    expect(update).toHaveBeenCalledWith({ refresh_token: "rotated-refresh" });
+    expect(update).toHaveBeenCalledWith({ refresh_token: "rotated-refresh", last_used_at: expect.any(String) });
   });
 
   it("retries once when a concurrent call for the same session already rotated the refresh_token", async () => {
