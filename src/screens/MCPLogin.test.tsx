@@ -96,10 +96,12 @@ test("shows a client config snippet with the real token once generated", async (
 
 test("allows generating a new token after the first one", async () => {
   getSession.mockResolvedValue({ data: { session: { access_token: "at", refresh_token: "rt" } } });
-  const fetchMock = vi
-    .fn()
-    .mockResolvedValueOnce({ ok: true, json: async () => ({ token: "first" }) })
-    .mockResolvedValueOnce({ ok: true, json: async () => ({ token: "second" }) });
+  let mintCalls = 0;
+  const fetchMock = vi.fn(async (url: string) => {
+    if (url === "/api/mcp-sessions") return { ok: true, json: async () => ({ sessions: [] }) };
+    mintCalls += 1;
+    return { ok: true, json: async () => ({ token: mintCalls === 1 ? "first" : "second" }) };
+  });
   vi.stubGlobal("fetch", fetchMock);
 
   render(<MCPLogin />);
@@ -108,4 +110,95 @@ test("allows generating a new token after the first one", async () => {
 
   fireEvent.click(screen.getByRole("button", { name: /generate new token/i }));
   await waitFor(() => expect(screen.getByDisplayValue("second")).toBeInTheDocument());
+});
+
+test("loads and lists active MCP sessions", async () => {
+  getSession.mockResolvedValue({ data: { session: { access_token: "at", refresh_token: "rt" } } });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/mcp-sessions") {
+        return {
+          ok: true,
+          json: async () => ({
+            sessions: [
+              { id: "s1", createdAt: "2026-09-01T00:00:00.000Z", lastUsedAt: "2026-09-02T00:00:00.000Z" },
+              { id: "s2", createdAt: "2026-08-01T00:00:00.000Z", lastUsedAt: "2026-08-01T00:00:00.000Z" },
+            ],
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ token: "x" }) };
+    }),
+  );
+
+  render(<MCPLogin />);
+
+  await waitFor(() => expect(screen.getByText(/active sessions/i)).toBeInTheDocument());
+  expect(screen.getAllByRole("button", { name: /revoke/i })).toHaveLength(2);
+});
+
+test("hides the active sessions section when there are no sessions", async () => {
+  getSession.mockResolvedValue({ data: { session: { access_token: "at", refresh_token: "rt" } } });
+  vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ sessions: [] }) })));
+
+  render(<MCPLogin />);
+
+  await waitFor(() => expect(getSession).toHaveBeenCalled());
+  expect(screen.queryByText(/active sessions/i)).not.toBeInTheDocument();
+});
+
+test("revokes a session and removes it from the list", async () => {
+  getSession.mockResolvedValue({ data: { session: { access_token: "at", refresh_token: "rt" } } });
+  const fetchMock = vi.fn(async (url: string, init?: { method?: string }) => {
+    if (url === "/api/mcp-sessions" && init?.method === "DELETE") {
+      return { ok: true, json: async () => ({ ok: true }) };
+    }
+    if (url === "/api/mcp-sessions") {
+      return {
+        ok: true,
+        json: async () => ({
+          sessions: [{ id: "s1", createdAt: "2026-09-01T00:00:00.000Z", lastUsedAt: "2026-09-01T00:00:00.000Z" }],
+        }),
+      };
+    }
+    return { ok: true, json: async () => ({ token: "x" }) };
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<MCPLogin />);
+  await waitFor(() => expect(screen.getByRole("button", { name: /revoke/i })).toBeInTheDocument());
+
+  fireEvent.click(screen.getByRole("button", { name: /revoke/i }));
+
+  await waitFor(() => expect(screen.queryByRole("button", { name: /revoke/i })).not.toBeInTheDocument());
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/mcp-sessions",
+    expect.objectContaining({ method: "DELETE", body: JSON.stringify({ access_token: "at", session_id: "s1" }) }),
+  );
+});
+
+test("shows an error if revoking a session fails", async () => {
+  getSession.mockResolvedValue({ data: { session: { access_token: "at", refresh_token: "rt" } } });
+  const fetchMock = vi.fn(async (url: string, init?: { method?: string }) => {
+    if (url === "/api/mcp-sessions" && init?.method === "DELETE") {
+      return { ok: false, json: async () => ({}) };
+    }
+    if (url === "/api/mcp-sessions") {
+      return {
+        ok: true,
+        json: async () => ({
+          sessions: [{ id: "s1", createdAt: "2026-09-01T00:00:00.000Z", lastUsedAt: "2026-09-01T00:00:00.000Z" }],
+        }),
+      };
+    }
+    return { ok: true, json: async () => ({ token: "x" }) };
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<MCPLogin />);
+  await waitFor(() => expect(screen.getByRole("button", { name: /revoke/i })).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /revoke/i }));
+
+  await waitFor(() => expect(screen.getByText(/could not revoke/i)).toBeInTheDocument());
 });

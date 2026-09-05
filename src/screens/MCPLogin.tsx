@@ -1,5 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { getSupabase } from "../data/supabaseClient";
+
+interface McpSession {
+  id: string;
+  createdAt: string;
+  lastUsedAt: string;
+}
 
 const TOOLS = [
   {
@@ -31,6 +37,61 @@ export default function MCPLogin() {
   const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [sessions, setSessions] = useState<McpSession[]>([]);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [sessionsVersion, setSessionsVersion] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await getSupabase().auth.getSession();
+        const session = data?.session;
+        if (!session) return;
+        const res = await fetch("/api/mcp-sessions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ access_token: session.access_token }),
+        });
+        if (!res.ok) return;
+        const body = (await res.json()) as { sessions?: McpSession[] };
+        if (!cancelled) setSessions(body.sessions ?? []);
+      } catch {
+        // Best-effort: the session list is a convenience, not the critical path.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionsVersion]);
+
+  async function revokeSession(id: string) {
+    setRevokingId(id);
+    setSessionsError(null);
+    try {
+      const { data } = await getSupabase().auth.getSession();
+      const session = data?.session;
+      if (!session) {
+        setSessionsError("Your session has expired — please sign in again.");
+        return;
+      }
+      const res = await fetch("/api/mcp-sessions", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ access_token: session.access_token, session_id: id }),
+      });
+      if (!res.ok) {
+        setSessionsError("Could not revoke that session. Please try again.");
+        return;
+      }
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+    } catch {
+      setSessionsError("Could not revoke that session. Please try again.");
+    } finally {
+      setRevokingId(null);
+    }
+  }
 
   const endpointUrl = `${window.location.origin}/api/mcp`;
   const tokenPlaceholder = token ?? "YOUR_TOKEN";
@@ -75,6 +136,7 @@ export default function MCPLogin() {
         return;
       }
       setToken(body.token);
+      setSessionsVersion((v) => v + 1);
     } catch {
       setError("Could not create a token. Please try again.");
     } finally {
@@ -109,6 +171,33 @@ export default function MCPLogin() {
             onFocus={(e) => e.currentTarget.select()}
             className="w-full rounded-lg border p-3 font-mono text-sm"
           />
+        </div>
+      )}
+
+      {sessions.length > 0 && (
+        <div className="space-y-2 border-t pt-4">
+          <p className="text-sm font-semibold">Active sessions</p>
+          <p className="text-sm text-gray-600">
+            Revoke a session to immediately stop the MCP client using its token from working.
+          </p>
+          {sessionsError && <p className="text-sm text-red-600">{sessionsError}</p>}
+          <ul className="space-y-2">
+            {sessions.map((s) => (
+              <li key={s.id} className="flex items-center justify-between gap-2 text-sm">
+                <span className="text-gray-600">
+                  Created {new Date(s.createdAt).toLocaleString()} · last used{" "}
+                  {new Date(s.lastUsedAt).toLocaleString()}
+                </span>
+                <button
+                  onClick={() => revokeSession(s.id)}
+                  disabled={revokingId === s.id}
+                  className="shrink-0 rounded border border-red-600 px-2 py-1 text-red-600 disabled:opacity-50"
+                >
+                  {revokingId === s.id ? "Revoking…" : "Revoke"}
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
