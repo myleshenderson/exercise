@@ -6,7 +6,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { requiredEnv } from "./_env.js";
 import { resolveIdentity, type IdentityResult } from "./mcp-auth.js";
-import { createDay, updateDayName, deleteDay, createExercise } from "../src/data/supabase.js";
+import { createDay, updateDayName, deleteDay, createExercise, addExerciseToDay, removeExerciseFromDay } from "../src/data/supabase.js";
 
 // Vercel's Node runtime pre-parses JSON request bodies onto req.body before
 // invoking the handler; the SDK's Node types don't know about that.
@@ -63,6 +63,11 @@ async function findDay(
 ): Promise<{ id: string; name: string; position: number } | null> {
   const { data } = await client.from("workout_days").select("id, name, position").eq("id", dayId).maybeSingle();
   return (data as { id: string; name: string; position: number } | null) ?? null;
+}
+
+async function findExercise(client: SupabaseClient, exerciseId: string): Promise<{ id: string } | null> {
+  const { data } = await client.from("exercises").select("id").eq("id", exerciseId).maybeSingle();
+  return (data as { id: string } | null) ?? null;
 }
 
 function validateReps(value: number): string | undefined {
@@ -329,6 +334,55 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
           defaultRepHigh: repHigh,
         });
         return toolResult(exercise);
+      }),
+  );
+
+  server.registerTool(
+    "add_exercise_to_day",
+    {
+      title: "Add exercise to day",
+      description: "Appends an existing catalog exercise to the end of a day template's exercise list, for the authenticated user.",
+      inputSchema: { day_id: z.string(), exercise_id: z.string() },
+    },
+    async ({ day_id, exercise_id }) =>
+      withIdentity(async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const day = await findDay(client, day_id);
+        if (!day) return toolError(`add_exercise_to_day failed: Day template ${day_id} not found.`);
+        const exercise = await findExercise(client, exercise_id);
+        if (!exercise) return toolError(`add_exercise_to_day failed: Exercise ${exercise_id} not found.`);
+
+        const { data: existing, error: existingError } = await client
+          .from("workout_day_exercises")
+          .select("id")
+          .eq("workout_day_id", day_id)
+          .eq("exercise_id", exercise_id)
+          .maybeSingle();
+        if (existingError) return toolError(`add_exercise_to_day failed: ${existingError.message}`);
+        if (existing) return toolError(`add_exercise_to_day failed: Exercise ${exercise_id} is already on day ${day_id}.`);
+
+        await addExerciseToDay(client, day_id, exercise_id);
+        return toolResult({ day_id, exercise_id });
+      }),
+  );
+
+  server.registerTool(
+    "remove_exercise_from_day",
+    {
+      title: "Remove exercise from day",
+      description: "Removes one exercise from a day template, for the authenticated user. Touches only that one attachment.",
+      inputSchema: { day_id: z.string(), exercise_id: z.string() },
+    },
+    async ({ day_id, exercise_id }) =>
+      withIdentity(async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const day = await findDay(client, day_id);
+        if (!day) return toolError(`remove_exercise_from_day failed: Day template ${day_id} not found.`);
+        const exercise = await findExercise(client, exercise_id);
+        if (!exercise) return toolError(`remove_exercise_from_day failed: Exercise ${exercise_id} not found.`);
+
+        await removeExerciseFromDay(client, day_id, exercise_id);
+        return toolResult({ day_id, exercise_id, removed: true });
       }),
   );
 

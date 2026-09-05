@@ -394,6 +394,7 @@ describe("api/mcp handler", () => {
 
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
+      "add_exercise_to_day",
       "adherence_for_day",
       "create_day_template",
       "create_exercise",
@@ -401,6 +402,7 @@ describe("api/mcp handler", () => {
       "get_day_templates",
       "get_workout_history",
       "progression_for_exercise",
+      "remove_exercise_from_day",
       "rename_day_template",
       "scheme_history_for_day_exercise",
       "sets_for_exercise",
@@ -426,6 +428,7 @@ describe("api/mcp handler", () => {
 
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
+      "add_exercise_to_day",
       "adherence_for_day",
       "create_day_template",
       "create_exercise",
@@ -433,6 +436,7 @@ describe("api/mcp handler", () => {
       "get_day_templates",
       "get_workout_history",
       "progression_for_exercise",
+      "remove_exercise_from_day",
       "rename_day_template",
       "scheme_history_for_day_exercise",
       "sets_for_exercise",
@@ -769,6 +773,83 @@ describe("api/mcp handler", () => {
       expect(result.content).toEqual([
         { type: "text", text: "create_exercise failed: default_rep_high must be an integer between 1 and 40." },
       ]);
+
+      await client.close();
+    });
+
+    it("add_exercise_to_day attaches an exercise the caller owns", async () => {
+      seedDay("user-a", "day-a", "Push");
+      seedExercise("user-a", "ex-a", "Bench Press");
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "add_exercise_to_day", arguments: { day_id: "day-a", exercise_id: "ex-a" } });
+
+      expect(result.isError).not.toBe(true);
+      expect(TABLES.workout_day_exercises).toContainEqual(
+        expect.objectContaining({ workout_day_id: "day-a", exercise_id: "ex-a", position: 0 }),
+      );
+
+      await client.close();
+    });
+
+    it("add_exercise_to_day rejects a duplicate attach without creating a second row", async () => {
+      seedDay("user-a", "day-a", "Push");
+      seedExercise("user-a", "ex-a", "Bench Press");
+      seedDayExercise("user-a", "day-a", "ex-a", 0);
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "add_exercise_to_day", arguments: { day_id: "day-a", exercise_id: "ex-a" } });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "add_exercise_to_day failed: Exercise ex-a is already on day day-a." },
+      ]);
+      expect(TABLES.workout_day_exercises.filter((r) => r.workout_day_id === "day-a")).toHaveLength(1);
+
+      await client.close();
+    });
+
+    it("add_exercise_to_day cannot attach another user's exercise to the caller's day", async () => {
+      seedDay("user-a", "day-a", "Push");
+      seedExercise("user-b", "ex-b", "Row");
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "add_exercise_to_day", arguments: { day_id: "day-a", exercise_id: "ex-b" } });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "add_exercise_to_day failed: Exercise ex-b not found." },
+      ]);
+
+      await client.close();
+    });
+
+    it("remove_exercise_from_day detaches only the targeted exercise", async () => {
+      seedDay("user-a", "day-a", "Push");
+      seedExercise("user-a", "ex-a", "Bench Press");
+      seedExercise("user-a", "ex-c", "Incline Press");
+      seedDayExercise("user-a", "day-a", "ex-a", 0);
+      seedDayExercise("user-a", "day-a", "ex-c", 1);
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "remove_exercise_from_day", arguments: { day_id: "day-a", exercise_id: "ex-a" } });
+
+      expect(result.isError).not.toBe(true);
+      expect(TABLES.workout_day_exercises.map((r) => r.exercise_id)).toEqual(["ex-c"]);
+
+      await client.close();
+    });
+
+    it("remove_exercise_from_day cannot touch another user's day", async () => {
+      seedDay("user-b", "day-b", "Pull");
+      seedExercise("user-b", "ex-b", "Row");
+      seedDayExercise("user-b", "day-b", "ex-b", 0);
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "remove_exercise_from_day", arguments: { day_id: "day-b", exercise_id: "ex-b" } });
+
+      expect(result.isError).toBe(true);
+      expect(TABLES.workout_day_exercises).toHaveLength(1);
 
       await client.close();
     });
