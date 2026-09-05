@@ -13,3 +13,6 @@ supabase/.temp/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Subagent-driven-development scratch workspaces
+.superpowers/
