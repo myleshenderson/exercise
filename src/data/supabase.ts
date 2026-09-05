@@ -93,6 +93,35 @@ export async function createExercise(client: SupabaseClient, input: Omit<Exercis
   return toExercise(data);
 }
 
+export async function deleteDay(client: SupabaseClient, dayId: string): Promise<void> {
+  const { error } = await client.from("workout_days").delete().eq("id", dayId);
+  if (error) throw error;
+}
+
+export async function addExerciseToDay(client: SupabaseClient, dayId: string, exerciseId: string): Promise<void> {
+  const { data: existing, error: selectError } = await client
+    .from("workout_day_exercises")
+    .select("position")
+    .eq("workout_day_id", dayId)
+    .order("position", { ascending: false })
+    .limit(1);
+  if (selectError) throw selectError;
+  const nextPosition = existing && existing.length > 0 ? (existing[0].position as number) + 1 : 0;
+  const { error } = await client
+    .from("workout_day_exercises")
+    .insert({ workout_day_id: dayId, exercise_id: exerciseId, position: nextPosition });
+  if (error) throw error;
+}
+
+export async function removeExerciseFromDay(client: SupabaseClient, dayId: string, exerciseId: string): Promise<void> {
+  const { error } = await client
+    .from("workout_day_exercises")
+    .delete()
+    .eq("workout_day_id", dayId)
+    .eq("exercise_id", exerciseId);
+  if (error) throw error;
+}
+
 export function createSupabaseDataLayer(): DataLayer {
   const supabase = getSupabase();
 
@@ -164,6 +193,9 @@ export function createSupabaseDataLayer(): DataLayer {
       return out;
     },
     createDay: (name) => createDay(supabase, name),
+    deleteDay: (id) => deleteDay(supabase, id),
+    addExerciseToDay: (dayId, exerciseId) => addExerciseToDay(supabase, dayId, exerciseId),
+    removeExerciseFromDay: (dayId, exerciseId) => removeExerciseFromDay(supabase, dayId, exerciseId),
     updateDayExercises: (dayId, exerciseIds) => updateDayExercises(supabase, dayId, exerciseIds),
     updateDayName: (dayId, name) => updateDayName(supabase, dayId, name),
     async getDayExerciseTargets(dayId) {

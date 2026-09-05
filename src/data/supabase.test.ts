@@ -1,6 +1,15 @@
 import { describe, expect, test } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { createDay, updateDayName, updateDayExercises, setDayExerciseTarget, createExercise } from "./supabase";
+import {
+  createDay,
+  updateDayName,
+  updateDayExercises,
+  setDayExerciseTarget,
+  createExercise,
+  deleteDay,
+  addExerciseToDay,
+  removeExerciseFromDay,
+} from "./supabase";
 
 interface Row {
   id: string;
@@ -196,5 +205,55 @@ describe("createExercise", () => {
       defaultRepLow: 6,
       defaultRepHigh: 10,
     });
+  });
+});
+
+describe("deleteDay", () => {
+  test("removes the targeted workout_days row", async () => {
+    const tables: Record<string, Row[]> = { workout_days: [{ id: "day-1", name: "Push" }] };
+    const client = makeFakeClient(tables);
+    await deleteDay(client, "day-1");
+    expect(tables.workout_days).toEqual([]);
+  });
+});
+
+describe("addExerciseToDay", () => {
+  test("appends at position 0 when the day has no exercises yet", async () => {
+    const tables: Record<string, Row[]> = { workout_day_exercises: [] };
+    const client = makeFakeClient(tables);
+    await addExerciseToDay(client, "day-1", "ex-1");
+    expect(tables.workout_day_exercises).toEqual([
+      { id: expect.any(String), workout_day_id: "day-1", exercise_id: "ex-1", position: 0 },
+    ]);
+  });
+
+  test("appends after the current highest position", async () => {
+    const tables: Record<string, Row[]> = {
+      workout_day_exercises: [
+        { id: "wde-1", workout_day_id: "day-1", exercise_id: "ex-1", position: 0 },
+        { id: "wde-2", workout_day_id: "day-1", exercise_id: "ex-2", position: 1 },
+      ],
+    };
+    const client = makeFakeClient(tables);
+    await addExerciseToDay(client, "day-1", "ex-3");
+    expect(tables.workout_day_exercises[2]).toMatchObject({
+      workout_day_id: "day-1",
+      exercise_id: "ex-3",
+      position: 2,
+    });
+  });
+});
+
+describe("removeExerciseFromDay", () => {
+  test("removes only the matching workout_day_exercises row", async () => {
+    const tables: Record<string, Row[]> = {
+      workout_day_exercises: [
+        { id: "wde-1", workout_day_id: "day-1", exercise_id: "ex-1", position: 0 },
+        { id: "wde-2", workout_day_id: "day-1", exercise_id: "ex-2", position: 1 },
+      ],
+    };
+    const client = makeFakeClient(tables);
+    await removeExerciseFromDay(client, "day-1", "ex-1");
+    expect(tables.workout_day_exercises.map((r) => r.exercise_id)).toEqual(["ex-2"]);
   });
 });
