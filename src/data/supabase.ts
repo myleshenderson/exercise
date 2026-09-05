@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type { DataLayer } from "./DataLayer";
 import type { Exercise, WorkoutDay, Session, SetEntry } from "../types";
 import { getSupabase } from "./supabaseClient";
@@ -19,6 +20,78 @@ const toExercise = (r: ExerciseRow): Exercise => ({
   defaultRepLow: r.default_rep_low,
   defaultRepHigh: r.default_rep_high,
 });
+
+export async function createDay(client: SupabaseClient, name: string): Promise<WorkoutDay> {
+  const { data, error } = await client.from("workout_days").insert({ name }).select("*").single();
+  if (error) throw error;
+  return { id: data.id, name: data.name, position: data.position, exerciseIds: [] };
+}
+
+export async function updateDayName(client: SupabaseClient, dayId: string, name: string): Promise<void> {
+  const { error } = await client.from("workout_days").update({ name }).eq("id", dayId);
+  if (error) throw error;
+}
+
+export async function updateDayExercises(client: SupabaseClient, dayId: string, exerciseIds: string[]): Promise<void> {
+  const { data: existing, error: selectError } = await client
+    .from("workout_day_exercises")
+    .select("exercise_id, target_sets")
+    .eq("workout_day_id", dayId);
+  if (selectError) throw selectError;
+  const targetsByExercise: Record<string, unknown> = {};
+  for (const row of existing ?? []) {
+    if (row.target_sets) targetsByExercise[row.exercise_id] = row.target_sets;
+  }
+  await client.from("workout_day_exercises").delete().eq("workout_day_id", dayId);
+  if (exerciseIds.length) {
+    await client.from("workout_day_exercises").insert(
+      exerciseIds.map((exercise_id, position) => ({
+        workout_day_id: dayId,
+        exercise_id,
+        position,
+        target_sets: targetsByExercise[exercise_id] ?? null,
+      })),
+    );
+  }
+}
+
+export async function setDayExerciseTarget(
+  client: SupabaseClient,
+  dayId: string,
+  exerciseId: string,
+  sets: SetEntry[] | null,
+): Promise<void> {
+  const target_sets = sets && sets.length > 0 ? sets.map((s) => ({ weight: s.weight, reps: s.reps })) : null;
+  const { error } = await client
+    .from("workout_day_exercises")
+    .update({ target_sets })
+    .eq("workout_day_id", dayId)
+    .eq("exercise_id", exerciseId);
+  if (error) throw error;
+
+  const { error: historyError } = await client.from("workout_day_exercise_scheme_history").insert({
+    workout_day_id: dayId,
+    exercise_id: exerciseId,
+    target_sets,
+  });
+  if (historyError) throw historyError;
+}
+
+export async function createExercise(client: SupabaseClient, input: Omit<Exercise, "id">): Promise<Exercise> {
+  const { data, error } = await client
+    .from("exercises")
+    .insert({
+      name: input.name,
+      cue: input.cue,
+      default_sets: input.defaultSets,
+      default_rep_low: input.defaultRepLow,
+      default_rep_high: input.defaultRepHigh,
+    })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return toExercise(data);
+}
 
 export function createSupabaseDataLayer(): DataLayer {
   const supabase = getSupabase();
@@ -58,21 +131,7 @@ export function createSupabaseDataLayer(): DataLayer {
       return (data ?? []).map(toExercise);
     },
     getExercise: (id) => fetchExercise(id),
-    async createExercise(input) {
-      const { data, error } = await supabase
-        .from("exercises")
-        .insert({
-          name: input.name,
-          cue: input.cue,
-          default_sets: input.defaultSets,
-          default_rep_low: input.defaultRepLow,
-          default_rep_high: input.defaultRepHigh,
-        })
-        .select("*")
-        .single();
-      if (error) throw error;
-      return toExercise(data);
-    },
+    createExercise: (input) => createExercise(supabase, input),
     async getWorkoutDays() {
       const { data } = await supabase.from("workout_days").select("*").order("position");
       const days: WorkoutDay[] = [];
@@ -104,37 +163,9 @@ export function createSupabaseDataLayer(): DataLayer {
       }
       return out;
     },
-    async createDay(name) {
-      const { data, error } = await supabase.from("workout_days").insert({ name }).select("*").single();
-      if (error) throw error;
-      return { id: data.id, name: data.name, position: data.position, exerciseIds: [] };
-    },
-    async updateDayExercises(dayId, exerciseIds) {
-      const { data: existing, error: selectError } = await supabase
-        .from("workout_day_exercises")
-        .select("exercise_id, target_sets")
-        .eq("workout_day_id", dayId);
-      if (selectError) throw selectError;
-      const targetsByExercise: Record<string, unknown> = {};
-      for (const row of existing ?? []) {
-        if (row.target_sets) targetsByExercise[row.exercise_id] = row.target_sets;
-      }
-      await supabase.from("workout_day_exercises").delete().eq("workout_day_id", dayId);
-      if (exerciseIds.length) {
-        await supabase.from("workout_day_exercises").insert(
-          exerciseIds.map((exercise_id, position) => ({
-            workout_day_id: dayId,
-            exercise_id,
-            position,
-            target_sets: targetsByExercise[exercise_id] ?? null,
-          })),
-        );
-      }
-    },
-    async updateDayName(dayId, name) {
-      const { error } = await supabase.from("workout_days").update({ name }).eq("id", dayId);
-      if (error) throw error;
-    },
+    createDay: (name) => createDay(supabase, name),
+    updateDayExercises: (dayId, exerciseIds) => updateDayExercises(supabase, dayId, exerciseIds),
+    updateDayName: (dayId, name) => updateDayName(supabase, dayId, name),
     async getDayExerciseTargets(dayId) {
       const { data } = await supabase
         .from("workout_day_exercises")
@@ -149,22 +180,7 @@ export function createSupabaseDataLayer(): DataLayer {
       }
       return out;
     },
-    async setDayExerciseTarget(dayId, exerciseId, sets) {
-      const target_sets = sets && sets.length > 0 ? sets.map((s) => ({ weight: s.weight, reps: s.reps })) : null;
-      const { error } = await supabase
-        .from("workout_day_exercises")
-        .update({ target_sets })
-        .eq("workout_day_id", dayId)
-        .eq("exercise_id", exerciseId);
-      if (error) throw error;
-
-      const { error: historyError } = await supabase.from("workout_day_exercise_scheme_history").insert({
-        workout_day_id: dayId,
-        exercise_id: exerciseId,
-        target_sets,
-      });
-      if (historyError) throw historyError;
-    },
+    setDayExerciseTarget: (dayId, exerciseId, sets) => setDayExerciseTarget(supabase, dayId, exerciseId, sets),
     async getSchemeHistory(dayId, exerciseId) {
       const { data, error } = await supabase
         .from("workout_day_exercise_scheme_history")
