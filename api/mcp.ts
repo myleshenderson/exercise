@@ -11,6 +11,7 @@ import {
   updateDayName,
   deleteDay,
   createExercise,
+  updateExercise,
   listExercises,
   deleteExercise,
   addExerciseToDay,
@@ -133,6 +134,22 @@ async function findProgram(client: SupabaseClient, programId: string): Promise<{
     .is("deleted_at", null)
     .maybeSingle();
   return (data as { id: string; name: string } | null) ?? null;
+}
+
+// Just enough of the row to validate a rep-range patch against whichever bound the
+// caller didn't supply, without pulling in supabase.ts's private toExercise mapping.
+async function findExerciseRepRange(
+  client: SupabaseClient,
+  exerciseId: string,
+): Promise<{ defaultRepLow: number; defaultRepHigh: number } | null> {
+  const { data } = await client
+    .from("exercises")
+    .select("default_rep_low, default_rep_high")
+    .eq("id", exerciseId)
+    .maybeSingle();
+  if (!data) return null;
+  const row = data as { default_rep_low: number; default_rep_high: number };
+  return { defaultRepLow: row.default_rep_low, defaultRepHigh: row.default_rep_high };
 }
 
 function validateReps(value: number): string | undefined {
@@ -439,6 +456,71 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
           defaultSets: sets,
           defaultRepLow: repLow,
           defaultRepHigh: repHigh,
+        });
+        return toolResult(exercise);
+      }),
+  );
+
+  server.registerTool(
+    "update_exercise",
+    {
+      title: "Update exercise",
+      description:
+        "Partially updates a catalog exercise belonging to the authenticated user, targeted by id. Only the fields supplied are changed; any field left out keeps its current value.",
+      inputSchema: {
+        id: z.string(),
+        name: z.string().optional(),
+        cue: z.string().optional(),
+        default_sets: z.number().optional(),
+        default_rep_low: z.number().optional(),
+        default_rep_high: z.number().optional(),
+      },
+    },
+    async ({ id, name, cue, default_sets, default_rep_low, default_rep_high }) =>
+      withWriteTool("update_exercise", async (accessToken) => {
+        const idError = invalidIdError("update_exercise", "id", id);
+        if (idError) return idError;
+        if (
+          name === undefined &&
+          cue === undefined &&
+          default_sets === undefined &&
+          default_rep_low === undefined &&
+          default_rep_high === undefined
+        ) {
+          return toolError("update_exercise failed: must provide at least one field to update.");
+        }
+
+        if (default_rep_low !== undefined) {
+          const repLowError = validateReps(default_rep_low);
+          if (repLowError) return toolError(`update_exercise failed: default_rep_low ${repLowError}`);
+        }
+        if (default_rep_high !== undefined) {
+          const repHighError = validateReps(default_rep_high);
+          if (repHighError) return toolError(`update_exercise failed: default_rep_high ${repHighError}`);
+        }
+        if (default_sets !== undefined) {
+          const setsError = validateSets(default_sets);
+          if (setsError) return toolError(`update_exercise failed: default_sets ${setsError}`);
+        }
+
+        const client = createUserScopedClient(accessToken);
+        const existing = await findExerciseRepRange(client, id);
+        if (!existing) return toolError(`update_exercise failed: Exercise ${id} not found.`);
+
+        const nextRepLow = default_rep_low ?? existing.defaultRepLow;
+        const nextRepHigh = default_rep_high ?? existing.defaultRepHigh;
+        if (nextRepLow > nextRepHigh) {
+          return toolError(
+            `update_exercise failed: default_rep_low (${nextRepLow}) must be less than or equal to default_rep_high (${nextRepHigh}).`,
+          );
+        }
+
+        const exercise = await updateExercise(client, id, {
+          name,
+          cue,
+          defaultSets: default_sets,
+          defaultRepLow: default_rep_low,
+          defaultRepHigh: default_rep_high,
         });
         return toolResult(exercise);
       }),

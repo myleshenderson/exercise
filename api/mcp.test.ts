@@ -473,6 +473,7 @@ describe("api/mcp handler", () => {
       "set_day_exercise_scheme",
       "sets_for_exercise",
       "training_gaps",
+      "update_exercise",
       "weekly_volume",
     ]);
 
@@ -517,6 +518,7 @@ describe("api/mcp handler", () => {
       "set_day_exercise_scheme",
       "sets_for_exercise",
       "training_gaps",
+      "update_exercise",
       "weekly_volume",
     ]);
 
@@ -931,6 +933,123 @@ describe("api/mcp handler", () => {
       expect(result.content).toEqual([
         { type: "text", text: "create_exercise failed: default_sets must be an integer between 1 and 10." },
       ]);
+
+      await client.close();
+    });
+
+    it("update_exercise patches only the supplied fields, leaving the rest unchanged", async () => {
+      seedExercise("user-a", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "Bench Press");
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "update_exercise",
+        arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", default_sets: 4 },
+      });
+
+      expect(result.isError).not.toBe(true);
+      const [content] = result.content as [{ type: "text"; text: string }];
+      expect(JSON.parse(content.text)).toEqual({
+        id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        name: "Bench Press",
+        cue: "",
+        defaultSets: 4,
+        defaultRepLow: 10,
+        defaultRepHigh: 12,
+      });
+      expect(TABLES.exercises.find((e) => e.id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")).toMatchObject({
+        name: "Bench Press",
+        cue: "",
+        default_sets: 4,
+        default_rep_low: 10,
+        default_rep_high: 12,
+      });
+
+      await client.close();
+    });
+
+    it("update_exercise rejects a call with no fields to update", async () => {
+      seedExercise("user-a", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "Bench Press");
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "update_exercise",
+        arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "update_exercise failed: must provide at least one field to update." },
+      ]);
+      expect(TABLES.exercises.find((e) => e.id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")).toMatchObject({ default_sets: 3 });
+
+      await client.close();
+    });
+
+    it("update_exercise rejects a rep range left invalid after the patch", async () => {
+      seedExercise("user-a", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "Bench Press");
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "update_exercise",
+        arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", default_rep_low: 15 },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "update_exercise failed: default_rep_low (15) must be less than or equal to default_rep_high (12)." },
+      ]);
+      expect(TABLES.exercises.find((e) => e.id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")).toMatchObject({ default_rep_low: 10 });
+
+      await client.close();
+    });
+
+    it("update_exercise rejects an out-of-range default_rep_low", async () => {
+      seedExercise("user-a", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "Bench Press");
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "update_exercise",
+        arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", default_rep_low: 0 },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "update_exercise failed: default_rep_low must be an integer between 1 and 40." },
+      ]);
+
+      await client.close();
+    });
+
+    it("update_exercise errors clearly on a nonexistent exercise id", async () => {
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "update_exercise",
+        arguments: { id: "99999999-9999-4999-8999-999999999999", name: "X" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "update_exercise failed: Exercise 99999999-9999-4999-8999-999999999999 not found." },
+      ]);
+
+      await client.close();
+    });
+
+    it("update_exercise cannot update another user's exercise", async () => {
+      seedExercise("user-b", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "Row");
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "update_exercise",
+        arguments: { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", name: "Hijacked" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "update_exercise failed: Exercise bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb not found." },
+      ]);
+      expect(TABLES.exercises.find((e) => e.id === "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")?.name).toBe("Row");
 
       await client.close();
     });
@@ -1394,6 +1513,16 @@ describe("api/mcp handler", () => {
         expect(result.isError).toBe(true);
         expect(result.content).toEqual([
           { type: "text", text: 'rename_day_template failed: expected a UUID for day_id, got "MCP Test Curl".' },
+        ]);
+        await client.close();
+      });
+
+      it("update_exercise reports a malformed id distinctly from not-found", async () => {
+        const client = await connectAs("token-a");
+        const result = await client.callTool({ name: "update_exercise", arguments: { id: "MCP Test Curl", name: "X" } });
+        expect(result.isError).toBe(true);
+        expect(result.content).toEqual([
+          { type: "text", text: 'update_exercise failed: expected a UUID for id, got "MCP Test Curl".' },
         ]);
         await client.close();
       });

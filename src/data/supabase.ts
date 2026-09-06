@@ -138,6 +138,24 @@ export async function createExercise(client: SupabaseClient, input: Omit<Exercis
   return toExercise(data);
 }
 
+// Only columns present (non-undefined) in `patch` are sent to Postgres, so an omitted
+// field is left untouched on the row rather than reset to a default or null.
+export async function updateExercise(
+  client: SupabaseClient,
+  id: string,
+  patch: Partial<Omit<Exercise, "id">>,
+): Promise<Exercise> {
+  const dbPatch: Record<string, unknown> = {};
+  if (patch.name !== undefined) dbPatch.name = patch.name;
+  if (patch.cue !== undefined) dbPatch.cue = patch.cue;
+  if (patch.defaultSets !== undefined) dbPatch.default_sets = patch.defaultSets;
+  if (patch.defaultRepLow !== undefined) dbPatch.default_rep_low = patch.defaultRepLow;
+  if (patch.defaultRepHigh !== undefined) dbPatch.default_rep_high = patch.defaultRepHigh;
+  const { data, error } = await client.from("exercises").update(dbPatch).eq("id", id).select("*").single();
+  if (error) throw error;
+  return toExercise(data);
+}
+
 export async function deleteDay(client: SupabaseClient, dayId: string): Promise<void> {
   const { error } = await client.from("workout_days").update({ deleted_at: new Date().toISOString() }).eq("id", dayId);
   if (error) throw error;
