@@ -668,6 +668,12 @@ Note: `deleteProgram` here removes the program from the in-memory `programs` arr
           const program = effectiveProgramId ? programs.find((p) => p.id === effectiveProgramId) ?? null : null;
           return {
             ...d,
+            // Override, don't just spread ...d: once a program is deleted, its former
+            // days must report programId/programPosition null too (matching
+            // src/data/supabase.ts's getWorkoutDays, which nulls these the same way for
+            // a day whose program_id points at a soft-deleted row) — not just programName.
+            programId: effectiveProgramId,
+            programPosition: effectiveProgramId ? d.programPosition : null,
             programName: program ? program.name : null,
             isAvailable: isDayAvailable({ id: d.id, programId: effectiveProgramId, programPosition: d.programPosition }, nextByProgram),
           };
@@ -1037,17 +1043,21 @@ test("a program shows its available day prominently and collapses the rest behin
 });
 
 test("the non-suggested day in an expanded program group is still tappable to start a session", async () => {
-  const program = await db.createProgram("Prep Phase");
-  const d1 = await db.createDay("Prep Week 1");
-  const d2 = await db.createDay("Prep Week 2");
+  // Distinct program/day names from the previous test: this file's mock `db` is a
+  // shared singleton that accumulates state across tests (same convention the
+  // pre-existing tests in this file already rely on), so reusing "Prep Phase"/
+  // "Prep Week 1" here would make screen.getByText match two elements ambiguously.
+  const program = await db.createProgram("Push Progression");
+  const d1 = await db.createDay("Push Block 1");
+  const d2 = await db.createDay("Push Block 2");
   await db.addDayToProgram(d1.id, program.id);
   await db.addDayToProgram(d2.id, program.id);
   const spy = vi.spyOn(db, "startSession");
 
   render(<MemoryRouter><Home /></MemoryRouter>);
-  await waitFor(() => expect(screen.getByText("Prep Week 1")).toBeInTheDocument());
-  fireEvent.click(screen.getByText(/show all 2 days in prep phase/i));
-  fireEvent.click(screen.getByText("Prep Week 2"));
+  await waitFor(() => expect(screen.getByText("Push Block 1")).toBeInTheDocument());
+  fireEvent.click(screen.getByText(/show all 2 days in push progression/i));
+  fireEvent.click(screen.getByText("Push Block 2"));
 
   await waitFor(() => expect(spy).toHaveBeenCalledWith(d2.id, expect.any(String)));
   spy.mockRestore();
