@@ -11,6 +11,8 @@ import {
   updateDayName,
   deleteDay,
   createExercise,
+  listExercises,
+  deleteExercise,
   addExerciseToDay,
   removeExerciseFromDay,
   updateDayExercises,
@@ -91,9 +93,30 @@ async function findDay(
   return (data as { id: string; name: string; position: number } | null) ?? null;
 }
 
-async function findExercise(client: SupabaseClient, exerciseId: string): Promise<{ id: string } | null> {
-  const { data } = await client.from("exercises").select("id").eq("id", exerciseId).maybeSingle();
-  return (data as { id: string } | null) ?? null;
+async function findExercise(client: SupabaseClient, exerciseId: string): Promise<{ id: string; name: string } | null> {
+  const { data } = await client.from("exercises").select("id, name").eq("id", exerciseId).is("deleted_at", null).maybeSingle();
+  return (data as { id: string; name: string } | null) ?? null;
+}
+
+// delete_exercise's guardrail against the "confusing surprising state" the design
+// explicitly calls out (see exercise-2bv): a soft-deleted exercise still visibly
+// attached wherever it's referenced, but invisible from list_exercises. Checked as
+// three independent existence probes rather than one query, since usage can come
+// from any of workout_day_exercises (current attachment), session_sets, or
+// workout_day_exercise_scheme_history (both historical, so detaching from days alone
+// wouldn't clear them).
+async function exerciseUsage(client: SupabaseClient, exerciseId: string): Promise<"day" | "history" | null> {
+  const { data: attached } = await client.from("workout_day_exercises").select("id").eq("exercise_id", exerciseId).limit(1);
+  if (attached && attached.length) return "day";
+  const { data: loggedSets } = await client.from("session_sets").select("id").eq("exercise_id", exerciseId).limit(1);
+  if (loggedSets && loggedSets.length) return "history";
+  const { data: schemeHistory } = await client
+    .from("workout_day_exercise_scheme_history")
+    .select("id")
+    .eq("exercise_id", exerciseId)
+    .limit(1);
+  if (schemeHistory && schemeHistory.length) return "history";
+  return null;
 }
 
 function validateReps(value: number): string | undefined {
@@ -391,6 +414,51 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
           defaultRepHigh: repHigh,
         });
         return toolResult(exercise);
+      }),
+  );
+
+  server.registerTool(
+    "list_exercises",
+    {
+      title: "List exercises",
+      description:
+        "Every catalog exercise for the authenticated user, including ones not attached to any day. Excludes soft-deleted exercises.",
+    },
+    async () =>
+      withIdentity(async (accessToken) => {
+        const exercises = await listExercises(createUserScopedClient(accessToken));
+        return toolResult(exercises);
+      }),
+  );
+
+  server.registerTool(
+    "delete_exercise",
+    {
+      title: "Delete exercise",
+      description:
+        "Soft-deletes a catalog exercise belonging to the authenticated user, targeted by id: marks it deleted so it no longer appears in list_exercises. Rejected outright if the exercise is still attached to any day or referenced by logged sets/scheme history — detach it from days first via remove_exercise_from_day.",
+      inputSchema: { exercise_id: z.string() },
+    },
+    async ({ exercise_id }) =>
+      withWriteTool("delete_exercise", async (accessToken) => {
+        const exerciseIdError = invalidIdError("delete_exercise", "exercise_id", exercise_id);
+        if (exerciseIdError) return exerciseIdError;
+        const client = createUserScopedClient(accessToken);
+        const exercise = await findExercise(client, exercise_id);
+        if (!exercise) return toolError(`delete_exercise failed: Exercise ${exercise_id} not found.`);
+
+        const usage = await exerciseUsage(client, exercise_id);
+        if (usage === "day") {
+          return toolError(
+            `delete_exercise failed: Exercise ${exercise_id} is attached to one or more days; use remove_exercise_from_day to detach it first.`,
+          );
+        }
+        if (usage === "history") {
+          return toolError(`delete_exercise failed: Exercise ${exercise_id} has logged sets or scheme history and cannot be deleted.`);
+        }
+
+        await deleteExercise(client, exercise_id);
+        return toolResult({ id: exercise.id, name: exercise.name, deleted: true });
       }),
   );
 
