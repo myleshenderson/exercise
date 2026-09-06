@@ -1,12 +1,16 @@
 import type { DataLayer } from "./DataLayer";
-import type { Exercise, WorkoutDay, Session, SetEntry } from "../types";
+import type { Exercise, WorkoutDay, Session, SetEntry, Program } from "../types";
 import { seedExercises, seedDays, seedSessions } from "./seed";
 import { findLastSetsForExercise } from "../lib/lastSession";
+import { nextAvailablePositionByProgram, isDayAvailable } from "../lib/programAvailability";
+
+type StoredDay = Omit<WorkoutDay, "programName" | "isAvailable">;
 
 export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
   const useSeed = opts?.seed !== false;
   const exercises: Exercise[] = useSeed ? structuredClone(seedExercises) : [];
-  const days: WorkoutDay[] = useSeed ? structuredClone(seedDays) : [];
+  const days: StoredDay[] = useSeed ? structuredClone(seedDays) : [];
+  const programs: Program[] = [];
   const sessions: Session[] = useSeed ? structuredClone(seedSessions) : [];
   const targets: Record<string, Record<string, SetEntry[]>> = {};
   const schemeHistory: Record<string, { targetSets: SetEntry[] | null; recordedAt: string }[]> = {};
@@ -32,7 +36,33 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
       return ex;
     },
     async getWorkoutDays() {
-      return days.slice().sort((a, b) => a.position - b.position);
+      const completed = new Set(
+        sessions.filter((s) => s.workoutDayId !== null && s.exercises.length > 0).map((s) => s.workoutDayId as string),
+      );
+      const livingProgramIds = new Set(programs.map((p) => p.id));
+      const effectiveProgramIdByDay = new Map(
+        days.map((d) => [d.id, d.programId && livingProgramIds.has(d.programId) ? d.programId : null]),
+      );
+      const availabilityInput = days.map((d) => ({ id: d.id, programId: effectiveProgramIdByDay.get(d.id)!, programPosition: d.programPosition }));
+      const nextByProgram = nextAvailablePositionByProgram(availabilityInput, completed);
+      return days
+        .slice()
+        .sort((a, b) => a.position - b.position)
+        .map((d) => {
+          const effectiveProgramId = effectiveProgramIdByDay.get(d.id)!;
+          const program = effectiveProgramId ? programs.find((p) => p.id === effectiveProgramId) ?? null : null;
+          return {
+            ...d,
+            // Override, don't just spread ...d: once a program is deleted, its former
+            // days must report programId/programPosition null too (matching
+            // src/data/supabase.ts's getWorkoutDays, which nulls these the same way for
+            // a day whose program_id points at a soft-deleted row) — not just programName.
+            programId: effectiveProgramId,
+            programPosition: effectiveProgramId ? d.programPosition : null,
+            programName: program ? program.name : null,
+            isAvailable: isDayAvailable({ id: d.id, programId: effectiveProgramId, programPosition: d.programPosition }, nextByProgram),
+          };
+        });
     },
     async getDayExercises(dayId) {
       const day = days.find((d) => d.id === dayId);
@@ -42,9 +72,9 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
         .filter((e): e is Exercise => !!e);
     },
     async createDay(name) {
-      const day: WorkoutDay = { id: nextId("day"), name, position: days.length, exerciseIds: [] };
+      const day: StoredDay = { id: nextId("day"), name, position: days.length, exerciseIds: [], programId: null, programPosition: null };
       days.push(day);
-      return day;
+      return { ...day, programName: null, isAvailable: true };
     },
     async deleteDay(dayId) {
       const idx = days.findIndex((d) => d.id === dayId);
@@ -74,6 +104,41 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
     async updateDayName(dayId, name) {
       const day = days.find((d) => d.id === dayId);
       if (day) day.name = name;
+    },
+    async createProgram(name) {
+      const program: Program = { id: nextId("program"), name };
+      programs.push(program);
+      return program;
+    },
+    async renameProgram(programId, name) {
+      const program = programs.find((p) => p.id === programId);
+      if (program) program.name = name;
+    },
+    async deleteProgram(programId) {
+      const idx = programs.findIndex((p) => p.id === programId);
+      if (idx !== -1) programs.splice(idx, 1);
+    },
+    async addDayToProgram(dayId, programId) {
+      const day = days.find((d) => d.id === dayId);
+      if (!day) return;
+      const maxPosition = days
+        .filter((d) => d.programId === programId)
+        .reduce((max, d) => Math.max(max, d.programPosition ?? -1), -1);
+      day.programId = programId;
+      day.programPosition = maxPosition + 1;
+    },
+    async removeDayFromProgram(dayId) {
+      const day = days.find((d) => d.id === dayId);
+      if (day) {
+        day.programId = null;
+        day.programPosition = null;
+      }
+    },
+    async reorderProgramDays(programId, dayIds) {
+      dayIds.forEach((dayId, index) => {
+        const day = days.find((d) => d.id === dayId && d.programId === programId);
+        if (day) day.programPosition = index;
+      });
     },
     async getDayExerciseTargets(dayId) {
       return { ...(targets[dayId] ?? {}) };

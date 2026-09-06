@@ -41,6 +41,15 @@ const TOOLS = [
     name: "update_exercise",
     description: "Partially updates a catalog exercise's name, cue, and/or defaults, targeted by id.",
   },
+  {
+    name: "list_exercises",
+    description: "Every catalog exercise, including ones not attached to any day.",
+  },
+  {
+    name: "delete_exercise",
+    description:
+      "Soft-deletes a catalog exercise by id. Rejected if it's still attached to any day or referenced by logged sets/scheme history.",
+  },
 ];
 
 function selectOnFocus(e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) {

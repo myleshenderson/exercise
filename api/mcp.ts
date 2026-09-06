@@ -12,10 +12,18 @@ import {
   deleteDay,
   createExercise,
   updateExercise,
+  listExercises,
+  deleteExercise,
   addExerciseToDay,
   removeExerciseFromDay,
   updateDayExercises,
   setDayExerciseTarget,
+  createProgram,
+  renameProgram,
+  deleteProgram,
+  addDayToProgram,
+  removeDayFromProgram,
+  reorderProgramDays,
 } from "../src/data/supabase.js";
 
 // Vercel's Node runtime pre-parses JSON request bodies onto req.body before
@@ -82,19 +90,50 @@ function createUserScopedClient(accessToken: string): SupabaseClient {
 async function findDay(
   client: SupabaseClient,
   dayId: string,
-): Promise<{ id: string; name: string; position: number } | null> {
+): Promise<{ id: string; name: string; position: number; program_id: string | null } | null> {
   const { data } = await client
     .from("workout_days")
-    .select("id, name, position")
+    .select("id, name, position, program_id")
     .eq("id", dayId)
     .is("deleted_at", null)
     .maybeSingle();
-  return (data as { id: string; name: string; position: number } | null) ?? null;
+  return (data as { id: string; name: string; position: number; program_id: string | null } | null) ?? null;
 }
 
-async function findExercise(client: SupabaseClient, exerciseId: string): Promise<{ id: string } | null> {
-  const { data } = await client.from("exercises").select("id").eq("id", exerciseId).maybeSingle();
-  return (data as { id: string } | null) ?? null;
+async function findExercise(client: SupabaseClient, exerciseId: string): Promise<{ id: string; name: string } | null> {
+  const { data } = await client.from("exercises").select("id, name").eq("id", exerciseId).is("deleted_at", null).maybeSingle();
+  return (data as { id: string; name: string } | null) ?? null;
+}
+
+// delete_exercise's guardrail against the "confusing surprising state" the design
+// explicitly calls out (see exercise-2bv): a soft-deleted exercise still visibly
+// attached wherever it's referenced, but invisible from list_exercises. Checked as
+// three independent existence probes rather than one query, since usage can come
+// from any of workout_day_exercises (current attachment), session_sets, or
+// workout_day_exercise_scheme_history (both historical, so detaching from days alone
+// wouldn't clear them).
+async function exerciseUsage(client: SupabaseClient, exerciseId: string): Promise<"day" | "history" | null> {
+  const { data: attached } = await client.from("workout_day_exercises").select("id").eq("exercise_id", exerciseId).limit(1);
+  if (attached && attached.length) return "day";
+  const { data: loggedSets } = await client.from("session_sets").select("id").eq("exercise_id", exerciseId).limit(1);
+  if (loggedSets && loggedSets.length) return "history";
+  const { data: schemeHistory } = await client
+    .from("workout_day_exercise_scheme_history")
+    .select("id")
+    .eq("exercise_id", exerciseId)
+    .limit(1);
+  if (schemeHistory && schemeHistory.length) return "history";
+  return null;
+}
+
+async function findProgram(client: SupabaseClient, programId: string): Promise<{ id: string; name: string } | null> {
+  const { data } = await client
+    .from("programs")
+    .select("id, name")
+    .eq("id", programId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  return (data as { id: string; name: string } | null) ?? null;
 }
 
 // Just enough of the row to validate a rep-range patch against whichever bound the
@@ -325,13 +364,24 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
     "create_day_template",
     {
       title: "Create day template",
-      description: "Creates a new, empty day template for the authenticated user. Returns the new day, including its id.",
-      inputSchema: { name: z.string() },
+      description:
+        "Creates a new, empty day template for the authenticated user. Returns the new day, including its id. If program_id is given, appends the day to the end of that program.",
+      inputSchema: { name: z.string(), program_id: z.string().optional() },
     },
-    async ({ name }) =>
+    async ({ name, program_id }) =>
       withWriteTool("create_day_template", async (accessToken) => {
-        const day = await createDay(createUserScopedClient(accessToken), name);
-        return toolResult(day);
+        const client = createUserScopedClient(accessToken);
+        if (program_id) {
+          const program = await findProgram(client, program_id);
+          if (!program) return toolError(`create_day_template failed: Program ${program_id} not found.`);
+        }
+        const day = await createDay(client, name);
+        if (program_id) await addDayToProgram(client, day.id, program_id);
+        // Explicit subset, not the raw `day` object: `day.programPosition`/`programName`/
+        // `isAvailable` reflect its state from BEFORE the addDayToProgram call above (createDay
+        // always returns an untracked day), so they'd be stale/wrong here. programId is the one
+        // piece of program state worth echoing back, and is known directly from the input.
+        return toolResult({ id: day.id, name: day.name, position: day.position, exerciseIds: day.exerciseIds, programId: program_id ?? null });
       }),
   );
 
@@ -473,6 +523,51 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
           defaultRepHigh: default_rep_high,
         });
         return toolResult(exercise);
+      }),
+  );
+
+  server.registerTool(
+    "list_exercises",
+    {
+      title: "List exercises",
+      description:
+        "Every catalog exercise for the authenticated user, including ones not attached to any day. Excludes soft-deleted exercises.",
+    },
+    async () =>
+      withIdentity(async (accessToken) => {
+        const exercises = await listExercises(createUserScopedClient(accessToken));
+        return toolResult(exercises);
+      }),
+  );
+
+  server.registerTool(
+    "delete_exercise",
+    {
+      title: "Delete exercise",
+      description:
+        "Soft-deletes a catalog exercise belonging to the authenticated user, targeted by id: marks it deleted so it no longer appears in list_exercises. Rejected outright if the exercise is still attached to any day or referenced by logged sets/scheme history — detach it from days first via remove_exercise_from_day.",
+      inputSchema: { exercise_id: z.string() },
+    },
+    async ({ exercise_id }) =>
+      withWriteTool("delete_exercise", async (accessToken) => {
+        const exerciseIdError = invalidIdError("delete_exercise", "exercise_id", exercise_id);
+        if (exerciseIdError) return exerciseIdError;
+        const client = createUserScopedClient(accessToken);
+        const exercise = await findExercise(client, exercise_id);
+        if (!exercise) return toolError(`delete_exercise failed: Exercise ${exercise_id} not found.`);
+
+        const usage = await exerciseUsage(client, exercise_id);
+        if (usage === "day") {
+          return toolError(
+            `delete_exercise failed: Exercise ${exercise_id} is attached to one or more days; use remove_exercise_from_day to detach it first.`,
+          );
+        }
+        if (usage === "history") {
+          return toolError(`delete_exercise failed: Exercise ${exercise_id} has logged sets or scheme history and cannot be deleted.`);
+        }
+
+        await deleteExercise(client, exercise_id);
+        return toolResult({ id: exercise.id, name: exercise.name, deleted: true });
       }),
   );
 
@@ -630,6 +725,138 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
           sets && sets.length > 0 ? sets.map((s, i) => ({ setNumber: i + 1, weight: s.weight, reps: s.reps })) : null;
         await setDayExerciseTarget(client, day_id, exercise_id, setEntries);
         return toolResult({ day_id, exercise_id, sets: setEntries });
+      }),
+  );
+
+  server.registerTool(
+    "create_program",
+    {
+      title: "Create program",
+      description: "Creates a new, empty program for the authenticated user. Returns it, including its id.",
+      inputSchema: { name: z.string() },
+    },
+    async ({ name }) =>
+      withWriteTool("create_program", async (accessToken) => {
+        const program = await createProgram(createUserScopedClient(accessToken), name);
+        return toolResult(program);
+      }),
+  );
+
+  server.registerTool(
+    "rename_program",
+    {
+      title: "Rename program",
+      description: "Renames an existing program belonging to the authenticated user, targeted by id.",
+      inputSchema: { program_id: z.string(), name: z.string() },
+    },
+    async ({ program_id, name }) =>
+      withWriteTool("rename_program", async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const program = await findProgram(client, program_id);
+        if (!program) return toolError(`rename_program failed: Program ${program_id} not found.`);
+        await renameProgram(client, program_id, name);
+        return toolResult({ id: program.id, name });
+      }),
+  );
+
+  server.registerTool(
+    "delete_program",
+    {
+      title: "Delete program",
+      description:
+        "Soft-deletes a program belonging to the authenticated user, targeted by id: it's no longer a valid target for other program tools, but member days keep their program_id/program_position (not unassigned), so the program's structure and completion history survive and get_day_templates treats its former days as untracked (always available) in the meantime.",
+      inputSchema: { program_id: z.string() },
+    },
+    async ({ program_id }) =>
+      withWriteTool("delete_program", async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const program = await findProgram(client, program_id);
+        if (!program) return toolError(`delete_program failed: Program ${program_id} not found.`);
+        await deleteProgram(client, program_id);
+        return toolResult({ id: program.id, name: program.name, deleted: true });
+      }),
+  );
+
+  server.registerTool(
+    "add_day_to_program",
+    {
+      title: "Add day to program",
+      description:
+        "Assigns an existing day template to a program, appended at the end. Errors if the day already belongs to a program; use remove_day_from_program first to reassign it.",
+      inputSchema: { day_id: z.string(), program_id: z.string() },
+    },
+    async ({ day_id, program_id }) =>
+      withWriteTool("add_day_to_program", async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const day = await findDay(client, day_id);
+        if (!day) return toolError(`add_day_to_program failed: Day template ${day_id} not found.`);
+        if (day.program_id) {
+          return toolError(`add_day_to_program failed: Day ${day_id} is already in program ${day.program_id}; remove it first.`);
+        }
+        const program = await findProgram(client, program_id);
+        if (!program) return toolError(`add_day_to_program failed: Program ${program_id} not found.`);
+        await addDayToProgram(client, day_id, program_id);
+        return toolResult({ day_id, program_id });
+      }),
+  );
+
+  server.registerTool(
+    "remove_day_from_program",
+    {
+      title: "Remove day from program",
+      description: "Clears a day template's program assignment, reverting it to untracked (always available).",
+      inputSchema: { day_id: z.string() },
+    },
+    async ({ day_id }) =>
+      withWriteTool("remove_day_from_program", async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const day = await findDay(client, day_id);
+        if (!day) return toolError(`remove_day_from_program failed: Day template ${day_id} not found.`);
+        await removeDayFromProgram(client, day_id);
+        return toolResult({ day_id, removed: true });
+      }),
+  );
+
+  server.registerTool(
+    "reorder_program_days",
+    {
+      title: "Reorder program days",
+      description:
+        "Rewrites a program's day order for the authenticated user. day_ids must be exactly the program's current membership (same members, any order); membership changes must go through add_day_to_program/remove_day_from_program instead.",
+      inputSchema: { program_id: z.string(), day_ids: z.array(z.string()) },
+    },
+    async ({ program_id, day_ids }) =>
+      withWriteTool("reorder_program_days", async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const program = await findProgram(client, program_id);
+        if (!program) return toolError(`reorder_program_days failed: Program ${program_id} not found.`);
+
+        if (new Set(day_ids).size !== day_ids.length) {
+          return toolError(`reorder_program_days failed: day_ids contains duplicate ids.`);
+        }
+
+        const { data: current, error: selectError } = await client
+          .from("workout_days")
+          .select("id")
+          .eq("program_id", program_id)
+          .is("deleted_at", null);
+        if (selectError) return toolError(`reorder_program_days failed: ${selectError.message}`);
+
+        const currentIds = new Set((current ?? []).map((r: { id: string }) => r.id));
+        const requestedIds = new Set(day_ids);
+        const missing = [...currentIds].filter((id) => !requestedIds.has(id));
+        const extra = [...requestedIds].filter((id) => !currentIds.has(id));
+        if (missing.length || extra.length) {
+          const parts: string[] = [];
+          if (missing.length) parts.push(`missing [${missing.join(", ")}]`);
+          if (extra.length) parts.push(`unexpected [${extra.join(", ")}]`);
+          return toolError(
+            `reorder_program_days failed: day_ids ${parts.join(" and ")}. Use add_day_to_program/remove_day_from_program to change membership instead.`,
+          );
+        }
+
+        await reorderProgramDays(client, program_id, day_ids);
+        return toolResult({ program_id, day_ids });
       }),
   );
 
