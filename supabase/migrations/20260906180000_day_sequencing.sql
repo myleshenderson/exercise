@@ -33,7 +33,13 @@ alter table workout_days
 -- null) must be free to all share program_position null, so this is a partial
 -- index rather than a plain unique constraint over both columns.
 create unique index workout_days_program_position_uq
-  on workout_days (program_id, program_position) where program_id is not null;
+  on workout_days (program_id, program_position) where program_id is not null and deleted_at is null;
+
+-- Postgres doesn't let create-or-replace change a function's OUT-parameter list
+-- (which is what returns table (...) columns are) - the prior version had 12
+-- columns, this one has 16 - so the old signature must be dropped first, matching
+-- the same pattern 0011_workout_history_filters.sql already established.
+drop function if exists public.get_day_templates();
 
 create or replace function public.get_day_templates()
 returns table (
@@ -77,7 +83,7 @@ as $$
          wd.position                                            as workout_day_position,
          p.id                                                   as program_id,
          p.name                                                 as program_name,
-         wd.program_position                                    as program_position,
+         case when p.id is null then null else wd.program_position end as program_position,
          coalesce(p.id is null or wd.program_position = pn.next_position, false) as is_available,
          e.id                                                   as exercise_id,
          e.name                                                 as exercise_name,
@@ -96,5 +102,8 @@ as $$
   where wd.deleted_at is null
   order by wd.position, wde.position;
 $$;
+
+grant execute on function public.get_day_templates() to authenticated;
+revoke execute on function public.get_day_templates() from public;
 
 notify pgrst, 'reload schema';

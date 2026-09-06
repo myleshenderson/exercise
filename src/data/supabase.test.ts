@@ -32,7 +32,7 @@ type Mode = "list" | "single" | "maybeSingle";
 function makeFakeClient(tables: Record<string, Row[]>): SupabaseClient {
   let seq = 0;
 
-  function builder(table: Row[], op: "select" | "insert" | "update" | "delete", payload?: unknown) {
+  function builder(table: Row[], op: "select" | "insert" | "update" | "delete", payload?: unknown, tableName?: string) {
     const filters: Array<[string, unknown]> = [];
     let orderCol: string | undefined;
     let orderAsc = true;
@@ -69,6 +69,31 @@ function makeFakeClient(tables: Record<string, Row[]>): SupabaseClient {
       }
       if (op === "update") {
         const targets = matched(table);
+        // Mirror workout_days_program_position_uq (a real, immediately-enforced
+        // partial unique index on (program_id, program_position) where
+        // program_id is not null): reject an update that would leave two
+        // distinct rows sharing a non-null program_id and equal
+        // program_position. Scoped to workout_days only, and only to this one
+        // constraint - not a general constraint-enforcement engine.
+        if (tableName === "workout_days") {
+          for (const row of targets) {
+            const merged = { ...row, ...(payload as Record<string, unknown>) };
+            if (merged.program_id != null) {
+              const conflict = table.some(
+                (other) =>
+                  other !== row &&
+                  other.program_id === merged.program_id &&
+                  other.program_position === merged.program_position,
+              );
+              if (conflict) {
+                return {
+                  data: null,
+                  error: { code: "23505", message: 'duplicate key value violates unique constraint "workout_days_program_position_uq"' },
+                };
+              }
+            }
+          }
+        }
         for (const row of targets) Object.assign(row, payload as Record<string, unknown>);
         return finish(targets);
       }
@@ -114,10 +139,10 @@ function makeFakeClient(tables: Record<string, Row[]>): SupabaseClient {
     from: (tableName: string) => {
       const table = (tables[tableName] ??= []);
       return {
-        select: () => builder(table, "select"),
-        insert: (payload: unknown) => builder(table, "insert", payload),
-        update: (payload: unknown) => builder(table, "update", payload),
-        delete: () => builder(table, "delete"),
+        select: () => builder(table, "select", undefined, tableName),
+        insert: (payload: unknown) => builder(table, "insert", payload, tableName),
+        update: (payload: unknown) => builder(table, "update", payload, tableName),
+        delete: () => builder(table, "delete", undefined, tableName),
       };
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -380,6 +405,25 @@ describe("reorderProgramDays", () => {
     };
     const client = makeFakeClient(tables);
     await reorderProgramDays(client, "prog-1", ["day-2", "day-1"]);
+    expect(tables.workout_days.find((r) => r.id === "day-2")?.program_position).toBe(0);
+    expect(tables.workout_days.find((r) => r.id === "day-1")?.program_position).toBe(1);
+  });
+
+  // Regression test for the collision this function used to hit on almost
+  // every real reorder: swapping day-1 (position 0) and day-2 (position 1)
+  // via a naive single-phase write updates day-2 to position 0 first, which
+  // the fake client's uniqueness check (mirroring
+  // workout_days_program_position_uq) rejects because day-1 is still at
+  // position 0. The two-phase parking write must not hit that collision.
+  test("swaps two already-assigned days' positions without a uniqueness collision", async () => {
+    const tables: Record<string, Row[]> = {
+      workout_days: [
+        { id: "day-1", name: "Week 1", program_id: "prog-1", program_position: 0 },
+        { id: "day-2", name: "Week 2", program_id: "prog-1", program_position: 1 },
+      ],
+    };
+    const client = makeFakeClient(tables);
+    await expect(reorderProgramDays(client, "prog-1", ["day-2", "day-1"])).resolves.toBeUndefined();
     expect(tables.workout_days.find((r) => r.id === "day-2")?.program_position).toBe(0);
     expect(tables.workout_days.find((r) => r.id === "day-1")?.program_position).toBe(1);
   });

@@ -185,6 +185,20 @@ export async function removeDayFromProgram(client: SupabaseClient, dayId: string
 // workout_days rows are the actual day identity that sessions reference by id,
 // so they can never be recreated the way workout_day_exercises join rows can.
 export async function reorderProgramDays(client: SupabaseClient, programId: string, dayIds: string[]): Promise<void> {
+  // Two-phase write: a same-transaction-less loop of per-row updates would
+  // collide with workout_days_program_position_uq mid-reorder (e.g. swapping
+  // two days' positions makes the first update collide with the still-unmoved
+  // second row) - parking every targeted row at a distinct negative position
+  // first guarantees no collision in either phase, since negative positions
+  // never collide with the final non-negative ones or each other.
+  for (const [index, dayId] of dayIds.entries()) {
+    const { error } = await client
+      .from("workout_days")
+      .update({ program_position: -(index + 1) })
+      .eq("id", dayId)
+      .eq("program_id", programId);
+    if (error) throw error;
+  }
   for (const [index, dayId] of dayIds.entries()) {
     const { error } = await client
       .from("workout_days")
