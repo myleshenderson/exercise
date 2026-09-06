@@ -31,6 +31,18 @@ function toolError(message: string): CallToolResult {
   return { isError: true, content: [{ type: "text", text: message }] };
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Every *_id parameter on these tools targets a Postgres `uuid` column (see
+// supabase/migrations/0001_init.sql), so a non-UUID value can never match a row. Rejecting
+// it up front lets us say so plainly, instead of running the lookup and reporting a
+// misleading "not found" for what's actually a malformed argument (e.g. a name passed
+// where an id was expected).
+function invalidIdError(toolName: string, paramName: string, value: string): CallToolResult | undefined {
+  if (UUID_PATTERN.test(value)) return undefined;
+  return toolError(`${toolName} failed: expected a UUID for ${paramName}, got "${value}".`);
+}
+
 function toolResult(data: unknown): CallToolResult {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
@@ -315,6 +327,8 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
     },
     async ({ day_id, name }) =>
       withWriteTool("rename_day_template", async (accessToken) => {
+        const dayIdError = invalidIdError("rename_day_template", "day_id", day_id);
+        if (dayIdError) return dayIdError;
         const client = createUserScopedClient(accessToken);
         const day = await findDay(client, day_id);
         if (!day) return toolError(`rename_day_template failed: Day template ${day_id} not found.`);
@@ -333,6 +347,8 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
     },
     async ({ day_id }) =>
       withWriteTool("delete_day_template", async (accessToken) => {
+        const dayIdError = invalidIdError("delete_day_template", "day_id", day_id);
+        if (dayIdError) return dayIdError;
         const client = createUserScopedClient(accessToken);
         const day = await findDay(client, day_id);
         if (!day) return toolError(`delete_day_template failed: Day template ${day_id} not found.`);
@@ -387,6 +403,10 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
     },
     async ({ day_id, exercise_id }) =>
       withWriteTool("add_exercise_to_day", async (accessToken) => {
+        const dayIdError = invalidIdError("add_exercise_to_day", "day_id", day_id);
+        if (dayIdError) return dayIdError;
+        const exerciseIdError = invalidIdError("add_exercise_to_day", "exercise_id", exercise_id);
+        if (exerciseIdError) return exerciseIdError;
         const client = createUserScopedClient(accessToken);
         const day = await findDay(client, day_id);
         if (!day) return toolError(`add_exercise_to_day failed: Day template ${day_id} not found.`);
@@ -416,6 +436,10 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
     },
     async ({ day_id, exercise_id }) =>
       withWriteTool("remove_exercise_from_day", async (accessToken) => {
+        const dayIdError = invalidIdError("remove_exercise_from_day", "day_id", day_id);
+        if (dayIdError) return dayIdError;
+        const exerciseIdError = invalidIdError("remove_exercise_from_day", "exercise_id", exercise_id);
+        if (exerciseIdError) return exerciseIdError;
         const client = createUserScopedClient(accessToken);
         const day = await findDay(client, day_id);
         if (!day) return toolError(`remove_exercise_from_day failed: Day template ${day_id} not found.`);
@@ -437,6 +461,15 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
     },
     async ({ day_id, exercise_ids }) =>
       withWriteTool("reorder_day_exercises", async (accessToken) => {
+        const dayIdError = invalidIdError("reorder_day_exercises", "day_id", day_id);
+        if (dayIdError) return dayIdError;
+        const invalidExerciseIds = exercise_ids.filter((id) => !UUID_PATTERN.test(id));
+        if (invalidExerciseIds.length) {
+          return toolError(
+            `reorder_day_exercises failed: expected UUIDs for exercise_ids, got ${invalidExerciseIds.map((id) => `"${id}"`).join(", ")}.`,
+          );
+        }
+
         const client = createUserScopedClient(accessToken);
         const day = await findDay(client, day_id);
         if (!day) return toolError(`reorder_day_exercises failed: Day template ${day_id} not found.`);
@@ -483,6 +516,10 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
     },
     async ({ day_id, exercise_id, sets }) =>
       withWriteTool("set_day_exercise_scheme", async (accessToken) => {
+        const dayIdError = invalidIdError("set_day_exercise_scheme", "day_id", day_id);
+        if (dayIdError) return dayIdError;
+        const exerciseIdError = invalidIdError("set_day_exercise_scheme", "exercise_id", exercise_id);
+        if (exerciseIdError) return exerciseIdError;
         const client = createUserScopedClient(accessToken);
         const day = await findDay(client, day_id);
         if (!day) return toolError(`set_day_exercise_scheme failed: Day template ${day_id} not found.`);
