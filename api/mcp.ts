@@ -15,6 +15,9 @@ import {
   removeExerciseFromDay,
   updateDayExercises,
   setDayExerciseTarget,
+  createProgram,
+  renameProgram,
+  deleteProgram,
 } from "../src/data/supabase.js";
 
 // Vercel's Node runtime pre-parses JSON request bodies onto req.body before
@@ -82,6 +85,16 @@ async function findDay(
 async function findExercise(client: SupabaseClient, exerciseId: string): Promise<{ id: string } | null> {
   const { data } = await client.from("exercises").select("id").eq("id", exerciseId).maybeSingle();
   return (data as { id: string } | null) ?? null;
+}
+
+async function findProgram(client: SupabaseClient, programId: string): Promise<{ id: string; name: string } | null> {
+  const { data } = await client
+    .from("programs")
+    .select("id, name")
+    .eq("id", programId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  return (data as { id: string; name: string } | null) ?? null;
 }
 
 function validateReps(value: number): string | undefined {
@@ -511,6 +524,55 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
           sets && sets.length > 0 ? sets.map((s, i) => ({ setNumber: i + 1, weight: s.weight, reps: s.reps })) : null;
         await setDayExerciseTarget(client, day_id, exercise_id, setEntries);
         return toolResult({ day_id, exercise_id, sets: setEntries });
+      }),
+  );
+
+  server.registerTool(
+    "create_program",
+    {
+      title: "Create program",
+      description: "Creates a new, empty program for the authenticated user. Returns it, including its id.",
+      inputSchema: { name: z.string() },
+    },
+    async ({ name }) =>
+      withWriteTool("create_program", async (accessToken) => {
+        const program = await createProgram(createUserScopedClient(accessToken), name);
+        return toolResult(program);
+      }),
+  );
+
+  server.registerTool(
+    "rename_program",
+    {
+      title: "Rename program",
+      description: "Renames an existing program belonging to the authenticated user, targeted by id.",
+      inputSchema: { program_id: z.string(), name: z.string() },
+    },
+    async ({ program_id, name }) =>
+      withWriteTool("rename_program", async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const program = await findProgram(client, program_id);
+        if (!program) return toolError(`rename_program failed: Program ${program_id} not found.`);
+        await renameProgram(client, program_id, name);
+        return toolResult({ id: program.id, name });
+      }),
+  );
+
+  server.registerTool(
+    "delete_program",
+    {
+      title: "Delete program",
+      description:
+        "Soft-deletes a program belonging to the authenticated user, targeted by id: it's no longer a valid target for other program tools, but member days keep their program_id/program_position (not unassigned), so the program's structure and completion history survive and get_day_templates treats its former days as untracked (always available) in the meantime.",
+      inputSchema: { program_id: z.string() },
+    },
+    async ({ program_id }) =>
+      withWriteTool("delete_program", async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const program = await findProgram(client, program_id);
+        if (!program) return toolError(`delete_program failed: Program ${program_id} not found.`);
+        await deleteProgram(client, program_id);
+        return toolResult({ id: program.id, name: program.name, deleted: true });
       }),
   );
 
