@@ -37,6 +37,7 @@ let fakeRowSeq = 0;
 function nextFakeId(prefix: string): string {
   return `${prefix}-${++fakeRowSeq}`;
 }
+let forcedError: { table: FakeTableName; op: "select" | "insert" | "update" | "delete"; message: string } | null = null;
 
 type FakeResult = { data: unknown; error: { message: string } | null };
 type FakeMode = "list" | "single" | "maybeSingle";
@@ -113,6 +114,12 @@ class FakeQuery implements PromiseLike<FakeResult> {
   }
 
   private run(): FakeResult {
+    if (forcedError && forcedError.table === this.tableName && forcedError.op === this.op) {
+      const err = forcedError;
+      forcedError = null;
+      return { data: null, error: { message: err.message } };
+    }
+
     if (this.op === "select") return this.finish(this.matched(this.owned()));
 
     if (this.op === "delete") {
@@ -360,6 +367,7 @@ describe("api/mcp handler", () => {
     TABLES.exercises.length = 0;
     TABLES.workout_day_exercises.length = 0;
     fakeRowSeq = 0;
+    forcedError = null;
     seedSession("user-a", "token-a");
     seedSession("user-b", "token-b");
 
@@ -781,6 +789,22 @@ describe("api/mcp handler", () => {
       await client.close();
     });
 
+    it("create_exercise rejects an out-of-range default_sets", async () => {
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "create_exercise",
+        arguments: { name: "Curl", default_sets: 11 },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "create_exercise failed: default_sets must be an integer between 1 and 10." },
+      ]);
+
+      await client.close();
+    });
+
     it("add_exercise_to_day attaches an exercise the caller owns", async () => {
       seedDay("user-a", "day-a", "Push");
       seedExercise("user-a", "ex-a", "Bench Press");
@@ -930,6 +954,46 @@ describe("api/mcp handler", () => {
       await client.close();
     });
 
+    it("reorder_day_exercises rejects a list containing a duplicate id", async () => {
+      seedDay("user-a", "day-a", "Push");
+      seedExercise("user-a", "ex-a", "Bench Press");
+      seedDayExercise("user-a", "day-a", "ex-a", 0);
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "reorder_day_exercises",
+        arguments: { day_id: "day-a", exercise_ids: ["ex-a", "ex-a"] },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "reorder_day_exercises failed: exercise_ids contains duplicate ids." },
+      ]);
+      expect(TABLES.workout_day_exercises.filter((r) => r.workout_day_id === "day-a")).toHaveLength(1);
+
+      await client.close();
+    });
+
+    it("reorder_day_exercises surfaces a real write failure as a clean, prefixed error message", async () => {
+      seedDay("user-a", "day-a", "Push");
+      seedExercise("user-a", "ex-a", "Bench Press");
+      seedDayExercise("user-a", "day-a", "ex-a", 0);
+      forcedError = { table: "workout_day_exercises", op: "insert", message: "simulated postgres failure" };
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "reorder_day_exercises",
+        arguments: { day_id: "day-a", exercise_ids: ["ex-a"] },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "reorder_day_exercises failed: simulated postgres failure" },
+      ]);
+
+      await client.close();
+    });
+
     it("set_day_exercise_scheme sets a scheme for one exercise on one day", async () => {
       seedDay("user-a", "day-a", "Push");
       seedExercise("user-a", "ex-a", "Bench Press");
@@ -1013,6 +1077,24 @@ describe("api/mcp handler", () => {
       expect(result.isError).toBe(true);
       expect(result.content).toEqual([
         { type: "text", text: "set_day_exercise_scheme failed: Exercise no-such-exercise not found." },
+      ]);
+
+      await client.close();
+    });
+
+    it("set_day_exercise_scheme rejects an exercise that isn't attached to the day", async () => {
+      seedDay("user-a", "day-a", "Push");
+      seedExercise("user-a", "ex-a", "Bench Press");
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "set_day_exercise_scheme",
+        arguments: { day_id: "day-a", exercise_id: "ex-a", sets: [{ weight: 100, reps: 10 }] },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "set_day_exercise_scheme failed: Exercise ex-a is not on day day-a." },
       ]);
 
       await client.close();

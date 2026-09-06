@@ -42,9 +42,10 @@ export async function updateDayExercises(client: SupabaseClient, dayId: string, 
   for (const row of existing ?? []) {
     if (row.target_sets) targetsByExercise[row.exercise_id] = row.target_sets;
   }
-  await client.from("workout_day_exercises").delete().eq("workout_day_id", dayId);
+  const { error: deleteError } = await client.from("workout_day_exercises").delete().eq("workout_day_id", dayId);
+  if (deleteError) throw deleteError;
   if (exerciseIds.length) {
-    await client.from("workout_day_exercises").insert(
+    const { error: insertError } = await client.from("workout_day_exercises").insert(
       exerciseIds.map((exercise_id, position) => ({
         workout_day_id: dayId,
         exercise_id,
@@ -52,6 +53,7 @@ export async function updateDayExercises(client: SupabaseClient, dayId: string, 
         target_sets: targetsByExercise[exercise_id] ?? null,
       })),
     );
+    if (insertError) throw insertError;
   }
 }
 
