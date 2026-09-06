@@ -43,6 +43,17 @@ jobs:
         with:
           version: latest
 
+      # Two migration files can end up with the same version prefix when two
+      # PRs are authored independently (neither PR's own CI run ever sees the
+      # other's file). `supabase db push` only records one applied migration
+      # per version, so it would silently apply one and drop the other with
+      # no failure or warning. Catch that here, before anything is pushed,
+      # and on every run (not just when a migration changed in this diff) so
+      # a collision between two separately-merged PRs is still caught the
+      # first time CI runs on main afterward. See exercise-kch.
+      - name: Check for colliding migration versions
+        run: node scripts/check-migration-versions.mjs supabase/migrations
+
       # The `secrets` context cannot be read from a job-level `if`, so the
       # check happens here. Skipping loudly beats failing main for a repo
       # that has not had the secret added yet.
