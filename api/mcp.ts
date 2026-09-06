@@ -91,17 +91,19 @@ async function findDay(
   client: SupabaseClient,
   dayId: string,
 ): Promise<{ id: string; name: string; position: number; program_id: string | null } | null> {
-  const { data } = await client
+  const { data, error } = await client
     .from("workout_days")
     .select("id, name, position, program_id")
     .eq("id", dayId)
     .is("deleted_at", null)
     .maybeSingle();
+  if (error) throw error;
   return (data as { id: string; name: string; position: number; program_id: string | null } | null) ?? null;
 }
 
 async function findExercise(client: SupabaseClient, exerciseId: string): Promise<{ id: string; name: string } | null> {
-  const { data } = await client.from("exercises").select("id, name").eq("id", exerciseId).is("deleted_at", null).maybeSingle();
+  const { data, error } = await client.from("exercises").select("id, name").eq("id", exerciseId).is("deleted_at", null).maybeSingle();
+  if (error) throw error;
   return (data as { id: string; name: string } | null) ?? null;
 }
 

@@ -770,6 +770,19 @@ describe("api/mcp handler", () => {
       await client.close();
     });
 
+    it("rename_day_template surfaces a real lookup failure distinctly from not-found", async () => {
+      seedDay("user-a", "11111111-1111-4111-8111-111111111111", "Push");
+      forcedError = { table: "workout_days", op: "select", message: "simulated postgres failure" };
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "rename_day_template", arguments: { day_id: "11111111-1111-4111-8111-111111111111", name: "X" } });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([{ type: "text", text: "rename_day_template failed: simulated postgres failure" }]);
+
+      await client.close();
+    });
+
     it("delete_day_template soft-deletes an existing day and returns confirmation", async () => {
       seedDay("user-a", "11111111-1111-4111-8111-111111111111", "Push");
       seedExercise("user-a", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "Bench Press");
@@ -1207,6 +1220,19 @@ describe("api/mcp handler", () => {
       expect(result.content).toEqual([
         { type: "text", text: "delete_exercise failed: Exercise aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa not found." },
       ]);
+
+      await client.close();
+    });
+
+    it("delete_exercise surfaces a real lookup failure distinctly from not-found", async () => {
+      seedExercise("user-a", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "Bench Press");
+      forcedError = { table: "exercises", op: "select", message: "simulated postgres failure" };
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "delete_exercise", arguments: { exercise_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([{ type: "text", text: "delete_exercise failed: simulated postgres failure" }]);
 
       await client.close();
     });
