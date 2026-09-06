@@ -45,6 +45,32 @@ export async function updateDayName(client: SupabaseClient, dayId: string, name:
   if (error) throw error;
 }
 
+export async function logExercise(
+  client: SupabaseClient,
+  sessionId: string,
+  exerciseId: string,
+  sets: SetEntry[],
+): Promise<void> {
+  const { error: deleteError } = await client
+    .from("session_sets")
+    .delete()
+    .eq("session_id", sessionId)
+    .eq("exercise_id", exerciseId);
+  if (deleteError) throw deleteError;
+  if (sets.length) {
+    const { error: insertError } = await client.from("session_sets").insert(
+      sets.map((s) => ({
+        session_id: sessionId,
+        exercise_id: exerciseId,
+        set_number: s.setNumber,
+        weight: s.weight,
+        reps: s.reps,
+      })),
+    );
+    if (insertError) throw insertError;
+  }
+}
+
 export async function updateDayExercises(client: SupabaseClient, dayId: string, exerciseIds: string[]): Promise<void> {
   const { data: existing, error: selectError } = await client
     .from("workout_day_exercises")
@@ -298,20 +324,7 @@ export function createSupabaseDataLayer(): DataLayer {
       if (!s) return null;
       return loadSession(s.id);
     },
-    async logExercise(sessionId, exerciseId, sets) {
-      await supabase.from("session_sets").delete().eq("session_id", sessionId).eq("exercise_id", exerciseId);
-      if (sets.length) {
-        await supabase.from("session_sets").insert(
-          sets.map((s) => ({
-            session_id: sessionId,
-            exercise_id: exerciseId,
-            set_number: s.setNumber,
-            weight: s.weight,
-            reps: s.reps,
-          })),
-        );
-      }
-    },
+    logExercise: (sessionId, exerciseId, sets) => logExercise(supabase, sessionId, exerciseId, sets),
     async getExerciseHistory(exerciseId) {
       const { data: setRows } = await supabase
         .from("session_sets")
