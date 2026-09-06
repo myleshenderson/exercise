@@ -26,13 +26,19 @@ interface FakeRow {
   [key: string]: unknown;
 }
 
-type FakeTableName = "workout_days" | "exercises" | "workout_day_exercises" | "workout_day_exercise_scheme_history";
+type FakeTableName =
+  | "workout_days"
+  | "exercises"
+  | "workout_day_exercises"
+  | "workout_day_exercise_scheme_history"
+  | "session_sets";
 
 const TABLES: Record<FakeTableName, FakeRow[]> = {
   workout_days: [],
   exercises: [],
   workout_day_exercises: [],
   workout_day_exercise_scheme_history: [],
+  session_sets: [],
 };
 let fakeRowSeq = 0;
 function nextFakeId(prefix: string): string {
@@ -207,9 +213,32 @@ function seedDay(userId: string, id: string, name: string, position = 0, deleted
   return row;
 }
 
-function seedExercise(userId: string, id: string, name: string): FakeRow {
-  const row: FakeRow = { id, user_id: userId, name, cue: "", default_sets: 3, default_rep_low: 10, default_rep_high: 12 };
+function seedExercise(userId: string, id: string, name: string, deletedAt: string | null = null): FakeRow {
+  const row: FakeRow = {
+    id,
+    user_id: userId,
+    name,
+    cue: "",
+    default_sets: 3,
+    default_rep_low: 10,
+    default_rep_high: 12,
+    deleted_at: deletedAt,
+  };
   TABLES.exercises.push(row);
+  return row;
+}
+
+function seedSessionSet(userId: string, exerciseId: string): FakeRow {
+  const row: FakeRow = {
+    id: nextFakeId("session_sets"),
+    user_id: userId,
+    session_id: nextFakeId("session"),
+    exercise_id: exerciseId,
+    set_number: 1,
+    weight: 100,
+    reps: 5,
+  };
+  TABLES.session_sets.push(row);
   return row;
 }
 
@@ -374,6 +403,8 @@ describe("api/mcp handler", () => {
     TABLES.workout_days.length = 0;
     TABLES.exercises.length = 0;
     TABLES.workout_day_exercises.length = 0;
+    TABLES.workout_day_exercise_scheme_history.length = 0;
+    TABLES.session_sets.length = 0;
     fakeRowSeq = 0;
     forcedError = null;
     seedSession("user-a", "token-a");
@@ -415,8 +446,10 @@ describe("api/mcp handler", () => {
       "create_day_template",
       "create_exercise",
       "delete_day_template",
+      "delete_exercise",
       "get_day_templates",
       "get_workout_history",
+      "list_exercises",
       "progression_for_exercise",
       "remove_exercise_from_day",
       "rename_day_template",
@@ -451,8 +484,10 @@ describe("api/mcp handler", () => {
       "create_day_template",
       "create_exercise",
       "delete_day_template",
+      "delete_exercise",
       "get_day_templates",
       "get_workout_history",
+      "list_exercises",
       "progression_for_exercise",
       "remove_exercise_from_day",
       "rename_day_template",
@@ -879,6 +914,163 @@ describe("api/mcp handler", () => {
       await client.close();
     });
 
+    it("list_exercises returns only the caller's own catalog, in create_exercise's own shape", async () => {
+      seedExercise("user-a", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "Bench Press");
+      seedExercise("user-b", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "Row");
+      const clientA = await connectAs("token-a");
+      const clientB = await connectAs("token-b");
+
+      const [resultA, resultB] = await Promise.all([
+        clientA.callTool({ name: "list_exercises", arguments: {} }),
+        clientB.callTool({ name: "list_exercises", arguments: {} }),
+      ]);
+
+      expect(resultA.isError).not.toBe(true);
+      expect(resultB.isError).not.toBe(true);
+      const [contentA] = resultA.content as [{ type: "text"; text: string }];
+      const [contentB] = resultB.content as [{ type: "text"; text: string }];
+      expect(JSON.parse(contentA.text)).toEqual([
+        { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", name: "Bench Press", cue: "", defaultSets: 3, defaultRepLow: 10, defaultRepHigh: 12 },
+      ]);
+      expect(JSON.parse(contentB.text)).toEqual([
+        { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", name: "Row", cue: "", defaultSets: 3, defaultRepLow: 10, defaultRepHigh: 12 },
+      ]);
+
+      await clientA.close();
+      await clientB.close();
+    });
+
+    it("list_exercises excludes soft-deleted exercises, mirroring get_day_templates' handling of soft-deleted days", async () => {
+      seedExercise("user-a", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "Bench Press");
+      seedExercise("user-a", "cccccccc-cccc-4ccc-8ccc-cccccccccccc", "Old Curl", "2026-09-01T00:00:00.000Z");
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "list_exercises", arguments: {} });
+
+      expect(result.isError).not.toBe(true);
+      const [content] = result.content as [{ type: "text"; text: string }];
+      expect(JSON.parse(content.text).map((e: { id: string }) => e.id)).toEqual(["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]);
+
+      await client.close();
+    });
+
+    it("delete_exercise soft-deletes an unused exercise and returns confirmation", async () => {
+      seedExercise("user-a", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "Bench Press");
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "delete_exercise", arguments: { exercise_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } });
+
+      expect(result.isError).not.toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: JSON.stringify({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", name: "Bench Press", deleted: true }, null, 2) },
+      ]);
+      const row = TABLES.exercises.find((e) => e.id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+      expect(row).toBeDefined();
+      expect(row?.deleted_at).toEqual(expect.any(String));
+
+      await client.close();
+    });
+
+    it("delete_exercise excludes the exercise from list_exercises once deleted", async () => {
+      seedExercise("user-a", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "Bench Press");
+      const client = await connectAs("token-a");
+
+      await client.callTool({ name: "delete_exercise", arguments: { exercise_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } });
+      const result = await client.callTool({ name: "list_exercises", arguments: {} });
+
+      expect(result.isError).not.toBe(true);
+      const [content] = result.content as [{ type: "text"; text: string }];
+      expect(JSON.parse(content.text)).toEqual([]);
+
+      await client.close();
+    });
+
+    it("delete_exercise rejects an exercise still attached to a day, instead of silently no-op'ing", async () => {
+      seedDay("user-a", "11111111-1111-4111-8111-111111111111", "Push");
+      seedExercise("user-a", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "Bench Press");
+      seedDayExercise("user-a", "11111111-1111-4111-8111-111111111111", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", 0);
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "delete_exercise", arguments: { exercise_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: "delete_exercise failed: Exercise aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa is attached to one or more days; use remove_exercise_from_day to detach it first.",
+        },
+      ]);
+      expect(TABLES.exercises.find((e) => e.id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")?.deleted_at).toBeNull();
+
+      await client.close();
+    });
+
+    it("delete_exercise rejects an exercise referenced by logged session_sets even when detached from every day", async () => {
+      seedExercise("user-a", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "Bench Press");
+      seedSessionSet("user-a", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "delete_exercise", arguments: { exercise_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "delete_exercise failed: Exercise aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa has logged sets or scheme history and cannot be deleted." },
+      ]);
+      expect(TABLES.exercises.find((e) => e.id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")?.deleted_at).toBeNull();
+
+      await client.close();
+    });
+
+    it("delete_exercise rejects an exercise referenced by scheme history even when detached from every day", async () => {
+      seedExercise("user-a", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "Bench Press");
+      TABLES.workout_day_exercise_scheme_history.push({
+        id: nextFakeId("hist"),
+        user_id: "user-a",
+        workout_day_id: "11111111-1111-4111-8111-111111111111",
+        exercise_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        target_sets: [{ weight: 225, reps: 5 }],
+      });
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "delete_exercise", arguments: { exercise_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "delete_exercise failed: Exercise aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa has logged sets or scheme history and cannot be deleted." },
+      ]);
+
+      await client.close();
+    });
+
+    it("delete_exercise cannot delete another user's exercise", async () => {
+      seedExercise("user-b", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "Row");
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "delete_exercise", arguments: { exercise_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" } });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "delete_exercise failed: Exercise bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb not found." },
+      ]);
+      expect(TABLES.exercises.find((e) => e.id === "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")?.deleted_at).toBeNull();
+
+      await client.close();
+    });
+
+    it("delete_exercise errors clearly on an already-deleted exercise id, instead of resurrecting it", async () => {
+      seedExercise("user-a", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "Bench Press", "2026-09-01T00:00:00.000Z");
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "delete_exercise", arguments: { exercise_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "delete_exercise failed: Exercise aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa not found." },
+      ]);
+
+      await client.close();
+    });
+
     it("add_exercise_to_day attaches an exercise the caller owns", async () => {
       seedDay("user-a", "11111111-1111-4111-8111-111111111111", "Push");
       seedExercise("user-a", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "Bench Press");
@@ -1232,6 +1424,16 @@ describe("api/mcp handler", () => {
         expect(result.isError).toBe(true);
         expect(result.content).toEqual([
           { type: "text", text: 'remove_exercise_from_day failed: expected a UUID for exercise_id, got "MCP Test Curl".' },
+        ]);
+        await client.close();
+      });
+
+      it("delete_exercise reports a malformed exercise_id distinctly from not-found", async () => {
+        const client = await connectAs("token-a");
+        const result = await client.callTool({ name: "delete_exercise", arguments: { exercise_id: "MCP Test Curl" } });
+        expect(result.isError).toBe(true);
+        expect(result.content).toEqual([
+          { type: "text", text: 'delete_exercise failed: expected a UUID for exercise_id, got "MCP Test Curl".' },
         ]);
         await client.close();
       });

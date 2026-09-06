@@ -139,6 +139,17 @@ export async function deleteDay(client: SupabaseClient, dayId: string): Promise<
   if (error) throw error;
 }
 
+export async function listExercises(client: SupabaseClient): Promise<Exercise[]> {
+  const { data, error } = await client.from("exercises").select("*").is("deleted_at", null).order("name");
+  if (error) throw error;
+  return (data ?? []).map(toExercise);
+}
+
+export async function deleteExercise(client: SupabaseClient, exerciseId: string): Promise<void> {
+  const { error } = await client.from("exercises").update({ deleted_at: new Date().toISOString() }).eq("id", exerciseId);
+  if (error) throw error;
+}
+
 export async function addExerciseToDay(client: SupabaseClient, dayId: string, exerciseId: string): Promise<void> {
   const { data: existing, error: selectError } = await client
     .from("workout_day_exercises")
@@ -197,10 +208,7 @@ export function createSupabaseDataLayer(): DataLayer {
 
   return {
     claimSeed: () => claimSeed(supabase),
-    async listExercises() {
-      const { data } = await supabase.from("exercises").select("*").order("name");
-      return (data ?? []).map(toExercise);
-    },
+    listExercises: () => listExercises(supabase),
     getExercise: (id) => fetchExercise(id),
     createExercise: (input) => createExercise(supabase, input),
     async getWorkoutDays() {

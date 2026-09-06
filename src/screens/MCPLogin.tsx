@@ -37,6 +37,15 @@ const TOOLS = [
     description:
       "Actual logged sets vs. the prescribed target in effect on each session's date, flagging under-/over-shooting on sets, reps, and weight. Optionally filter by day and/or date range.",
   },
+  {
+    name: "list_exercises",
+    description: "Every catalog exercise, including ones not attached to any day.",
+  },
+  {
+    name: "delete_exercise",
+    description:
+      "Soft-deletes a catalog exercise by id. Rejected if it's still attached to any day or referenced by logged sets/scheme history.",
+  },
 ];
 
 function selectOnFocus(e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) {
