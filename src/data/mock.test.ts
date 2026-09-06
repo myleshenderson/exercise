@@ -266,3 +266,131 @@ test("removeExerciseFromDay clears that exercise's scheme on the day", async () 
   await db.removeExerciseFromDay(day.id, ex.id);
   expect(await db.getDayExerciseTargets(day.id)).toEqual({});
 });
+
+test("createProgram creates a program and returns it", async () => {
+  const db = createMockDataLayer({ seed: false });
+  const program = await db.createProgram("Leg Day Progression");
+  expect(program).toEqual({ id: expect.any(String), name: "Leg Day Progression" });
+});
+
+test("addDayToProgram assigns a day to a program at position 0, then appends subsequent days", async () => {
+  const db = createMockDataLayer({ seed: false });
+  const program = await db.createProgram("Prep Phase");
+  const d1 = await db.createDay("Week 1");
+  const d2 = await db.createDay("Week 2");
+  await db.addDayToProgram(d1.id, program.id);
+  await db.addDayToProgram(d2.id, program.id);
+
+  const days = await db.getWorkoutDays();
+  const day1 = days.find((d) => d.id === d1.id)!;
+  const day2 = days.find((d) => d.id === d2.id)!;
+  expect(day1.programId).toBe(program.id);
+  expect(day1.programPosition).toBe(0);
+  expect(day2.programPosition).toBe(1);
+});
+
+test("a program's first day is available; the rest are not, until it's completed", async () => {
+  const db = createMockDataLayer({ seed: false });
+  const program = await db.createProgram("Prep Phase");
+  const d1 = await db.createDay("Week 1");
+  const d2 = await db.createDay("Week 2");
+  await db.addDayToProgram(d1.id, program.id);
+  await db.addDayToProgram(d2.id, program.id);
+
+  let days = await db.getWorkoutDays();
+  expect(days.find((d) => d.id === d1.id)?.isAvailable).toBe(true);
+  expect(days.find((d) => d.id === d2.id)?.isAvailable).toBe(false);
+
+  const session = await db.startSession(d1.id, "2026-06-01");
+  await db.logExercise(session.id, "some-exercise", [{ setNumber: 1, weight: 100, reps: 10 }]);
+
+  days = await db.getWorkoutDays();
+  expect(days.find((d) => d.id === d1.id)?.isAvailable).toBe(false);
+  expect(days.find((d) => d.id === d2.id)?.isAvailable).toBe(true);
+});
+
+test("an untracked day is always available and carries no program fields", async () => {
+  const db = createMockDataLayer({ seed: false });
+  const d = await db.createDay("Standalone");
+  const days = await db.getWorkoutDays();
+  const day = days.find((x) => x.id === d.id)!;
+  expect(day.isAvailable).toBe(true);
+  expect(day.programId).toBeNull();
+  expect(day.programName).toBeNull();
+  expect(day.programPosition).toBeNull();
+});
+
+test("getWorkoutDays reports the program's name on each member day", async () => {
+  const db = createMockDataLayer({ seed: false });
+  const program = await db.createProgram("Prep Phase");
+  const d1 = await db.createDay("Week 1");
+  await db.addDayToProgram(d1.id, program.id);
+  const days = await db.getWorkoutDays();
+  expect(days.find((d) => d.id === d1.id)?.programName).toBe("Prep Phase");
+});
+
+test("removeDayFromProgram reverts a day to untracked (always available)", async () => {
+  const db = createMockDataLayer({ seed: false });
+  const program = await db.createProgram("Prep Phase");
+  const d1 = await db.createDay("Week 1");
+  const d2 = await db.createDay("Week 2");
+  await db.addDayToProgram(d1.id, program.id);
+  await db.addDayToProgram(d2.id, program.id);
+  await db.removeDayFromProgram(d1.id);
+
+  const days = await db.getWorkoutDays();
+  const day1 = days.find((d) => d.id === d1.id)!;
+  expect(day1.programId).toBeNull();
+  expect(day1.isAvailable).toBe(true);
+  // d2 is now the sole member and still at its own stored position (1) —
+  // still the program's lowest position, so still available.
+  expect(days.find((d) => d.id === d2.id)?.isAvailable).toBe(true);
+});
+
+test("renameProgram renames an existing program", async () => {
+  const db = createMockDataLayer({ seed: false });
+  const program = await db.createProgram("Prep Phase");
+  await db.renameProgram(program.id, "Prep Phase (v2)");
+  const d1 = await db.createDay("Week 1");
+  await db.addDayToProgram(d1.id, program.id);
+  const days = await db.getWorkoutDays();
+  expect(days.find((d) => d.id === d1.id)?.programName).toBe("Prep Phase (v2)");
+});
+
+test("deleteProgram soft-deletes: member days keep their program_id but revert to untracked behavior", async () => {
+  const db = createMockDataLayer({ seed: false });
+  const program = await db.createProgram("Prep Phase");
+  const d1 = await db.createDay("Week 1");
+  const d2 = await db.createDay("Week 2");
+  await db.addDayToProgram(d1.id, program.id);
+  await db.addDayToProgram(d2.id, program.id);
+
+  await db.deleteProgram(program.id);
+
+  const days = await db.getWorkoutDays();
+  const day1 = days.find((d) => d.id === d1.id)!;
+  const day2 = days.find((d) => d.id === d2.id)!;
+  // Both untouched-membership days become "always available" once their
+  // program is gone, and no longer report a program name.
+  expect(day1.isAvailable).toBe(true);
+  expect(day2.isAvailable).toBe(true);
+  expect(day1.programName).toBeNull();
+});
+
+test("reorderProgramDays rewrites program_position from the given order", async () => {
+  const db = createMockDataLayer({ seed: false });
+  const program = await db.createProgram("Prep Phase");
+  const d1 = await db.createDay("Week 1");
+  const d2 = await db.createDay("Week 2");
+  await db.addDayToProgram(d1.id, program.id);
+  await db.addDayToProgram(d2.id, program.id);
+
+  await db.reorderProgramDays(program.id, [d2.id, d1.id]);
+
+  const days = await db.getWorkoutDays();
+  expect(days.find((d) => d.id === d2.id)?.programPosition).toBe(0);
+  expect(days.find((d) => d.id === d1.id)?.programPosition).toBe(1);
+  // reordering changes which day is "first" and therefore available.
+  expect(days.find((d) => d.id === d2.id)?.isAvailable).toBe(true);
+  expect(days.find((d) => d.id === d1.id)?.isAvailable).toBe(false);
+});

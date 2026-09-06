@@ -7,11 +7,20 @@ export interface Exercise {
   defaultRepHigh: number;
 }
 
+export interface Program {
+  id: string;
+  name: string;
+}
+
 export interface WorkoutDay {
   id: string;
   name: string;
   position: number;
   exerciseIds: string[]; // ordered
+  programId: string | null;
+  programPosition: number | null;
+  programName: string | null; // null when programId is null, or when the program is soft-deleted
+  isAvailable: boolean; // always true when programId is null; for a programmed day, true only for that program's current suggested day
 }
 
 export interface SetEntry {

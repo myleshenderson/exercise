@@ -10,6 +10,12 @@ import {
   deleteDay,
   addExerciseToDay,
   removeExerciseFromDay,
+  createProgram,
+  renameProgram,
+  deleteProgram,
+  addDayToProgram,
+  removeDayFromProgram,
+  reorderProgramDays,
   logExercise,
 } from "./supabase";
 
@@ -27,7 +33,7 @@ type Mode = "list" | "single" | "maybeSingle";
 function makeFakeClient(tables: Record<string, Row[]>): SupabaseClient {
   let seq = 0;
 
-  function builder(table: Row[], op: "select" | "insert" | "update" | "delete", payload?: unknown) {
+  function builder(table: Row[], op: "select" | "insert" | "update" | "delete", payload?: unknown, tableName?: string) {
     const filters: Array<[string, unknown]> = [];
     let orderCol: string | undefined;
     let orderAsc = true;
@@ -64,6 +70,31 @@ function makeFakeClient(tables: Record<string, Row[]>): SupabaseClient {
       }
       if (op === "update") {
         const targets = matched(table);
+        // Mirror workout_days_program_position_uq (a real, immediately-enforced
+        // partial unique index on (program_id, program_position) where
+        // program_id is not null): reject an update that would leave two
+        // distinct rows sharing a non-null program_id and equal
+        // program_position. Scoped to workout_days only, and only to this one
+        // constraint - not a general constraint-enforcement engine.
+        if (tableName === "workout_days") {
+          for (const row of targets) {
+            const merged = { ...row, ...(payload as Record<string, unknown>) };
+            if (merged.program_id != null) {
+              const conflict = table.some(
+                (other) =>
+                  other !== row &&
+                  other.program_id === merged.program_id &&
+                  other.program_position === merged.program_position,
+              );
+              if (conflict) {
+                return {
+                  data: null,
+                  error: { code: "23505", message: 'duplicate key value violates unique constraint "workout_days_program_position_uq"' },
+                };
+              }
+            }
+          }
+        }
         for (const row of targets) Object.assign(row, payload as Record<string, unknown>);
         return finish(targets);
       }
@@ -109,10 +140,10 @@ function makeFakeClient(tables: Record<string, Row[]>): SupabaseClient {
     from: (tableName: string) => {
       const table = (tables[tableName] ??= []);
       return {
-        select: () => builder(table, "select"),
-        insert: (payload: unknown) => builder(table, "insert", payload),
-        update: (payload: unknown) => builder(table, "update", payload),
-        delete: () => builder(table, "delete"),
+        select: () => builder(table, "select", undefined, tableName),
+        insert: (payload: unknown) => builder(table, "insert", payload, tableName),
+        update: (payload: unknown) => builder(table, "update", payload, tableName),
+        delete: () => builder(table, "delete", undefined, tableName),
       };
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -150,11 +181,14 @@ describe("claimSeed", () => {
 });
 
 describe("createDay", () => {
-  test("inserts a workout_days row and returns it with an empty exercise list", async () => {
+  test("inserts a workout_days row and returns it with an empty exercise list, untracked", async () => {
     const tables: Record<string, Row[]> = { workout_days: [] };
     const client = makeFakeClient(tables);
     const day = await createDay(client, "Push Day");
-    expect(day).toEqual({ id: expect.any(String), name: "Push Day", position: 0, exerciseIds: [] });
+    expect(day).toEqual({
+      id: expect.any(String), name: "Push Day", position: 0, exerciseIds: [],
+      programId: null, programPosition: null, programName: null, isAvailable: true,
+    });
     expect(tables.workout_days).toHaveLength(1);
   });
 });
@@ -288,6 +322,111 @@ describe("removeExerciseFromDay", () => {
     const client = makeFakeClient(tables);
     await removeExerciseFromDay(client, "day-1", "ex-1");
     expect(tables.workout_day_exercises.map((r) => r.exercise_id)).toEqual(["ex-2"]);
+  });
+});
+
+describe("createProgram", () => {
+  test("inserts a programs row and returns it", async () => {
+    const tables: Record<string, Row[]> = { programs: [] };
+    const client = makeFakeClient(tables);
+    const program = await createProgram(client, "Prep Phase");
+    expect(program).toEqual({ id: expect.any(String), name: "Prep Phase" });
+    expect(tables.programs).toHaveLength(1);
+  });
+});
+
+describe("renameProgram", () => {
+  test("updates the name column on the matching row", async () => {
+    const tables: Record<string, Row[]> = { programs: [{ id: "prog-1", name: "Prep Phase" }] };
+    const client = makeFakeClient(tables);
+    await renameProgram(client, "prog-1", "Prep Phase (v2)");
+    expect(tables.programs[0].name).toBe("Prep Phase (v2)");
+  });
+});
+
+describe("deleteProgram", () => {
+  test("soft-deletes by setting deleted_at, leaving the row and its days' assignments in place", async () => {
+    const tables: Record<string, Row[]> = {
+      programs: [{ id: "prog-1", name: "Prep Phase", deleted_at: null }],
+      workout_days: [{ id: "day-1", name: "Week 1", program_id: "prog-1", program_position: 0 }],
+    };
+    const client = makeFakeClient(tables);
+    await deleteProgram(client, "prog-1");
+    expect(tables.programs[0].deleted_at).toEqual(expect.any(String));
+    expect(tables.workout_days[0].program_id).toBe("prog-1");
+    expect(tables.workout_days[0].program_position).toBe(0);
+  });
+});
+
+describe("addDayToProgram", () => {
+  test("assigns program_id and program_position 0 when the program has no days yet", async () => {
+    const tables: Record<string, Row[]> = {
+      workout_days: [{ id: "day-1", name: "Week 1", program_id: null, program_position: null }],
+    };
+    const client = makeFakeClient(tables);
+    await addDayToProgram(client, "day-1", "prog-1");
+    expect(tables.workout_days[0]).toMatchObject({ program_id: "prog-1", program_position: 0 });
+  });
+
+  test("appends after the current highest program_position", async () => {
+    const tables: Record<string, Row[]> = {
+      workout_days: [
+        { id: "day-1", name: "Week 1", program_id: "prog-1", program_position: 0 },
+        { id: "day-2", name: "Week 2", program_id: null, program_position: null },
+      ],
+    };
+    const client = makeFakeClient(tables);
+    await addDayToProgram(client, "day-2", "prog-1");
+    expect(tables.workout_days[1]).toMatchObject({ program_id: "prog-1", program_position: 1 });
+  });
+});
+
+describe("removeDayFromProgram", () => {
+  test("clears program_id and program_position on the matching row only", async () => {
+    const tables: Record<string, Row[]> = {
+      workout_days: [
+        { id: "day-1", name: "Week 1", program_id: "prog-1", program_position: 0 },
+        { id: "day-2", name: "Week 2", program_id: "prog-1", program_position: 1 },
+      ],
+    };
+    const client = makeFakeClient(tables);
+    await removeDayFromProgram(client, "day-1");
+    expect(tables.workout_days[0]).toMatchObject({ program_id: null, program_position: null });
+    expect(tables.workout_days[1]).toMatchObject({ program_id: "prog-1", program_position: 1 });
+  });
+});
+
+describe("reorderProgramDays", () => {
+  test("rewrites program_position from the given order, for that program's days only", async () => {
+    const tables: Record<string, Row[]> = {
+      workout_days: [
+        { id: "day-1", name: "Week 1", program_id: "prog-1", program_position: 0 },
+        { id: "day-2", name: "Week 2", program_id: "prog-1", program_position: 1 },
+      ],
+    };
+    const client = makeFakeClient(tables);
+    await reorderProgramDays(client, "prog-1", ["day-2", "day-1"]);
+    expect(tables.workout_days.find((r) => r.id === "day-2")?.program_position).toBe(0);
+    expect(tables.workout_days.find((r) => r.id === "day-1")?.program_position).toBe(1);
+  });
+
+  // Regression test for the collision this function used to hit on almost
+  // every real reorder: swapping day-1 (position 0) and day-2 (position 1)
+  // via a naive single-phase write updates day-2 to position 0 first, which
+  // the fake client's uniqueness check (mirroring
+  // workout_days_program_position_uq) rejects because day-1 is still at
+  // position 0. The two-phase parking write must not hit that collision.
+  test("swaps two already-assigned days' positions without a uniqueness collision", async () => {
+    const tables: Record<string, Row[]> = {
+      workout_days: [
+        { id: "day-1", name: "Week 1", program_id: "prog-1", program_position: 0 },
+        { id: "day-2", name: "Week 2", program_id: "prog-1", program_position: 1 },
+      ],
+    };
+    const client = makeFakeClient(tables);
+    await expect(reorderProgramDays(client, "prog-1", ["day-2", "day-1"])).resolves.toBeUndefined();
+    expect(tables.workout_days.find((r) => r.id === "day-2")?.program_position).toBe(0);
+    expect(tables.workout_days.find((r) => r.id === "day-1")?.program_position).toBe(1);
   });
 });
 

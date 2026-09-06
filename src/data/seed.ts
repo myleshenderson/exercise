@@ -21,10 +21,12 @@ export const seedDays: WorkoutDay[] = [
   {
     id: "leg-day", name: "Leg Day", position: 0,
     exerciseIds: ["leg-press", "leg-curl", "leg-extension", "seated-calf-raise", "hip-thrust", "core-crunch"],
+    programId: null, programPosition: null, programName: null, isAvailable: true,
   },
   {
     id: "upper-day", name: "Upper Day", position: 1,
     exerciseIds: ["chest-press", "seated-row", "shoulder-press", "lat-pulldown", "lateral-raise", "triceps-pushdown"],
+    programId: null, programPosition: null, programName: null, isAvailable: true,
   },
 ];
 

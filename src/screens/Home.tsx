@@ -11,6 +11,7 @@ export default function Home() {
   const [lastByDay, setLastByDay] = useState<Record<string, string | null>>({});
   const [sessionForDate, setSessionForDate] = useState<Record<string, Session | null>>({});
   const [date, setDate] = useState(today());
+  const [expandedPrograms, setExpandedPrograms] = useState<Record<string, boolean>>({});
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -47,6 +48,55 @@ export default function Home() {
     navigate(`/session/${session.id}`);
   }
 
+  function dayCard(d: WorkoutDay) {
+    const existing = sessionForDate[d.id];
+    const loggedCount = existing?.exercises.length ?? 0;
+
+    let cardClass = "w-full rounded-xl border p-4 text-left active:bg-gray-100";
+    let subtitleClass = "text-sm text-gray-500";
+    let subtitle = lastByDay[d.id] ? `Last done ${formatSessionDate(lastByDay[d.id]!)}` : "Not done yet";
+    let indicator: ReactNode = null;
+
+    if (existing && loggedCount > 0) {
+      cardClass = "w-full rounded-xl border border-green-200 bg-green-50 p-4 text-left active:bg-green-100";
+      subtitleClass = "text-sm text-green-800";
+      subtitle = `Resume · ${loggedCount} exercise${loggedCount === 1 ? "" : "s"} logged`;
+      indicator = (
+        <span aria-label="logged" className="shrink-0 text-green-600">
+          ✓
+        </span>
+      );
+    } else if (existing) {
+      cardClass = "w-full rounded-xl border border-blue-200 bg-blue-50 p-4 text-left active:bg-blue-100";
+      subtitleClass = "text-sm text-blue-800";
+      subtitle = "In progress — resume";
+      indicator = (
+        <span aria-label="in progress" className="shrink-0 text-blue-600">
+          ●
+        </span>
+      );
+    }
+
+    return (
+      <button key={d.id} onClick={() => start(d.id)} className={cardClass}>
+        <span className="flex items-center gap-2">
+          <span className="block flex-1 text-lg font-semibold">{d.name}</span>
+          {indicator}
+        </span>
+        <span className={`block ${subtitleClass}`}>{subtitle}</span>
+      </button>
+    );
+  }
+
+  const untracked = days.filter((d) => d.programId === null);
+  const programGroups = new Map<string, { name: string; days: WorkoutDay[] }>();
+  for (const d of days) {
+    if (d.programId === null) continue;
+    const group = programGroups.get(d.programId) ?? { name: d.programName ?? "", days: [] };
+    group.days.push(d);
+    programGroups.set(d.programId, group);
+  }
+
   return (
     <div className="p-4 space-y-3">
       <h1 className="text-2xl font-bold">Today's Workout</h1>
@@ -68,45 +118,30 @@ export default function Home() {
           className="mt-1 block w-full rounded-lg border p-2 text-base text-black"
         />
       </label>
-      {days.map((d) => {
-        const existing = sessionForDate[d.id];
-        const loggedCount = existing?.exercises.length ?? 0;
 
-        let cardClass = "w-full rounded-xl border p-4 text-left active:bg-gray-100";
-        let subtitleClass = "text-sm text-gray-500";
-        let subtitle = lastByDay[d.id] ? `Last done ${formatSessionDate(lastByDay[d.id]!)}` : "Not done yet";
-        let indicator: ReactNode = null;
-
-        if (existing && loggedCount > 0) {
-          cardClass = "w-full rounded-xl border border-green-200 bg-green-50 p-4 text-left active:bg-green-100";
-          subtitleClass = "text-sm text-green-800";
-          subtitle = `Resume · ${loggedCount} exercise${loggedCount === 1 ? "" : "s"} logged`;
-          indicator = (
-            <span aria-label="logged" className="shrink-0 text-green-600">
-              ✓
-            </span>
-          );
-        } else if (existing) {
-          cardClass = "w-full rounded-xl border border-blue-200 bg-blue-50 p-4 text-left active:bg-blue-100";
-          subtitleClass = "text-sm text-blue-800";
-          subtitle = "In progress — resume";
-          indicator = (
-            <span aria-label="in progress" className="shrink-0 text-blue-600">
-              ●
-            </span>
-          );
-        }
-
+      {[...programGroups.entries()].map(([programId, group]) => {
+        const suggested = group.days.find((d) => d.isAvailable);
+        const rest = group.days.filter((d) => d !== suggested).sort((a, b) => (a.programPosition ?? 0) - (b.programPosition ?? 0));
+        const expanded = expandedPrograms[programId] ?? false;
         return (
-          <button key={d.id} onClick={() => start(d.id)} className={cardClass}>
-            <span className="flex items-center gap-2">
-              <span className="block flex-1 text-lg font-semibold">{d.name}</span>
-              {indicator}
-            </span>
-            <span className={`block ${subtitleClass}`}>{subtitle}</span>
-          </button>
+          <div key={programId} className="space-y-2">
+            {suggested && dayCard(suggested)}
+            {rest.length > 0 && (
+              <>
+                <button
+                  className="text-sm text-gray-500 underline"
+                  onClick={() => setExpandedPrograms((prev) => ({ ...prev, [programId]: !expanded }))}
+                >
+                  {expanded ? "hide" : `show all ${group.days.length} days in ${group.name}`}
+                </button>
+                {expanded && <div className="space-y-2 opacity-70">{rest.map(dayCard)}</div>}
+              </>
+            )}
+          </div>
         );
       })}
+
+      {untracked.map(dayCard)}
     </div>
   );
 }
