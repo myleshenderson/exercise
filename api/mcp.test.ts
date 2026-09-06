@@ -666,7 +666,10 @@ describe("api/mcp handler", () => {
       expect(result.isError).not.toBe(true);
       const [content] = result.content as [{ type: "text"; text: string }];
       const day = JSON.parse(content.text);
-      expect(day).toEqual({ id: expect.any(String), name: "Pull Day", position: 0, exerciseIds: [] });
+      expect(day).toEqual({
+        id: expect.any(String), name: "Pull Day", position: 0, exerciseIds: [],
+        programId: null, programPosition: null, programName: null, isAvailable: true,
+      });
       expect(TABLES.workout_days.find((d) => d.id === day.id)?.user_id).toBe("user-a");
 
       await client.close();

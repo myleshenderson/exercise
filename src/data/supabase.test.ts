@@ -10,6 +10,12 @@ import {
   deleteDay,
   addExerciseToDay,
   removeExerciseFromDay,
+  createProgram,
+  renameProgram,
+  deleteProgram,
+  addDayToProgram,
+  removeDayFromProgram,
+  reorderProgramDays,
 } from "./supabase";
 
 interface Row {
@@ -149,11 +155,14 @@ describe("claimSeed", () => {
 });
 
 describe("createDay", () => {
-  test("inserts a workout_days row and returns it with an empty exercise list", async () => {
+  test("inserts a workout_days row and returns it with an empty exercise list, untracked", async () => {
     const tables: Record<string, Row[]> = { workout_days: [] };
     const client = makeFakeClient(tables);
     const day = await createDay(client, "Push Day");
-    expect(day).toEqual({ id: expect.any(String), name: "Push Day", position: 0, exerciseIds: [] });
+    expect(day).toEqual({
+      id: expect.any(String), name: "Push Day", position: 0, exerciseIds: [],
+      programId: null, programPosition: null, programName: null, isAvailable: true,
+    });
     expect(tables.workout_days).toHaveLength(1);
   });
 });
@@ -287,5 +296,91 @@ describe("removeExerciseFromDay", () => {
     const client = makeFakeClient(tables);
     await removeExerciseFromDay(client, "day-1", "ex-1");
     expect(tables.workout_day_exercises.map((r) => r.exercise_id)).toEqual(["ex-2"]);
+  });
+});
+
+describe("createProgram", () => {
+  test("inserts a programs row and returns it", async () => {
+    const tables: Record<string, Row[]> = { programs: [] };
+    const client = makeFakeClient(tables);
+    const program = await createProgram(client, "Prep Phase");
+    expect(program).toEqual({ id: expect.any(String), name: "Prep Phase" });
+    expect(tables.programs).toHaveLength(1);
+  });
+});
+
+describe("renameProgram", () => {
+  test("updates the name column on the matching row", async () => {
+    const tables: Record<string, Row[]> = { programs: [{ id: "prog-1", name: "Prep Phase" }] };
+    const client = makeFakeClient(tables);
+    await renameProgram(client, "prog-1", "Prep Phase (v2)");
+    expect(tables.programs[0].name).toBe("Prep Phase (v2)");
+  });
+});
+
+describe("deleteProgram", () => {
+  test("soft-deletes by setting deleted_at, leaving the row and its days' assignments in place", async () => {
+    const tables: Record<string, Row[]> = {
+      programs: [{ id: "prog-1", name: "Prep Phase", deleted_at: null }],
+      workout_days: [{ id: "day-1", name: "Week 1", program_id: "prog-1", program_position: 0 }],
+    };
+    const client = makeFakeClient(tables);
+    await deleteProgram(client, "prog-1");
+    expect(tables.programs[0].deleted_at).toEqual(expect.any(String));
+    expect(tables.workout_days[0].program_id).toBe("prog-1");
+    expect(tables.workout_days[0].program_position).toBe(0);
+  });
+});
+
+describe("addDayToProgram", () => {
+  test("assigns program_id and program_position 0 when the program has no days yet", async () => {
+    const tables: Record<string, Row[]> = {
+      workout_days: [{ id: "day-1", name: "Week 1", program_id: null, program_position: null }],
+    };
+    const client = makeFakeClient(tables);
+    await addDayToProgram(client, "day-1", "prog-1");
+    expect(tables.workout_days[0]).toMatchObject({ program_id: "prog-1", program_position: 0 });
+  });
+
+  test("appends after the current highest program_position", async () => {
+    const tables: Record<string, Row[]> = {
+      workout_days: [
+        { id: "day-1", name: "Week 1", program_id: "prog-1", program_position: 0 },
+        { id: "day-2", name: "Week 2", program_id: null, program_position: null },
+      ],
+    };
+    const client = makeFakeClient(tables);
+    await addDayToProgram(client, "day-2", "prog-1");
+    expect(tables.workout_days[1]).toMatchObject({ program_id: "prog-1", program_position: 1 });
+  });
+});
+
+describe("removeDayFromProgram", () => {
+  test("clears program_id and program_position on the matching row only", async () => {
+    const tables: Record<string, Row[]> = {
+      workout_days: [
+        { id: "day-1", name: "Week 1", program_id: "prog-1", program_position: 0 },
+        { id: "day-2", name: "Week 2", program_id: "prog-1", program_position: 1 },
+      ],
+    };
+    const client = makeFakeClient(tables);
+    await removeDayFromProgram(client, "day-1");
+    expect(tables.workout_days[0]).toMatchObject({ program_id: null, program_position: null });
+    expect(tables.workout_days[1]).toMatchObject({ program_id: "prog-1", program_position: 1 });
+  });
+});
+
+describe("reorderProgramDays", () => {
+  test("rewrites program_position from the given order, for that program's days only", async () => {
+    const tables: Record<string, Row[]> = {
+      workout_days: [
+        { id: "day-1", name: "Week 1", program_id: "prog-1", program_position: 0 },
+        { id: "day-2", name: "Week 2", program_id: "prog-1", program_position: 1 },
+      ],
+    };
+    const client = makeFakeClient(tables);
+    await reorderProgramDays(client, "prog-1", ["day-2", "day-1"]);
+    expect(tables.workout_days.find((r) => r.id === "day-2")?.program_position).toBe(0);
+    expect(tables.workout_days.find((r) => r.id === "day-1")?.program_position).toBe(1);
   });
 });
