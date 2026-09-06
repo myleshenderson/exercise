@@ -26,12 +26,13 @@ interface FakeRow {
   [key: string]: unknown;
 }
 
-type FakeTableName = "workout_days" | "exercises" | "workout_day_exercises";
+type FakeTableName = "workout_days" | "exercises" | "workout_day_exercises" | "workout_day_exercise_scheme_history";
 
 const TABLES: Record<FakeTableName, FakeRow[]> = {
   workout_days: [],
   exercises: [],
   workout_day_exercises: [],
+  workout_day_exercise_scheme_history: [],
 };
 let fakeRowSeq = 0;
 function nextFakeId(prefix: string): string {
