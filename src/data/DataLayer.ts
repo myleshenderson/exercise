@@ -5,6 +5,12 @@ export interface DataLayer {
   getExercise(id: string): Promise<Exercise | null>;
   createExercise(input: Omit<Exercise, "id">): Promise<Exercise>;
 
+  // Atomically claims the right to run first-login seeding for the current
+  // user: returns true for exactly one caller among any concurrent callers,
+  // false for every other one (they must not seed). Guards against the
+  // ensureSeeded() race — see exercise-c9l and 0014_seed_claims.sql.
+  claimSeed(): Promise<boolean>;
+
   getWorkoutDays(): Promise<WorkoutDay[]>;
   getDayExercises(dayId: string): Promise<Exercise[]>;
   createDay(name: string): Promise<WorkoutDay>;
