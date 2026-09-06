@@ -418,6 +418,7 @@ describe("api/mcp handler", () => {
 
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
+      "add_day_to_program",
       "add_exercise_to_day",
       "adherence_for_day",
       "create_day_template",
@@ -428,10 +429,12 @@ describe("api/mcp handler", () => {
       "get_day_templates",
       "get_workout_history",
       "progression_for_exercise",
+      "remove_day_from_program",
       "remove_exercise_from_day",
       "rename_day_template",
       "rename_program",
       "reorder_day_exercises",
+      "reorder_program_days",
       "scheme_history_for_day_exercise",
       "set_day_exercise_scheme",
       "sets_for_exercise",
@@ -457,6 +460,7 @@ describe("api/mcp handler", () => {
 
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
+      "add_day_to_program",
       "add_exercise_to_day",
       "adherence_for_day",
       "create_day_template",
@@ -467,10 +471,12 @@ describe("api/mcp handler", () => {
       "get_day_templates",
       "get_workout_history",
       "progression_for_exercise",
+      "remove_day_from_program",
       "remove_exercise_from_day",
       "rename_day_template",
       "rename_program",
       "reorder_day_exercises",
+      "reorder_program_days",
       "scheme_history_for_day_exercise",
       "set_day_exercise_scheme",
       "sets_for_exercise",
@@ -680,10 +686,7 @@ describe("api/mcp handler", () => {
       expect(result.isError).not.toBe(true);
       const [content] = result.content as [{ type: "text"; text: string }];
       const day = JSON.parse(content.text);
-      expect(day).toEqual({
-        id: expect.any(String), name: "Pull Day", position: 0, exerciseIds: [],
-        programId: null, programPosition: null, programName: null, isAvailable: true,
-      });
+      expect(day).toEqual({ id: expect.any(String), name: "Pull Day", position: 0, exerciseIds: [], programId: null });
       expect(TABLES.workout_days.find((d) => d.id === day.id)?.user_id).toBe("user-a");
 
       await client.close();
@@ -1268,6 +1271,175 @@ describe("api/mcp handler", () => {
 
       expect(result.isError).toBe(true);
       expect(result.content).toEqual([{ type: "text", text: "delete_program failed: Program prog-a not found." }]);
+
+      await client.close();
+    });
+
+    it("add_day_to_program assigns an untracked day to a program at position 0", async () => {
+      seedProgram("user-a", "prog-a", "Prep Phase");
+      seedDay("user-a", "day-a", "Week 1");
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "add_day_to_program", arguments: { day_id: "day-a", program_id: "prog-a" } });
+
+      expect(result.isError).not.toBe(true);
+      expect(TABLES.workout_days[0]).toMatchObject({ program_id: "prog-a", program_position: 0 });
+
+      await client.close();
+    });
+
+    it("add_day_to_program appends after the current highest program_position", async () => {
+      seedProgram("user-a", "prog-a", "Prep Phase");
+      seedDay("user-a", "day-a", "Week 1");
+      seedDay("user-a", "day-b", "Week 2");
+      TABLES.workout_days[0].program_id = "prog-a";
+      TABLES.workout_days[0].program_position = 0;
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "add_day_to_program", arguments: { day_id: "day-b", program_id: "prog-a" } });
+
+      expect(result.isError).not.toBe(true);
+      expect(TABLES.workout_days.find((d) => d.id === "day-b")).toMatchObject({ program_id: "prog-a", program_position: 1 });
+
+      await client.close();
+    });
+
+    it("add_day_to_program rejects a day that's already in a program", async () => {
+      seedProgram("user-a", "prog-a", "Prep Phase");
+      seedDay("user-a", "day-a", "Week 1");
+      TABLES.workout_days[0].program_id = "prog-a";
+      TABLES.workout_days[0].program_position = 0;
+      seedProgram("user-a", "prog-b", "Other Phase");
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "add_day_to_program", arguments: { day_id: "day-a", program_id: "prog-b" } });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "add_day_to_program failed: Day day-a is already in program prog-a; remove it first." },
+      ]);
+
+      await client.close();
+    });
+
+    it("add_day_to_program errors on a nonexistent program id", async () => {
+      seedDay("user-a", "day-a", "Week 1");
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "add_day_to_program", arguments: { day_id: "day-a", program_id: "no-such-program" } });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "add_day_to_program failed: Program no-such-program not found." },
+      ]);
+
+      await client.close();
+    });
+
+    it("add_day_to_program cannot attach another user's day", async () => {
+      seedProgram("user-a", "prog-a", "Prep Phase");
+      seedDay("user-b", "day-b", "Week 1");
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "add_day_to_program", arguments: { day_id: "day-b", program_id: "prog-a" } });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([{ type: "text", text: "add_day_to_program failed: Day template day-b not found." }]);
+
+      await client.close();
+    });
+
+    it("remove_day_from_program clears assignment", async () => {
+      seedProgram("user-a", "prog-a", "Prep Phase");
+      seedDay("user-a", "day-a", "Week 1");
+      TABLES.workout_days[0].program_id = "prog-a";
+      TABLES.workout_days[0].program_position = 0;
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "remove_day_from_program", arguments: { day_id: "day-a" } });
+
+      expect(result.isError).not.toBe(true);
+      expect(TABLES.workout_days[0]).toMatchObject({ program_id: null, program_position: null });
+
+      await client.close();
+    });
+
+    it("reorder_program_days rewrites order for the program's current membership", async () => {
+      seedProgram("user-a", "prog-a", "Prep Phase");
+      seedDay("user-a", "day-a", "Week 1");
+      seedDay("user-a", "day-b", "Week 2");
+      TABLES.workout_days[0].program_id = "prog-a";
+      TABLES.workout_days[0].program_position = 0;
+      TABLES.workout_days[1].program_id = "prog-a";
+      TABLES.workout_days[1].program_position = 1;
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "reorder_program_days",
+        arguments: { program_id: "prog-a", day_ids: ["day-b", "day-a"] },
+      });
+
+      expect(result.isError).not.toBe(true);
+      expect(TABLES.workout_days.find((d) => d.id === "day-b")?.program_position).toBe(0);
+      expect(TABLES.workout_days.find((d) => d.id === "day-a")?.program_position).toBe(1);
+
+      await client.close();
+    });
+
+    it("reorder_program_days rejects a list missing a current member", async () => {
+      seedProgram("user-a", "prog-a", "Prep Phase");
+      seedDay("user-a", "day-a", "Week 1");
+      seedDay("user-a", "day-b", "Week 2");
+      TABLES.workout_days[0].program_id = "prog-a";
+      TABLES.workout_days[0].program_position = 0;
+      TABLES.workout_days[1].program_id = "prog-a";
+      TABLES.workout_days[1].program_position = 1;
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({
+        name: "reorder_program_days",
+        arguments: { program_id: "prog-a", day_ids: ["day-a"] },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text:
+            "reorder_program_days failed: day_ids missing [day-b]. Use add_day_to_program/remove_day_from_program to change membership instead.",
+        },
+      ]);
+
+      await client.close();
+    });
+
+    it("create_day_template with program_id appends the new day into that program", async () => {
+      seedProgram("user-a", "prog-a", "Prep Phase");
+      seedDay("user-a", "day-a", "Week 1");
+      TABLES.workout_days[0].program_id = "prog-a";
+      TABLES.workout_days[0].program_position = 0;
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "create_day_template", arguments: { name: "Week 2", program_id: "prog-a" } });
+
+      expect(result.isError).not.toBe(true);
+      const [content] = result.content as [{ type: "text"; text: string }];
+      const day = JSON.parse(content.text);
+      expect(TABLES.workout_days.find((d) => d.id === day.id)).toMatchObject({ program_id: "prog-a", program_position: 1 });
+
+      await client.close();
+    });
+
+    it("create_day_template errors on a nonexistent program_id without creating the day", async () => {
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "create_day_template", arguments: { name: "Week 1", program_id: "no-such-program" } });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "create_day_template failed: Program no-such-program not found." },
+      ]);
+      expect(TABLES.workout_days).toHaveLength(0);
 
       await client.close();
     });

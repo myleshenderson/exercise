@@ -18,6 +18,9 @@ import {
   createProgram,
   renameProgram,
   deleteProgram,
+  addDayToProgram,
+  removeDayFromProgram,
+  reorderProgramDays,
 } from "../src/data/supabase.js";
 
 // Vercel's Node runtime pre-parses JSON request bodies onto req.body before
@@ -72,14 +75,14 @@ function createUserScopedClient(accessToken: string): SupabaseClient {
 async function findDay(
   client: SupabaseClient,
   dayId: string,
-): Promise<{ id: string; name: string; position: number } | null> {
+): Promise<{ id: string; name: string; position: number; program_id: string | null } | null> {
   const { data } = await client
     .from("workout_days")
-    .select("id, name, position")
+    .select("id, name, position, program_id")
     .eq("id", dayId)
     .is("deleted_at", null)
     .maybeSingle();
-  return (data as { id: string; name: string; position: number } | null) ?? null;
+  return (data as { id: string; name: string; position: number; program_id: string | null } | null) ?? null;
 }
 
 async function findExercise(client: SupabaseClient, exerciseId: string): Promise<{ id: string } | null> {
@@ -309,13 +312,24 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
     "create_day_template",
     {
       title: "Create day template",
-      description: "Creates a new, empty day template for the authenticated user. Returns the new day, including its id.",
-      inputSchema: { name: z.string() },
+      description:
+        "Creates a new, empty day template for the authenticated user. Returns the new day, including its id. If program_id is given, appends the day to the end of that program.",
+      inputSchema: { name: z.string(), program_id: z.string().optional() },
     },
-    async ({ name }) =>
+    async ({ name, program_id }) =>
       withWriteTool("create_day_template", async (accessToken) => {
-        const day = await createDay(createUserScopedClient(accessToken), name);
-        return toolResult(day);
+        const client = createUserScopedClient(accessToken);
+        if (program_id) {
+          const program = await findProgram(client, program_id);
+          if (!program) return toolError(`create_day_template failed: Program ${program_id} not found.`);
+        }
+        const day = await createDay(client, name);
+        if (program_id) await addDayToProgram(client, day.id, program_id);
+        // Explicit subset, not the raw `day` object: `day.programPosition`/`programName`/
+        // `isAvailable` reflect its state from BEFORE the addDayToProgram call above (createDay
+        // always returns an untracked day), so they'd be stale/wrong here. programId is the one
+        // piece of program state worth echoing back, and is known directly from the input.
+        return toolResult({ id: day.id, name: day.name, position: day.position, exerciseIds: day.exerciseIds, programId: program_id ?? null });
       }),
   );
 
@@ -573,6 +587,89 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         if (!program) return toolError(`delete_program failed: Program ${program_id} not found.`);
         await deleteProgram(client, program_id);
         return toolResult({ id: program.id, name: program.name, deleted: true });
+      }),
+  );
+
+  server.registerTool(
+    "add_day_to_program",
+    {
+      title: "Add day to program",
+      description:
+        "Assigns an existing day template to a program, appended at the end. Errors if the day already belongs to a program; use remove_day_from_program first to reassign it.",
+      inputSchema: { day_id: z.string(), program_id: z.string() },
+    },
+    async ({ day_id, program_id }) =>
+      withWriteTool("add_day_to_program", async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const day = await findDay(client, day_id);
+        if (!day) return toolError(`add_day_to_program failed: Day template ${day_id} not found.`);
+        if (day.program_id) {
+          return toolError(`add_day_to_program failed: Day ${day_id} is already in program ${day.program_id}; remove it first.`);
+        }
+        const program = await findProgram(client, program_id);
+        if (!program) return toolError(`add_day_to_program failed: Program ${program_id} not found.`);
+        await addDayToProgram(client, day_id, program_id);
+        return toolResult({ day_id, program_id });
+      }),
+  );
+
+  server.registerTool(
+    "remove_day_from_program",
+    {
+      title: "Remove day from program",
+      description: "Clears a day template's program assignment, reverting it to untracked (always available).",
+      inputSchema: { day_id: z.string() },
+    },
+    async ({ day_id }) =>
+      withWriteTool("remove_day_from_program", async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const day = await findDay(client, day_id);
+        if (!day) return toolError(`remove_day_from_program failed: Day template ${day_id} not found.`);
+        await removeDayFromProgram(client, day_id);
+        return toolResult({ day_id, removed: true });
+      }),
+  );
+
+  server.registerTool(
+    "reorder_program_days",
+    {
+      title: "Reorder program days",
+      description:
+        "Rewrites a program's day order for the authenticated user. day_ids must be exactly the program's current membership (same members, any order); membership changes must go through add_day_to_program/remove_day_from_program instead.",
+      inputSchema: { program_id: z.string(), day_ids: z.array(z.string()) },
+    },
+    async ({ program_id, day_ids }) =>
+      withWriteTool("reorder_program_days", async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const program = await findProgram(client, program_id);
+        if (!program) return toolError(`reorder_program_days failed: Program ${program_id} not found.`);
+
+        if (new Set(day_ids).size !== day_ids.length) {
+          return toolError(`reorder_program_days failed: day_ids contains duplicate ids.`);
+        }
+
+        const { data: current, error: selectError } = await client
+          .from("workout_days")
+          .select("id")
+          .eq("program_id", program_id)
+          .is("deleted_at", null);
+        if (selectError) return toolError(`reorder_program_days failed: ${selectError.message}`);
+
+        const currentIds = new Set((current ?? []).map((r: { id: string }) => r.id));
+        const requestedIds = new Set(day_ids);
+        const missing = [...currentIds].filter((id) => !requestedIds.has(id));
+        const extra = [...requestedIds].filter((id) => !currentIds.has(id));
+        if (missing.length || extra.length) {
+          const parts: string[] = [];
+          if (missing.length) parts.push(`missing [${missing.join(", ")}]`);
+          if (extra.length) parts.push(`unexpected [${extra.join(", ")}]`);
+          return toolError(
+            `reorder_program_days failed: day_ids ${parts.join(" and ")}. Use add_day_to_program/remove_day_from_program to change membership instead.`,
+          );
+        }
+
+        await reorderProgramDays(client, program_id, day_ids);
+        return toolResult({ program_id, day_ids });
       }),
   );
 
