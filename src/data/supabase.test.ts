@@ -16,6 +16,7 @@ import {
   addDayToProgram,
   removeDayFromProgram,
   reorderProgramDays,
+  logExercise,
 } from "./supabase";
 
 interface Row {
@@ -426,5 +427,58 @@ describe("reorderProgramDays", () => {
     await expect(reorderProgramDays(client, "prog-1", ["day-2", "day-1"])).resolves.toBeUndefined();
     expect(tables.workout_days.find((r) => r.id === "day-2")?.program_position).toBe(0);
     expect(tables.workout_days.find((r) => r.id === "day-1")?.program_position).toBe(1);
+  });
+});
+
+// logExercise only issues a delete followed by an optional insert against
+// session_sets (no select/order/eq-result chaining beyond that), so a tiny
+// purpose-built fake — rather than makeFakeClient, which has no way to force
+// an error — is enough to cover each step failing.
+function makeLogExerciseClient(errors: { delete?: { message: string }; insert?: { message: string } }): {
+  client: SupabaseClient;
+  inserted: unknown[];
+} {
+  const inserted: unknown[] = [];
+  const client = {
+    from: () => ({
+      delete: () => ({
+        eq: () => ({
+          eq: () => Promise.resolve({ error: errors.delete ?? null }),
+        }),
+      }),
+      insert: (payload: unknown) => {
+        inserted.push(payload);
+        return Promise.resolve({ error: errors.insert ?? null });
+      },
+    }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any as SupabaseClient;
+  return { client, inserted };
+}
+
+describe("logExercise", () => {
+  test("replaces a session's logged sets for an exercise via delete-then-insert", async () => {
+    const tables: Record<string, Row[]> = {
+      session_sets: [{ id: "ss-1", session_id: "session-1", exercise_id: "ex-1", set_number: 1, weight: 90, reps: 12 }],
+    };
+    const client = makeFakeClient(tables);
+    await logExercise(client, "session-1", "ex-1", [{ setNumber: 1, weight: 100, reps: 10 }]);
+    expect(tables.session_sets).toHaveLength(1);
+    expect(tables.session_sets[0]).toMatchObject({ session_id: "session-1", exercise_id: "ex-1", set_number: 1, weight: 100, reps: 10 });
+  });
+
+  test("throws when the delete fails, without attempting the insert", async () => {
+    const { client, inserted } = makeLogExerciseClient({ delete: { message: "simulated postgres failure" } });
+    await expect(logExercise(client, "session-1", "ex-1", [{ setNumber: 1, weight: 100, reps: 10 }])).rejects.toMatchObject({
+      message: "simulated postgres failure",
+    });
+    expect(inserted).toHaveLength(0);
+  });
+
+  test("throws when the insert fails", async () => {
+    const { client } = makeLogExerciseClient({ insert: { message: "simulated postgres failure" } });
+    await expect(logExercise(client, "session-1", "ex-1", [{ setNumber: 1, weight: 100, reps: 10 }])).rejects.toMatchObject({
+      message: "simulated postgres failure",
+    });
   });
 });

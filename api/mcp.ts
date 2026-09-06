@@ -11,6 +11,8 @@ import {
   updateDayName,
   deleteDay,
   createExercise,
+  listExercises,
+  deleteExercise,
   addExerciseToDay,
   removeExerciseFromDay,
   updateDayExercises,
@@ -35,6 +37,18 @@ function extractBearerToken(req: VercelRequest): string | undefined {
 
 function toolError(message: string): CallToolResult {
   return { isError: true, content: [{ type: "text", text: message }] };
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Every *_id parameter on these tools targets a Postgres `uuid` column (see
+// supabase/migrations/0001_init.sql), so a non-UUID value can never match a row. Rejecting
+// it up front lets us say so plainly, instead of running the lookup and reporting a
+// misleading "not found" for what's actually a malformed argument (e.g. a name passed
+// where an id was expected).
+function invalidIdError(toolName: string, paramName: string, value: string): CallToolResult | undefined {
+  if (UUID_PATTERN.test(value)) return undefined;
+  return toolError(`${toolName} failed: expected a UUID for ${paramName}, got "${value}".`);
 }
 
 function toolResult(data: unknown): CallToolResult {
@@ -85,9 +99,30 @@ async function findDay(
   return (data as { id: string; name: string; position: number; program_id: string | null } | null) ?? null;
 }
 
-async function findExercise(client: SupabaseClient, exerciseId: string): Promise<{ id: string } | null> {
-  const { data } = await client.from("exercises").select("id").eq("id", exerciseId).maybeSingle();
-  return (data as { id: string } | null) ?? null;
+async function findExercise(client: SupabaseClient, exerciseId: string): Promise<{ id: string; name: string } | null> {
+  const { data } = await client.from("exercises").select("id, name").eq("id", exerciseId).is("deleted_at", null).maybeSingle();
+  return (data as { id: string; name: string } | null) ?? null;
+}
+
+// delete_exercise's guardrail against the "confusing surprising state" the design
+// explicitly calls out (see exercise-2bv): a soft-deleted exercise still visibly
+// attached wherever it's referenced, but invisible from list_exercises. Checked as
+// three independent existence probes rather than one query, since usage can come
+// from any of workout_day_exercises (current attachment), session_sets, or
+// workout_day_exercise_scheme_history (both historical, so detaching from days alone
+// wouldn't clear them).
+async function exerciseUsage(client: SupabaseClient, exerciseId: string): Promise<"day" | "history" | null> {
+  const { data: attached } = await client.from("workout_day_exercises").select("id").eq("exercise_id", exerciseId).limit(1);
+  if (attached && attached.length) return "day";
+  const { data: loggedSets } = await client.from("session_sets").select("id").eq("exercise_id", exerciseId).limit(1);
+  if (loggedSets && loggedSets.length) return "history";
+  const { data: schemeHistory } = await client
+    .from("workout_day_exercise_scheme_history")
+    .select("id")
+    .eq("exercise_id", exerciseId)
+    .limit(1);
+  if (schemeHistory && schemeHistory.length) return "history";
+  return null;
 }
 
 async function findProgram(client: SupabaseClient, programId: string): Promise<{ id: string; name: string } | null> {
@@ -342,6 +377,8 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
     },
     async ({ day_id, name }) =>
       withWriteTool("rename_day_template", async (accessToken) => {
+        const dayIdError = invalidIdError("rename_day_template", "day_id", day_id);
+        if (dayIdError) return dayIdError;
         const client = createUserScopedClient(accessToken);
         const day = await findDay(client, day_id);
         if (!day) return toolError(`rename_day_template failed: Day template ${day_id} not found.`);
@@ -360,6 +397,8 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
     },
     async ({ day_id }) =>
       withWriteTool("delete_day_template", async (accessToken) => {
+        const dayIdError = invalidIdError("delete_day_template", "day_id", day_id);
+        if (dayIdError) return dayIdError;
         const client = createUserScopedClient(accessToken);
         const day = await findDay(client, day_id);
         if (!day) return toolError(`delete_day_template failed: Day template ${day_id} not found.`);
@@ -406,6 +445,51 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
   );
 
   server.registerTool(
+    "list_exercises",
+    {
+      title: "List exercises",
+      description:
+        "Every catalog exercise for the authenticated user, including ones not attached to any day. Excludes soft-deleted exercises.",
+    },
+    async () =>
+      withIdentity(async (accessToken) => {
+        const exercises = await listExercises(createUserScopedClient(accessToken));
+        return toolResult(exercises);
+      }),
+  );
+
+  server.registerTool(
+    "delete_exercise",
+    {
+      title: "Delete exercise",
+      description:
+        "Soft-deletes a catalog exercise belonging to the authenticated user, targeted by id: marks it deleted so it no longer appears in list_exercises. Rejected outright if the exercise is still attached to any day or referenced by logged sets/scheme history — detach it from days first via remove_exercise_from_day.",
+      inputSchema: { exercise_id: z.string() },
+    },
+    async ({ exercise_id }) =>
+      withWriteTool("delete_exercise", async (accessToken) => {
+        const exerciseIdError = invalidIdError("delete_exercise", "exercise_id", exercise_id);
+        if (exerciseIdError) return exerciseIdError;
+        const client = createUserScopedClient(accessToken);
+        const exercise = await findExercise(client, exercise_id);
+        if (!exercise) return toolError(`delete_exercise failed: Exercise ${exercise_id} not found.`);
+
+        const usage = await exerciseUsage(client, exercise_id);
+        if (usage === "day") {
+          return toolError(
+            `delete_exercise failed: Exercise ${exercise_id} is attached to one or more days; use remove_exercise_from_day to detach it first.`,
+          );
+        }
+        if (usage === "history") {
+          return toolError(`delete_exercise failed: Exercise ${exercise_id} has logged sets or scheme history and cannot be deleted.`);
+        }
+
+        await deleteExercise(client, exercise_id);
+        return toolResult({ id: exercise.id, name: exercise.name, deleted: true });
+      }),
+  );
+
+  server.registerTool(
     "add_exercise_to_day",
     {
       title: "Add exercise to day",
@@ -414,6 +498,10 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
     },
     async ({ day_id, exercise_id }) =>
       withWriteTool("add_exercise_to_day", async (accessToken) => {
+        const dayIdError = invalidIdError("add_exercise_to_day", "day_id", day_id);
+        if (dayIdError) return dayIdError;
+        const exerciseIdError = invalidIdError("add_exercise_to_day", "exercise_id", exercise_id);
+        if (exerciseIdError) return exerciseIdError;
         const client = createUserScopedClient(accessToken);
         const day = await findDay(client, day_id);
         if (!day) return toolError(`add_exercise_to_day failed: Day template ${day_id} not found.`);
@@ -443,6 +531,10 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
     },
     async ({ day_id, exercise_id }) =>
       withWriteTool("remove_exercise_from_day", async (accessToken) => {
+        const dayIdError = invalidIdError("remove_exercise_from_day", "day_id", day_id);
+        if (dayIdError) return dayIdError;
+        const exerciseIdError = invalidIdError("remove_exercise_from_day", "exercise_id", exercise_id);
+        if (exerciseIdError) return exerciseIdError;
         const client = createUserScopedClient(accessToken);
         const day = await findDay(client, day_id);
         if (!day) return toolError(`remove_exercise_from_day failed: Day template ${day_id} not found.`);
@@ -464,6 +556,15 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
     },
     async ({ day_id, exercise_ids }) =>
       withWriteTool("reorder_day_exercises", async (accessToken) => {
+        const dayIdError = invalidIdError("reorder_day_exercises", "day_id", day_id);
+        if (dayIdError) return dayIdError;
+        const invalidExerciseIds = exercise_ids.filter((id) => !UUID_PATTERN.test(id));
+        if (invalidExerciseIds.length) {
+          return toolError(
+            `reorder_day_exercises failed: expected UUIDs for exercise_ids, got ${invalidExerciseIds.map((id) => `"${id}"`).join(", ")}.`,
+          );
+        }
+
         const client = createUserScopedClient(accessToken);
         const day = await findDay(client, day_id);
         if (!day) return toolError(`reorder_day_exercises failed: Day template ${day_id} not found.`);
@@ -510,6 +611,10 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
     },
     async ({ day_id, exercise_id, sets }) =>
       withWriteTool("set_day_exercise_scheme", async (accessToken) => {
+        const dayIdError = invalidIdError("set_day_exercise_scheme", "day_id", day_id);
+        if (dayIdError) return dayIdError;
+        const exerciseIdError = invalidIdError("set_day_exercise_scheme", "exercise_id", exercise_id);
+        if (exerciseIdError) return exerciseIdError;
         const client = createUserScopedClient(accessToken);
         const day = await findDay(client, day_id);
         if (!day) return toolError(`set_day_exercise_scheme failed: Day template ${day_id} not found.`);

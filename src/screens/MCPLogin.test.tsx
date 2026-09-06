@@ -25,7 +25,7 @@ test("generates and displays a token", async () => {
     "/api/mcp-login",
     expect.objectContaining({
       method: "POST",
-      body: JSON.stringify({ access_token: "at", refresh_token: "rt" }),
+      body: JSON.stringify({ access_token: "at" }),
     }),
   );
 });
