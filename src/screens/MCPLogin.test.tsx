@@ -78,7 +78,21 @@ test("shows the available tools", () => {
 test("shows a client config snippet with a placeholder before a token is generated", () => {
   render(<MCPLogin />);
   expect((screen.getByLabelText("Claude Code CLI") as HTMLTextAreaElement).value).toContain("YOUR_TOKEN");
-  expect((screen.getByLabelText("mcpServers JSON") as HTMLTextAreaElement).value).toContain("YOUR_TOKEN");
+  const jsonValue = (screen.getByLabelText("mcpServers JSON") as HTMLTextAreaElement).value;
+  const parsed = JSON.parse(jsonValue);
+  expect(parsed.mcpServers["exercise-mcp"]).toEqual({
+    command: "npx",
+    args: [
+      "-y",
+      "mcp-remote",
+      `${window.location.origin}/api/mcp`,
+      "--transport",
+      "http-only",
+      "--header",
+      "Authorization: Bearer ${EXERCISE_MCP_TOKEN}",
+    ],
+    env: { EXERCISE_MCP_TOKEN: "YOUR_TOKEN" },
+  });
 });
 
 test("shows a client config snippet with the real token once generated", async () => {
@@ -91,7 +105,22 @@ test("shows a client config snippet with the real token once generated", async (
   await waitFor(() =>
     expect((screen.getByLabelText("Claude Code CLI") as HTMLTextAreaElement).value).toContain("opaque-token-123"),
   );
-  expect((screen.getByLabelText("mcpServers JSON") as HTMLTextAreaElement).value).toContain("opaque-token-123");
+  const jsonValue = (screen.getByLabelText("mcpServers JSON") as HTMLTextAreaElement).value;
+  expect(jsonValue).toContain("opaque-token-123");
+  const parsed = JSON.parse(jsonValue);
+  expect(parsed.mcpServers["exercise-mcp"]).toEqual({
+    command: "npx",
+    args: [
+      "-y",
+      "mcp-remote",
+      `${window.location.origin}/api/mcp`,
+      "--transport",
+      "http-only",
+      "--header",
+      "Authorization: Bearer ${EXERCISE_MCP_TOKEN}",
+    ],
+    env: { EXERCISE_MCP_TOKEN: "opaque-token-123" },
+  });
   expect((screen.getByLabelText("Claude Code CLI") as HTMLTextAreaElement).value).not.toContain("YOUR_TOKEN");
 });
 
