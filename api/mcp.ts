@@ -6,6 +6,16 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { requiredEnv } from "./_env.js";
 import { resolveIdentity, type IdentityResult } from "./mcp-auth.js";
+import {
+  createDay,
+  updateDayName,
+  deleteDay,
+  createExercise,
+  addExerciseToDay,
+  removeExerciseFromDay,
+  updateDayExercises,
+  setDayExerciseTarget,
+} from "../src/data/supabase.js";
 
 // Vercel's Node runtime pre-parses JSON request bodies onto req.body before
 // invoking the handler; the SDK's Node types don't know about that.
@@ -56,6 +66,34 @@ function createUserScopedClient(accessToken: string): SupabaseClient {
   });
 }
 
+async function findDay(
+  client: SupabaseClient,
+  dayId: string,
+): Promise<{ id: string; name: string; position: number } | null> {
+  const { data } = await client.from("workout_days").select("id, name, position").eq("id", dayId).maybeSingle();
+  return (data as { id: string; name: string; position: number } | null) ?? null;
+}
+
+async function findExercise(client: SupabaseClient, exerciseId: string): Promise<{ id: string } | null> {
+  const { data } = await client.from("exercises").select("id").eq("id", exerciseId).maybeSingle();
+  return (data as { id: string } | null) ?? null;
+}
+
+function validateReps(value: number): string | undefined {
+  if (!Number.isInteger(value) || value < 1 || value > 40) return "must be an integer between 1 and 40.";
+  return undefined;
+}
+
+function validateWeight(value: number): string | undefined {
+  if (!(value >= 0 && value <= 500)) return "must be between 0 and 500.";
+  return undefined;
+}
+
+function validateSets(value: number): string | undefined {
+  if (!Number.isInteger(value) || value < 1 || value > 10) return "must be an integer between 1 and 10.";
+  return undefined;
+}
+
 function createMcpServer(bearerToken: string | undefined): McpServer {
   const server = new McpServer({ name: "exercise-mcp", version: "0.1.0" });
 
@@ -87,6 +125,20 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
     const identity = await getIdentity();
     if (!identity.ok) return toolError(identity.error);
     return run(identity.accessToken);
+  }
+
+  function withWriteTool(
+    toolName: string,
+    run: (accessToken: string) => Promise<CallToolResult>,
+  ): Promise<CallToolResult> {
+    return withIdentity(async (accessToken) => {
+      try {
+        return await run(accessToken);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : ((e as { message?: string })?.message ?? String(e));
+        return toolError(`${toolName} failed: ${message}`);
+      }
+    });
   }
 
   server.registerTool(
@@ -232,6 +284,228 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         });
         if (error) return toolError(`adherence_for_day failed: ${error.message}`);
         return toolResult(data);
+      }),
+  );
+
+  server.registerTool(
+    "create_day_template",
+    {
+      title: "Create day template",
+      description: "Creates a new, empty day template for the authenticated user. Returns the new day, including its id.",
+      inputSchema: { name: z.string() },
+    },
+    async ({ name }) =>
+      withWriteTool("create_day_template", async (accessToken) => {
+        const day = await createDay(createUserScopedClient(accessToken), name);
+        return toolResult(day);
+      }),
+  );
+
+  server.registerTool(
+    "rename_day_template",
+    {
+      title: "Rename day template",
+      description: "Renames an existing day template belonging to the authenticated user, targeted by id.",
+      inputSchema: { day_id: z.string(), name: z.string() },
+    },
+    async ({ day_id, name }) =>
+      withWriteTool("rename_day_template", async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const day = await findDay(client, day_id);
+        if (!day) return toolError(`rename_day_template failed: Day template ${day_id} not found.`);
+        await updateDayName(client, day_id, name);
+        return toolResult({ id: day.id, name, position: day.position });
+      }),
+  );
+
+  server.registerTool(
+    "delete_day_template",
+    {
+      title: "Delete day template",
+      description:
+        "Hard-deletes a day template belonging to the authenticated user, targeted by id. Its exercise attachments cascade-delete; any session that referenced this day keeps its history with workout_day_id set to null.",
+      inputSchema: { day_id: z.string() },
+    },
+    async ({ day_id }) =>
+      withWriteTool("delete_day_template", async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const day = await findDay(client, day_id);
+        if (!day) return toolError(`delete_day_template failed: Day template ${day_id} not found.`);
+        await deleteDay(client, day_id);
+        return toolResult({ id: day.id, name: day.name, deleted: true });
+      }),
+  );
+
+  server.registerTool(
+    "create_exercise",
+    {
+      title: "Create exercise",
+      description:
+        "Creates a catalog exercise not yet attached to any day, for the authenticated user. Omitted optionals fall back to the same defaults as the exercises table's own column defaults.",
+      inputSchema: {
+        name: z.string(),
+        cue: z.string().optional(),
+        default_sets: z.number().optional(),
+        default_rep_low: z.number().optional(),
+        default_rep_high: z.number().optional(),
+      },
+    },
+    async ({ name, cue, default_sets, default_rep_low, default_rep_high }) =>
+      withWriteTool("create_exercise", async (accessToken) => {
+        const repLow = default_rep_low ?? 10;
+        const repHigh = default_rep_high ?? 12;
+        const sets = default_sets ?? 3;
+        const repLowError = validateReps(repLow);
+        if (repLowError) return toolError(`create_exercise failed: default_rep_low ${repLowError}`);
+        const repHighError = validateReps(repHigh);
+        if (repHighError) return toolError(`create_exercise failed: default_rep_high ${repHighError}`);
+        const setsError = validateSets(sets);
+        if (setsError) return toolError(`create_exercise failed: default_sets ${setsError}`);
+
+        const exercise = await createExercise(createUserScopedClient(accessToken), {
+          name,
+          cue: cue ?? "",
+          defaultSets: sets,
+          defaultRepLow: repLow,
+          defaultRepHigh: repHigh,
+        });
+        return toolResult(exercise);
+      }),
+  );
+
+  server.registerTool(
+    "add_exercise_to_day",
+    {
+      title: "Add exercise to day",
+      description: "Appends an existing catalog exercise to the end of a day template's exercise list, for the authenticated user.",
+      inputSchema: { day_id: z.string(), exercise_id: z.string() },
+    },
+    async ({ day_id, exercise_id }) =>
+      withWriteTool("add_exercise_to_day", async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const day = await findDay(client, day_id);
+        if (!day) return toolError(`add_exercise_to_day failed: Day template ${day_id} not found.`);
+        const exercise = await findExercise(client, exercise_id);
+        if (!exercise) return toolError(`add_exercise_to_day failed: Exercise ${exercise_id} not found.`);
+
+        const { data: existing, error: existingError } = await client
+          .from("workout_day_exercises")
+          .select("id")
+          .eq("workout_day_id", day_id)
+          .eq("exercise_id", exercise_id)
+          .maybeSingle();
+        if (existingError) return toolError(`add_exercise_to_day failed: ${existingError.message}`);
+        if (existing) return toolError(`add_exercise_to_day failed: Exercise ${exercise_id} is already on day ${day_id}.`);
+
+        await addExerciseToDay(client, day_id, exercise_id);
+        return toolResult({ day_id, exercise_id });
+      }),
+  );
+
+  server.registerTool(
+    "remove_exercise_from_day",
+    {
+      title: "Remove exercise from day",
+      description: "Removes one exercise from a day template, for the authenticated user. Touches only that one attachment.",
+      inputSchema: { day_id: z.string(), exercise_id: z.string() },
+    },
+    async ({ day_id, exercise_id }) =>
+      withWriteTool("remove_exercise_from_day", async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const day = await findDay(client, day_id);
+        if (!day) return toolError(`remove_exercise_from_day failed: Day template ${day_id} not found.`);
+        const exercise = await findExercise(client, exercise_id);
+        if (!exercise) return toolError(`remove_exercise_from_day failed: Exercise ${exercise_id} not found.`);
+
+        await removeExerciseFromDay(client, day_id, exercise_id);
+        return toolResult({ day_id, exercise_id, removed: true });
+      }),
+  );
+
+  server.registerTool(
+    "reorder_day_exercises",
+    {
+      title: "Reorder day exercises",
+      description:
+        "Rewrites a day template's exercise order for the authenticated user. exercise_ids must be exactly the day's current exercise-id set (same members, any order); membership changes must go through add_exercise_to_day/remove_exercise_from_day instead.",
+      inputSchema: { day_id: z.string(), exercise_ids: z.array(z.string()) },
+    },
+    async ({ day_id, exercise_ids }) =>
+      withWriteTool("reorder_day_exercises", async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const day = await findDay(client, day_id);
+        if (!day) return toolError(`reorder_day_exercises failed: Day template ${day_id} not found.`);
+
+        if (new Set(exercise_ids).size !== exercise_ids.length) {
+          return toolError(`reorder_day_exercises failed: exercise_ids contains duplicate ids.`);
+        }
+
+        const { data: current, error: selectError } = await client
+          .from("workout_day_exercises")
+          .select("exercise_id")
+          .eq("workout_day_id", day_id);
+        if (selectError) return toolError(`reorder_day_exercises failed: ${selectError.message}`);
+
+        const currentIds = new Set((current ?? []).map((r: { exercise_id: string }) => r.exercise_id));
+        const requestedIds = new Set(exercise_ids);
+        const missing = [...currentIds].filter((id) => !requestedIds.has(id));
+        const extra = [...requestedIds].filter((id) => !currentIds.has(id));
+        if (missing.length || extra.length) {
+          const parts: string[] = [];
+          if (missing.length) parts.push(`missing [${missing.join(", ")}]`);
+          if (extra.length) parts.push(`unexpected [${extra.join(", ")}]`);
+          return toolError(
+            `reorder_day_exercises failed: exercise_ids ${parts.join(" and ")}. Use add_exercise_to_day/remove_exercise_from_day to change membership instead.`,
+          );
+        }
+
+        await updateDayExercises(client, day_id, exercise_ids);
+        return toolResult({ day_id, exercise_ids });
+      }),
+  );
+
+  server.registerTool(
+    "set_day_exercise_scheme",
+    {
+      title: "Set day exercise scheme",
+      description:
+        "Sets the day-specific rep/weight scheme for one exercise on one day, for the authenticated user. null (or an empty array) clears it, reverting that exercise to its own uniform defaults on that day.",
+      inputSchema: {
+        day_id: z.string(),
+        exercise_id: z.string(),
+        sets: z.array(z.object({ weight: z.number(), reps: z.number() })).nullable(),
+      },
+    },
+    async ({ day_id, exercise_id, sets }) =>
+      withWriteTool("set_day_exercise_scheme", async (accessToken) => {
+        const client = createUserScopedClient(accessToken);
+        const day = await findDay(client, day_id);
+        if (!day) return toolError(`set_day_exercise_scheme failed: Day template ${day_id} not found.`);
+        const exercise = await findExercise(client, exercise_id);
+        if (!exercise) return toolError(`set_day_exercise_scheme failed: Exercise ${exercise_id} not found.`);
+
+        const { data: attachment, error: attachmentError } = await client
+          .from("workout_day_exercises")
+          .select("id")
+          .eq("workout_day_id", day_id)
+          .eq("exercise_id", exercise_id)
+          .maybeSingle();
+        if (attachmentError) return toolError(`set_day_exercise_scheme failed: ${attachmentError.message}`);
+        if (!attachment) return toolError(`set_day_exercise_scheme failed: Exercise ${exercise_id} is not on day ${day_id}.`);
+
+        if (sets) {
+          for (const [i, s] of sets.entries()) {
+            const weightError = validateWeight(s.weight);
+            if (weightError) return toolError(`set_day_exercise_scheme failed: set ${i + 1} weight ${weightError}`);
+            const repsError = validateReps(s.reps);
+            if (repsError) return toolError(`set_day_exercise_scheme failed: set ${i + 1} reps ${repsError}`);
+          }
+        }
+
+        const setEntries =
+          sets && sets.length > 0 ? sets.map((s, i) => ({ setNumber: i + 1, weight: s.weight, reps: s.reps })) : null;
+        await setDayExerciseTarget(client, day_id, exercise_id, setEntries);
+        return toolResult({ day_id, exercise_id, sets: setEntries });
       }),
   );
 

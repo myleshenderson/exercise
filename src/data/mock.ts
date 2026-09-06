@@ -40,6 +40,21 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
       days.push(day);
       return day;
     },
+    async deleteDay(dayId) {
+      const idx = days.findIndex((d) => d.id === dayId);
+      if (idx !== -1) days.splice(idx, 1);
+      delete targets[dayId];
+    },
+    async addExerciseToDay(dayId, exerciseId) {
+      const day = days.find((d) => d.id === dayId);
+      if (day && !day.exerciseIds.includes(exerciseId)) day.exerciseIds.push(exerciseId);
+    },
+    async removeExerciseFromDay(dayId, exerciseId) {
+      const day = days.find((d) => d.id === dayId);
+      if (day) day.exerciseIds = day.exerciseIds.filter((id) => id !== exerciseId);
+      const dayTargets = targets[dayId];
+      if (dayTargets) delete dayTargets[exerciseId];
+    },
     async updateDayExercises(dayId, exerciseIds) {
       const day = days.find((d) => d.id === dayId);
       if (day) day.exerciseIds = exerciseIds.slice();

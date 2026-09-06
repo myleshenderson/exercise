@@ -1,4 +1,4 @@
-import type { Exercise, WorkoutDay, Session, SetEntry } from "../types";
+import type { Exercise, WorkoutDay, Session, SetEntry } from "../types.js";
 
 export interface DataLayer {
   listExercises(): Promise<Exercise[]>;
@@ -8,6 +8,9 @@ export interface DataLayer {
   getWorkoutDays(): Promise<WorkoutDay[]>;
   getDayExercises(dayId: string): Promise<Exercise[]>;
   createDay(name: string): Promise<WorkoutDay>;
+  deleteDay(id: string): Promise<void>;
+  addExerciseToDay(dayId: string, exerciseId: string): Promise<void>;
+  removeExerciseFromDay(dayId: string, exerciseId: string): Promise<void>;
   updateDayExercises(dayId: string, exerciseIds: string[]): Promise<void>;
   updateDayName(dayId: string, name: string): Promise<void>;
   getDayExerciseTargets(dayId: string): Promise<Record<string, SetEntry[]>>;
