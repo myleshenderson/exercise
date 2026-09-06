@@ -142,7 +142,7 @@ export default function MCPLogin() {
       const res = await fetch("/api/mcp-login", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ access_token: session.access_token, refresh_token: session.refresh_token }),
+        body: JSON.stringify({ access_token: session.access_token }),
       });
       if (!res.ok) {
         setError("Could not create a token. Please try again.");
