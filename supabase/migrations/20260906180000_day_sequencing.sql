@@ -78,7 +78,7 @@ as $$
          p.id                                                   as program_id,
          p.name                                                 as program_name,
          wd.program_position                                    as program_position,
-         (p.id is null or wd.program_position = pn.next_position) as is_available,
+         coalesce(p.id is null or wd.program_position = pn.next_position, false) as is_available,
          e.id                                                   as exercise_id,
          e.name                                                 as exercise_name,
          e.cue                                                  as exercise_cue,
