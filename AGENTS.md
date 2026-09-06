@@ -2,6 +2,11 @@
 
 This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
 
+## Conventions & Patterns
+
+- Supabase migrations: see [docs/supabase-migrations.md](docs/supabase-migrations.md)
+  for whether they currently auto-apply to production and how.
+
 > **Architecture in one line:** Issues live in a local Dolt database
 > (`.beads/dolt/`); cross-machine sync uses `bd dolt push/pull` (a
 > git-compatible protocol), stored under `refs/dolt/data` on your git

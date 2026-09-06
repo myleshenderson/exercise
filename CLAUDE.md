@@ -75,3 +75,6 @@ _Add a brief overview of your project architecture_
 ## Conventions & Patterns
 
 _Add your project-specific conventions here_
+
+- Supabase migrations: see [docs/supabase-migrations.md](docs/supabase-migrations.md)
+  for whether they currently auto-apply to production and how.
