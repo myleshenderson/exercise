@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  claimSeed,
   createDay,
   updateDayName,
   updateDayExercises,
@@ -116,6 +117,36 @@ function makeFakeClient(tables: Record<string, Row[]>): SupabaseClient {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any as SupabaseClient;
 }
+
+// claimSeed only issues a bare insert (no select/order/eq chaining), so a
+// tiny purpose-built fake — rather than makeFakeClient, which has no notion
+// of a unique-constraint violation — is enough to cover its three outcomes.
+function makeClaimClient(errors: Array<{ code?: string; message: string } | null>): SupabaseClient {
+  let call = 0;
+  return {
+    from: () => ({
+      insert: () => Promise.resolve({ data: null, error: errors[Math.min(call++, errors.length - 1)] }),
+    }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any as SupabaseClient;
+}
+
+describe("claimSeed", () => {
+  test("returns true when this caller's insert wins the claim", async () => {
+    const client = makeClaimClient([null]);
+    expect(await claimSeed(client)).toBe(true);
+  });
+
+  test("returns false on a unique violation — another caller already claimed it", async () => {
+    const client = makeClaimClient([{ code: "23505", message: "duplicate key value violates unique constraint" }]);
+    expect(await claimSeed(client)).toBe(false);
+  });
+
+  test("rethrows any other error", async () => {
+    const client = makeClaimClient([{ code: "42501", message: "permission denied for table seed_claims" }]);
+    await expect(claimSeed(client)).rejects.toMatchObject({ code: "42501" });
+  });
+});
 
 describe("createDay", () => {
   test("inserts a workout_days row and returns it with an empty exercise list", async () => {

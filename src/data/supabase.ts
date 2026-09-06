@@ -21,6 +21,19 @@ const toExercise = (r: ExerciseRow): Exercise => ({
   defaultRepHigh: r.default_rep_high,
 });
 
+// See exercise-c9l / 0014_seed_claims.sql: seed_claims(user_id) has a
+// primary key, so concurrent callers racing to insert their own claim can
+// only ever have one succeed. A 23505 (unique_violation) means someone else
+// already claimed seeding for this user — not an error, just "don't seed".
+export async function claimSeed(client: SupabaseClient): Promise<boolean> {
+  const { error } = await client.from("seed_claims").insert({});
+  if (error) {
+    if (error.code === "23505") return false;
+    throw error;
+  }
+  return true;
+}
+
 export async function createDay(client: SupabaseClient, name: string): Promise<WorkoutDay> {
   const { data, error } = await client.from("workout_days").insert({ name }).select("*").single();
   if (error) throw error;
@@ -157,6 +170,7 @@ export function createSupabaseDataLayer(): DataLayer {
   }
 
   return {
+    claimSeed: () => claimSeed(supabase),
     async listExercises() {
       const { data } = await supabase.from("exercises").select("*").order("name");
       return (data ?? []).map(toExercise);

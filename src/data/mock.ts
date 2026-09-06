@@ -12,8 +12,14 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
   const schemeHistory: Record<string, { targetSets: SetEntry[] | null; recordedAt: string }[]> = {};
   let counter = 0;
   const nextId = (prefix: string) => `${prefix}-${++counter}`;
+  let seedClaimed = false;
 
   return {
+    async claimSeed() {
+      if (seedClaimed) return false;
+      seedClaimed = true;
+      return true;
+    },
     async listExercises() {
       return exercises.slice();
     },
