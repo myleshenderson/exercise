@@ -105,9 +105,17 @@ export default function MCPLogin() {
     {
       mcpServers: {
         "exercise-mcp": {
-          type: "http",
-          url: endpointUrl,
-          headers: { Authorization: `Bearer ${tokenPlaceholder}` },
+          command: "npx",
+          args: [
+            "-y",
+            "mcp-remote",
+            endpointUrl,
+            "--transport",
+            "http-only",
+            "--header",
+            "Authorization: Bearer ${EXERCISE_MCP_TOKEN}",
+          ],
+          env: { EXERCISE_MCP_TOKEN: tokenPlaceholder },
         },
       },
     },
