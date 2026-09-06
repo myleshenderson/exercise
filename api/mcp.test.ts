@@ -71,6 +71,10 @@ class FakeQuery implements PromiseLike<FakeResult> {
     this.filters.push([col, val]);
     return this;
   }
+  is(col: string, val: unknown): this {
+    this.filters.push([col, val]);
+    return this;
+  }
   order(col: string, opts?: { ascending?: boolean }): this {
     this.orderCol = col;
     this.orderAsc = opts?.ascending ?? true;
@@ -94,7 +98,9 @@ class FakeQuery implements PromiseLike<FakeResult> {
   }
 
   private matched(rows: FakeRow[]): FakeRow[] {
-    let out = rows.filter((r) => this.filters.every(([col, val]) => r[col] === val));
+    let out = rows.filter((r) =>
+      this.filters.every(([col, val]) => (val === null ? r[col] === null || r[col] === undefined : r[col] === val)),
+    );
     if (this.orderCol) {
       const col = this.orderCol;
       const dir = this.orderAsc ? 1 : -1;
@@ -176,6 +182,7 @@ function fakeFrom(tableName: FakeTableName, callerId: string | undefined) {
       update: () => stub,
       delete: () => stub,
       eq: () => stub,
+      is: () => stub,
       order: () => stub,
       limit: () => stub,
       single: () => stub,
@@ -194,8 +201,8 @@ function fakeFrom(tableName: FakeTableName, callerId: string | undefined) {
   };
 }
 
-function seedDay(userId: string, id: string, name: string, position = 0): FakeRow {
-  const row: FakeRow = { id, user_id: userId, name, position };
+function seedDay(userId: string, id: string, name: string, position = 0, deletedAt: string | null = null): FakeRow {
+  const row: FakeRow = { id, user_id: userId, name, position, deleted_at: deletedAt };
   TABLES.workout_days.push(row);
   return row;
 }
@@ -705,8 +712,17 @@ describe("api/mcp handler", () => {
       await client.close();
     });
 
-    it("delete_day_template deletes an existing day and returns confirmation", async () => {
+    it("delete_day_template soft-deletes an existing day and returns confirmation", async () => {
       seedDay("user-a", "day-a", "Push");
+      seedExercise("user-a", "ex-a", "Bench Press");
+      seedDayExercise("user-a", "day-a", "ex-a", 0, [{ weight: 225, reps: 5 }]);
+      TABLES.workout_day_exercise_scheme_history.push({
+        id: nextFakeId("hist"),
+        user_id: "user-a",
+        workout_day_id: "day-a",
+        exercise_id: "ex-a",
+        target_sets: [{ weight: 225, reps: 5 }],
+      });
       const client = await connectAs("token-a");
 
       const result = await client.callTool({ name: "delete_day_template", arguments: { day_id: "day-a" } });
@@ -715,7 +731,15 @@ describe("api/mcp handler", () => {
       expect(result.content).toEqual([
         { type: "text", text: JSON.stringify({ id: "day-a", name: "Push", deleted: true }, null, 2) },
       ]);
-      expect(TABLES.workout_days.find((d) => d.id === "day-a")).toBeUndefined();
+      // The row must persist (not be removed) so scheme_history_for_day_exercise /
+      // adherence_for_day can keep resolving historical data for this day.
+      const day = TABLES.workout_days.find((d) => d.id === "day-a");
+      expect(day).toBeDefined();
+      expect(day?.deleted_at).toEqual(expect.any(String));
+      expect(TABLES.workout_day_exercises).toContainEqual(expect.objectContaining({ workout_day_id: "day-a", exercise_id: "ex-a" }));
+      expect(TABLES.workout_day_exercise_scheme_history).toContainEqual(
+        expect.objectContaining({ workout_day_id: "day-a", exercise_id: "ex-a" }),
+      );
 
       await client.close();
     });
@@ -727,7 +751,56 @@ describe("api/mcp handler", () => {
       const result = await client.callTool({ name: "delete_day_template", arguments: { day_id: "day-b" } });
 
       expect(result.isError).toBe(true);
-      expect(TABLES.workout_days.find((d) => d.id === "day-b")).toBeDefined();
+      expect(TABLES.workout_days.find((d) => d.id === "day-b")?.deleted_at).toBeNull();
+
+      await client.close();
+    });
+
+    it("delete_day_template errors clearly on an already-deleted day id, instead of resurrecting it", async () => {
+      seedDay("user-a", "day-a", "Push", 0, "2026-09-01T00:00:00.000Z");
+      const client = await connectAs("token-a");
+
+      const result = await client.callTool({ name: "delete_day_template", arguments: { day_id: "day-a" } });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "delete_day_template failed: Day template day-a not found." },
+      ]);
+
+      await client.close();
+    });
+
+    it("write tools treat a soft-deleted day id as not found", async () => {
+      seedDay("user-a", "day-a", "Push", 0, "2026-09-01T00:00:00.000Z");
+      seedExercise("user-a", "ex-a", "Bench Press");
+      const client = await connectAs("token-a");
+
+      const renameResult = await client.callTool({ name: "rename_day_template", arguments: { day_id: "day-a", name: "X" } });
+      expect(renameResult.isError).toBe(true);
+      expect(renameResult.content).toEqual([
+        { type: "text", text: "rename_day_template failed: Day template day-a not found." },
+      ]);
+
+      const addResult = await client.callTool({ name: "add_exercise_to_day", arguments: { day_id: "day-a", exercise_id: "ex-a" } });
+      expect(addResult.isError).toBe(true);
+      expect(addResult.content).toEqual([
+        { type: "text", text: "add_exercise_to_day failed: Day template day-a not found." },
+      ]);
+
+      const reorderResult = await client.callTool({ name: "reorder_day_exercises", arguments: { day_id: "day-a", exercise_ids: [] } });
+      expect(reorderResult.isError).toBe(true);
+      expect(reorderResult.content).toEqual([
+        { type: "text", text: "reorder_day_exercises failed: Day template day-a not found." },
+      ]);
+
+      const schemeResult = await client.callTool({
+        name: "set_day_exercise_scheme",
+        arguments: { day_id: "day-a", exercise_id: "ex-a", sets: [{ weight: 100, reps: 5 }] },
+      });
+      expect(schemeResult.isError).toBe(true);
+      expect(schemeResult.content).toEqual([
+        { type: "text", text: "set_day_exercise_scheme failed: Day template day-a not found." },
+      ]);
 
       await client.close();
     });

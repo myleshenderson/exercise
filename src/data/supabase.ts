@@ -109,7 +109,7 @@ export async function createExercise(client: SupabaseClient, input: Omit<Exercis
 }
 
 export async function deleteDay(client: SupabaseClient, dayId: string): Promise<void> {
-  const { error } = await client.from("workout_days").delete().eq("id", dayId);
+  const { error } = await client.from("workout_days").update({ deleted_at: new Date().toISOString() }).eq("id", dayId);
   if (error) throw error;
 }
 
@@ -178,7 +178,7 @@ export function createSupabaseDataLayer(): DataLayer {
     getExercise: (id) => fetchExercise(id),
     createExercise: (input) => createExercise(supabase, input),
     async getWorkoutDays() {
-      const { data } = await supabase.from("workout_days").select("*").order("position");
+      const { data } = await supabase.from("workout_days").select("*").is("deleted_at", null).order("position");
       const days: WorkoutDay[] = [];
       for (const d of data ?? []) {
         const { data: links } = await supabase

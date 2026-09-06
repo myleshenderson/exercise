@@ -70,7 +70,12 @@ async function findDay(
   client: SupabaseClient,
   dayId: string,
 ): Promise<{ id: string; name: string; position: number } | null> {
-  const { data } = await client.from("workout_days").select("id, name, position").eq("id", dayId).maybeSingle();
+  const { data } = await client
+    .from("workout_days")
+    .select("id, name, position")
+    .eq("id", dayId)
+    .is("deleted_at", null)
+    .maybeSingle();
   return (data as { id: string; name: string; position: number } | null) ?? null;
 }
 
@@ -323,7 +328,7 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
     {
       title: "Delete day template",
       description:
-        "Hard-deletes a day template belonging to the authenticated user, targeted by id. Its exercise attachments cascade-delete; any session that referenced this day keeps its history with workout_day_id set to null.",
+        "Soft-deletes a day template belonging to the authenticated user, targeted by id: marks it deleted so it no longer appears in get_day_templates or accepts further edits, but its exercise attachments, scheme history, and any sessions that referenced it are left untouched — historical scheme_history_for_day_exercise/adherence_for_day lookups keep working.",
       inputSchema: { day_id: z.string() },
     },
     async ({ day_id }) =>
