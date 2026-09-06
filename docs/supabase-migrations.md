@@ -58,3 +58,21 @@ db push` unable to reconcile local files against the remote ledger.
 **Going forward:** always create new migrations with `supabase migration new
 <name>` so the filename's timestamp prefix is unique and never needs manual
 renumbering.
+
+## The 20260906180000 collision (exercise-8qg)
+
+`20260906180000_day_sequencing.sql` (exercise-w8s) and
+`20260906180000_exercises_soft_delete.sql` (exercise-2bv) were merged with the
+identical version prefix. The `migrate` job's ledger only records one
+migration per version, so only `exercises_soft_delete` was ever applied;
+`day_sequencing` silently never ran even though `supabase db push` reported
+success. Confirmed directly against production (Management API): no
+`programs` table, no `program_id`/`program_position` columns on
+`workout_days`, `get_day_templates()` still the pre-w8s 12-column signature.
+
+`day_sequencing` has been renamed to `20260906180100_day_sequencing.sql` — a
+version after the one production already has recorded for
+`exercises_soft_delete` — so `supabase db push` treats it as a genuinely new,
+unapplied migration on the next push to `main`. See exercise-kch for the
+follow-up to make the `migrate` job detect a version collision instead of
+silently dropping one migration.
