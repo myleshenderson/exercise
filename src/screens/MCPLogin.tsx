@@ -37,6 +37,10 @@ const TOOLS = [
     description:
       "Actual logged sets vs. the prescribed target in effect on each session's date, flagging under-/over-shooting on sets, reps, and weight. Optionally filter by day and/or date range.",
   },
+  {
+    name: "update_exercise",
+    description: "Partially updates a catalog exercise's name, cue, and/or defaults, targeted by id.",
+  },
 ];
 
 function selectOnFocus(e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) {
