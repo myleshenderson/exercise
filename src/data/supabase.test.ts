@@ -240,11 +240,12 @@ describe("createExercise", () => {
 });
 
 describe("deleteDay", () => {
-  test("removes the targeted workout_days row", async () => {
-    const tables: Record<string, Row[]> = { workout_days: [{ id: "day-1", name: "Push" }] };
+  test("soft-deletes by setting deleted_at, leaving the row in place", async () => {
+    const tables: Record<string, Row[]> = { workout_days: [{ id: "day-1", name: "Push", deleted_at: null }] };
     const client = makeFakeClient(tables);
     await deleteDay(client, "day-1");
-    expect(tables.workout_days).toEqual([]);
+    expect(tables.workout_days).toHaveLength(1);
+    expect(tables.workout_days[0].deleted_at).toEqual(expect.any(String));
   });
 });
 
