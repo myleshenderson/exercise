@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { resolveIdentity } from "./mcp-auth.js";
-import { sha256Hex } from "./mcp-login.js";
+import { mintMcpToken, sha256Hex } from "./mcp-login.js";
 
 function fakeClient(overrides: {
   row?: { id: string; user_id: string; refresh_token: string } | null;
@@ -212,6 +212,82 @@ describe("resolveIdentity", () => {
 
     expect(result).toEqual({ ok: false, error: expect.stringContaining("session has expired") });
     expect(refreshCalls).toEqual(["gen-0", "gen-1", "gen-2"]);
+  });
+
+  it("resolves a freshly minted token even after the caller's own browser session is rotated/invalidated (regression for exercise-0z8)", async () => {
+    // exercise-0z8: mintMcpToken used to store a copy of the caller's *own* Supabase
+    // refresh_token, which shares a rotation chain with whatever their browser tab is
+    // doing (background auto-refresh, cross-tab sync, or — the confirmed deterministic
+    // trigger — the user re-authenticating in that same browser). Any of those could
+    // rotate/invalidate the browser's token before the MCP session's first use, even
+    // though the MCP token itself had never been used. mintMcpToken now mints a
+    // wholly independent session via the admin API instead of borrowing the caller's
+    // token, so nothing the browser does afterward can touch it.
+    let storedRow: { id: string; user_id: string; refresh_token: string } | null = null;
+
+    const mintClient = {
+      auth: {
+        getUser: async () => ({ data: { user: { id: "user-1", email: "user@example.com" } }, error: null }),
+        admin: { generateLink: async () => ({ data: { properties: { hashed_token: "hashed-otp" } }, error: null }) },
+      },
+      from: () => ({
+        insert: async (row: { user_id: string; token: string; refresh_token: string }) => {
+          storedRow = { id: "row-1", user_id: row.user_id, refresh_token: row.refresh_token };
+          return { error: null };
+        },
+      }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+    const mintAuthClient = {
+      auth: {
+        verifyOtp: async () => ({
+          data: { session: { access_token: "mcp-access", refresh_token: "mcp-independent-refresh" } },
+          error: null,
+        }),
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+
+    const minted = await mintMcpToken({ accessToken: "browser-access-token" }, { client: mintClient, authClient: mintAuthClient });
+    expect(minted).toEqual({ ok: true, token: expect.any(String) });
+    const bearerToken = (minted as { ok: true; token: string }).token;
+    expect(storedRow).toEqual({ id: "row-1", user_id: "user-1", refresh_token: "mcp-independent-refresh" });
+
+    // Simulate the browser's own session lifecycle churning independently — e.g. the
+    // user re-authenticates in the tab that generated the token. This never touches
+    // mcp_sessions (mintMcpToken never wrote the browser's token there in the first
+    // place), so storedRow.refresh_token above is completely unaffected: there is no
+    // "browser-access-token"-derived refresh_token to invalidate.
+
+    const resolveClient = {
+      from: vi.fn(() => ({
+        select: () => ({
+          eq: () => ({
+            maybeSingle: async () => ({ data: storedRow, error: null }),
+          }),
+        }),
+        update: (patch: { refresh_token: string }) => ({
+          eq: async () => {
+            storedRow = { ...(storedRow as NonNullable<typeof storedRow>), refresh_token: patch.refresh_token };
+            return { error: null };
+          },
+        }),
+      })),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+    const resolveAuthClient = {
+      auth: {
+        refreshSession: async ({ refresh_token }: { refresh_token: string }) => {
+          expect(refresh_token).toBe("mcp-independent-refresh");
+          return { data: { session: { access_token: "resolved-access", refresh_token: "mcp-independent-refresh-2" } }, error: null };
+        },
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+
+    const identity = await resolveIdentity(bearerToken, { client: resolveClient, authClient: resolveAuthClient });
+
+    expect(identity).toEqual({ ok: true, userId: "user-1", accessToken: "resolved-access" });
   });
 
   it("looks the token up by its sha256 hash, never the raw value", async () => {
