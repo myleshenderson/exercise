@@ -8,11 +8,5 @@ dist
 /data/
 supabase/.temp/
 
-# Beads / Dolt files (added by bd init)
-.dolt/
-*.db
-.beads-credential-key
-.beads/proxieddb/
-
-# Subagent-driven-development scratch workspaces
-.superpowers/
+# Retired beads tracker data, still on disk until archived to ~/wtree-cutover on the host
+.beads/
