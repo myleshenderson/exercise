@@ -5,7 +5,7 @@ dist
 .DS_Store
 *.log
 *.tsbuildinfo
-data/
+/data/
 supabase/.temp/
 
 # Retired beads tracker data, still on disk until archived to ~/wtree-cutover on the host

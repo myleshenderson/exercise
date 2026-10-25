@@ -1,14 +1,30 @@
 ---
 name: workout-analysis
-description: Use when the user wants to talk about their workouts, exercises, training progress, strength gains, volume, or consistency (e.g. "how's my leg press going", "am I training enough", "talk about my progress") — queries the exercise app's Supabase database read-only.
+description: Myles's own local-dev/debugging tool for poking at the exercise app's Supabase schema directly via superuser SQL. NOT for conversational workout analysis and NOT safe to use now that a second user's data exists in the tables — query.sh connects as the postgres superuser and bypasses row-level security, so it returns every user's rows undifferentiated. For "how's my leg press going" / progress / volume / consistency questions, use the app's MCP tools instead (progression_for_exercise, weekly_volume, training_gaps, get_day_templates, get_workout_history, sets_for_exercise), which are per-user scoped.
 ---
 
-# Workout Analysis
+# Workout Analysis (local dev/debug only — do not use for user-facing analysis)
 
-Explore the user's workout data conversationally by querying their hosted
-Supabase Postgres database. This skill is **read-only**: run SELECT queries
-only; never modify data or schema, and never connect to the database except
-through `query.sh`.
+> **Superuser access. Local development only.** `query.sh` connects to the
+> production Supabase database as the `postgres` superuser, which **bypasses
+> row-level security**. It was written back when Myles's own account was the
+> only row in every table. That is no longer true — a second real user's
+> workout data now exists in these tables — so any query here returns rows
+> from every user, unscoped and indistinguishable from each other.
+>
+> **Do not invoke this skill to answer a user's workout questions.** Use the
+> MCP tools (`progression_for_exercise`, `weekly_volume`, `training_gaps`,
+> `get_day_templates`, `get_workout_history`, `sets_for_exercise`, exposed via
+> `api/mcp.ts`) for anything conversational — they authenticate the caller
+> and are scoped to that user's own data via RLS/`SECURITY INVOKER` RPCs.
+> This skill is only appropriate for Myles personally debugging schema/data
+> issues from his own machine, and even then, results may contain other
+> users' data — filter by `user_id` by hand and do not surface other users'
+> rows.
+
+Explore workout data by querying the hosted Supabase Postgres database
+directly. This skill is **read-only**: run SELECT queries only; never modify
+data or schema, and never connect to the database except through `query.sh`.
 
 ## Requirements
 
@@ -19,12 +35,14 @@ through `query.sh`.
 
 ## How to query
 
-Always use the wrapper (path relative to repo root):
+Always use the wrapper (path relative to repo root). It refuses to run
+unless `ALLOW_SUPERUSER_QUERY=1` is set, so it can't fire by accident — only
+set that when Myles is intentionally debugging locally:
 
 ```bash
-.claude/skills/workout-analysis/query.sh "SELECT ..."
+ALLOW_SUPERUSER_QUERY=1 .claude/skills/workout-analysis/query.sh "SELECT ..."
 # or, for multi-statement / long SQL:
-echo "WITH ..." | .claude/skills/workout-analysis/query.sh
+echo "WITH ..." | ALLOW_SUPERUSER_QUERY=1 .claude/skills/workout-analysis/query.sh
 ```
 
 The session is forced read-only server-side; a write attempt errors with
@@ -33,7 +51,9 @@ stderr, fix the SQL, and retry.
 
 ## Schema
 
-Five tables, all user-scoped by `user_id` (single-user data in practice):
+Five tables, all user-scoped by `user_id` (no longer single-user data — a
+second real user now exists; always filter/group by `user_id` and never
+report one user's data as if it belonged to another):
 
 - `exercises` — id, name, cue, default_sets, default_rep_low, default_rep_high
 - `workout_days` — id, name, position (day templates, e.g. "Leg Day")
@@ -88,6 +108,10 @@ freeform SELECTs through the same wrapper.
 
 ## How to talk about results
 
+These apply when Myles is debugging his own data locally — not to
+user-facing conversational analysis, which should go through the MCP tools
+instead (see the warning at the top of this file):
+
 - Answer in plain language with small tables or short trend statements —
   not raw SQL dumps and not the SQL itself unless asked.
 - Compare like with like: same exercise across sessions, or same week metric
@@ -97,3 +121,6 @@ freeform SELECTs through the same wrapper.
 - Two of the seeded sessions (2026-06-18, 2026-06-20) are demo data created
   at first login; mention this if they would skew an analysis of real
   training history.
+- Always check `user_id` yourself — the query results are not scoped to a
+  single user, so don't assume every row belongs to the person you're
+  helping.

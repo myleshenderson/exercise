@@ -1,17 +1,33 @@
-import type { Exercise, WorkoutDay, Session, SetEntry } from "../types";
+import type { Exercise, WorkoutDay, Session, SetEntry, Program } from "../types.js";
 
 export interface DataLayer {
   listExercises(): Promise<Exercise[]>;
   getExercise(id: string): Promise<Exercise | null>;
   createExercise(input: Omit<Exercise, "id">): Promise<Exercise>;
 
+  // Atomically claims the right to run first-login seeding for the current
+  // user: returns true for exactly one caller among any concurrent callers,
+  // false for every other one (they must not seed). Guards against the
+  // ensureSeeded() race — see exercise-c9l and 0014_seed_claims.sql.
+  claimSeed(): Promise<boolean>;
+
   getWorkoutDays(): Promise<WorkoutDay[]>;
   getDayExercises(dayId: string): Promise<Exercise[]>;
   createDay(name: string): Promise<WorkoutDay>;
+  deleteDay(id: string): Promise<void>;
+  addExerciseToDay(dayId: string, exerciseId: string): Promise<void>;
+  removeExerciseFromDay(dayId: string, exerciseId: string): Promise<void>;
   updateDayExercises(dayId: string, exerciseIds: string[]): Promise<void>;
   updateDayName(dayId: string, name: string): Promise<void>;
+  createProgram(name: string): Promise<Program>;
+  renameProgram(programId: string, name: string): Promise<void>;
+  deleteProgram(programId: string): Promise<void>;
+  addDayToProgram(dayId: string, programId: string): Promise<void>;
+  removeDayFromProgram(dayId: string): Promise<void>;
+  reorderProgramDays(programId: string, dayIds: string[]): Promise<void>;
   getDayExerciseTargets(dayId: string): Promise<Record<string, SetEntry[]>>;
   setDayExerciseTarget(dayId: string, exerciseId: string, sets: SetEntry[] | null): Promise<void>;
+  getSchemeHistory(dayId: string, exerciseId: string): Promise<{ targetSets: SetEntry[] | null; recordedAt: string }[]>;
 
   getLastSetsForExercise(exerciseId: string, beforeDate: string): Promise<SetEntry[]>;
 

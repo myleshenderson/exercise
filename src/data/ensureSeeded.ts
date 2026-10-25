@@ -21,6 +21,12 @@ export function ensureSeeded(db: DataLayer): Promise<void> {
 }
 
 async function seedIfEmpty(db: DataLayer): Promise<void> {
+  // The in-flight guard above only dedupes calls within this JS runtime; it
+  // does nothing across separate tabs, reloads, or logins. claimSeed() is
+  // the DB-enforced guard that actually prevents concurrent seeding
+  // (exercise-c9l) — only the caller that wins the claim proceeds.
+  if (!(await db.claimSeed())) return;
+
   const existing = await db.getWorkoutDays();
   if (existing.length > 0) return;
 

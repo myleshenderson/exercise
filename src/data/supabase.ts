@@ -1,6 +1,8 @@
-import type { DataLayer } from "./DataLayer";
-import type { Exercise, WorkoutDay, Session, SetEntry } from "../types";
-import { getSupabase } from "./supabaseClient";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { DataLayer } from "./DataLayer.js";
+import type { Exercise, WorkoutDay, Session, SetEntry, Program } from "../types.js";
+import { getSupabase } from "./supabaseClient.js";
+import { nextAvailablePositionByProgram, isDayAvailable } from "../lib/programAvailability.js";
 
 interface ExerciseRow {
   id: string;
@@ -19,6 +21,248 @@ const toExercise = (r: ExerciseRow): Exercise => ({
   defaultRepLow: r.default_rep_low,
   defaultRepHigh: r.default_rep_high,
 });
+
+// See exercise-c9l / 0014_seed_claims.sql: seed_claims(user_id) has a
+// primary key, so concurrent callers racing to insert their own claim can
+// only ever have one succeed. A 23505 (unique_violation) means someone else
+// already claimed seeding for this user — not an error, just "don't seed".
+export async function claimSeed(client: SupabaseClient): Promise<boolean> {
+  const { error } = await client.from("seed_claims").insert({});
+  if (error) {
+    if (error.code === "23505") return false;
+    throw error;
+  }
+  return true;
+}
+
+export async function createDay(client: SupabaseClient, name: string): Promise<WorkoutDay> {
+  const { data, error } = await client.from("workout_days").insert({ name }).select("*").single();
+  if (error) throw error;
+  return {
+    id: data.id, name: data.name, position: data.position, exerciseIds: [],
+    programId: null, programPosition: null, programName: null, isAvailable: true,
+  };
+}
+
+export async function updateDayName(client: SupabaseClient, dayId: string, name: string): Promise<void> {
+  const { error } = await client.from("workout_days").update({ name }).eq("id", dayId);
+  if (error) throw error;
+}
+
+export async function logExercise(
+  client: SupabaseClient,
+  sessionId: string,
+  exerciseId: string,
+  sets: SetEntry[],
+): Promise<void> {
+  const { error: deleteError } = await client
+    .from("session_sets")
+    .delete()
+    .eq("session_id", sessionId)
+    .eq("exercise_id", exerciseId);
+  if (deleteError) throw deleteError;
+  if (sets.length) {
+    const { error: insertError } = await client.from("session_sets").insert(
+      sets.map((s) => ({
+        session_id: sessionId,
+        exercise_id: exerciseId,
+        set_number: s.setNumber,
+        weight: s.weight,
+        reps: s.reps,
+      })),
+    );
+    if (insertError) throw insertError;
+  }
+}
+
+export async function updateDayExercises(client: SupabaseClient, dayId: string, exerciseIds: string[]): Promise<void> {
+  const { data: existing, error: selectError } = await client
+    .from("workout_day_exercises")
+    .select("exercise_id, target_sets")
+    .eq("workout_day_id", dayId);
+  if (selectError) throw selectError;
+  const targetsByExercise: Record<string, unknown> = {};
+  for (const row of existing ?? []) {
+    if (row.target_sets) targetsByExercise[row.exercise_id] = row.target_sets;
+  }
+  const { error: deleteError } = await client.from("workout_day_exercises").delete().eq("workout_day_id", dayId);
+  if (deleteError) throw deleteError;
+  if (exerciseIds.length) {
+    const { error: insertError } = await client.from("workout_day_exercises").insert(
+      exerciseIds.map((exercise_id, position) => ({
+        workout_day_id: dayId,
+        exercise_id,
+        position,
+        target_sets: targetsByExercise[exercise_id] ?? null,
+      })),
+    );
+    if (insertError) throw insertError;
+  }
+}
+
+export async function setDayExerciseTarget(
+  client: SupabaseClient,
+  dayId: string,
+  exerciseId: string,
+  sets: SetEntry[] | null,
+): Promise<void> {
+  const target_sets = sets && sets.length > 0 ? sets.map((s) => ({ weight: s.weight, reps: s.reps })) : null;
+  const { error } = await client
+    .from("workout_day_exercises")
+    .update({ target_sets })
+    .eq("workout_day_id", dayId)
+    .eq("exercise_id", exerciseId);
+  if (error) throw error;
+
+  const { error: historyError } = await client.from("workout_day_exercise_scheme_history").insert({
+    workout_day_id: dayId,
+    exercise_id: exerciseId,
+    target_sets,
+  });
+  if (historyError) throw historyError;
+}
+
+export async function createExercise(client: SupabaseClient, input: Omit<Exercise, "id">): Promise<Exercise> {
+  const { data, error } = await client
+    .from("exercises")
+    .insert({
+      name: input.name,
+      cue: input.cue,
+      default_sets: input.defaultSets,
+      default_rep_low: input.defaultRepLow,
+      default_rep_high: input.defaultRepHigh,
+    })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return toExercise(data);
+}
+
+// Only columns present (non-undefined) in `patch` are sent to Postgres, so an omitted
+// field is left untouched on the row rather than reset to a default or null.
+export async function updateExercise(
+  client: SupabaseClient,
+  id: string,
+  patch: Partial<Omit<Exercise, "id">>,
+): Promise<Exercise> {
+  const dbPatch: Record<string, unknown> = {};
+  if (patch.name !== undefined) dbPatch.name = patch.name;
+  if (patch.cue !== undefined) dbPatch.cue = patch.cue;
+  if (patch.defaultSets !== undefined) dbPatch.default_sets = patch.defaultSets;
+  if (patch.defaultRepLow !== undefined) dbPatch.default_rep_low = patch.defaultRepLow;
+  if (patch.defaultRepHigh !== undefined) dbPatch.default_rep_high = patch.defaultRepHigh;
+  const { data, error } = await client.from("exercises").update(dbPatch).eq("id", id).select("*").single();
+  if (error) throw error;
+  return toExercise(data);
+}
+
+export async function deleteDay(client: SupabaseClient, dayId: string): Promise<void> {
+  const { error } = await client.from("workout_days").update({ deleted_at: new Date().toISOString() }).eq("id", dayId);
+  if (error) throw error;
+}
+
+export async function listExercises(client: SupabaseClient): Promise<Exercise[]> {
+  const { data, error } = await client.from("exercises").select("*").is("deleted_at", null).order("name");
+  if (error) throw error;
+  return (data ?? []).map(toExercise);
+}
+
+export async function deleteExercise(client: SupabaseClient, exerciseId: string): Promise<void> {
+  const { error } = await client.from("exercises").update({ deleted_at: new Date().toISOString() }).eq("id", exerciseId);
+  if (error) throw error;
+}
+
+export async function addExerciseToDay(client: SupabaseClient, dayId: string, exerciseId: string): Promise<void> {
+  const { data: existing, error: selectError } = await client
+    .from("workout_day_exercises")
+    .select("position")
+    .eq("workout_day_id", dayId)
+    .order("position", { ascending: false })
+    .limit(1);
+  if (selectError) throw selectError;
+  const nextPosition = existing && existing.length > 0 ? (existing[0].position as number) + 1 : 0;
+  const { error } = await client
+    .from("workout_day_exercises")
+    .insert({ workout_day_id: dayId, exercise_id: exerciseId, position: nextPosition });
+  if (error) throw error;
+}
+
+export async function removeExerciseFromDay(client: SupabaseClient, dayId: string, exerciseId: string): Promise<void> {
+  const { error } = await client
+    .from("workout_day_exercises")
+    .delete()
+    .eq("workout_day_id", dayId)
+    .eq("exercise_id", exerciseId);
+  if (error) throw error;
+}
+
+export async function createProgram(client: SupabaseClient, name: string): Promise<Program> {
+  const { data, error } = await client.from("programs").insert({ name }).select("id, name").single();
+  if (error) throw error;
+  return { id: data.id, name: data.name };
+}
+
+export async function renameProgram(client: SupabaseClient, programId: string, name: string): Promise<void> {
+  const { error } = await client.from("programs").update({ name }).eq("id", programId);
+  if (error) throw error;
+}
+
+export async function deleteProgram(client: SupabaseClient, programId: string): Promise<void> {
+  const { error } = await client.from("programs").update({ deleted_at: new Date().toISOString() }).eq("id", programId);
+  if (error) throw error;
+}
+
+export async function addDayToProgram(client: SupabaseClient, dayId: string, programId: string): Promise<void> {
+  const { data: existing, error: selectError } = await client
+    .from("workout_days")
+    .select("program_position")
+    .eq("program_id", programId)
+    .order("program_position", { ascending: false })
+    .limit(1);
+  if (selectError) throw selectError;
+  const nextPosition = existing && existing.length > 0 ? (existing[0].program_position as number) + 1 : 0;
+  const { error } = await client
+    .from("workout_days")
+    .update({ program_id: programId, program_position: nextPosition })
+    .eq("id", dayId);
+  if (error) throw error;
+}
+
+export async function removeDayFromProgram(client: SupabaseClient, dayId: string): Promise<void> {
+  const { error } = await client
+    .from("workout_days")
+    .update({ program_id: null, program_position: null })
+    .eq("id", dayId);
+  if (error) throw error;
+}
+
+// One update per day, not a delete-and-reinsert (contrast updateDayExercises):
+// workout_days rows are the actual day identity that sessions reference by id,
+// so they can never be recreated the way workout_day_exercises join rows can.
+export async function reorderProgramDays(client: SupabaseClient, programId: string, dayIds: string[]): Promise<void> {
+  // Two-phase write: a same-transaction-less loop of per-row updates would
+  // collide with workout_days_program_position_uq mid-reorder (e.g. swapping
+  // two days' positions makes the first update collide with the still-unmoved
+  // second row) - parking every targeted row at a distinct negative position
+  // first guarantees no collision in either phase, since negative positions
+  // never collide with the final non-negative ones or each other.
+  for (const [index, dayId] of dayIds.entries()) {
+    const { error } = await client
+      .from("workout_days")
+      .update({ program_position: -(index + 1) })
+      .eq("id", dayId)
+      .eq("program_id", programId);
+    if (error) throw error;
+  }
+  for (const [index, dayId] of dayIds.entries()) {
+    const { error } = await client
+      .from("workout_days")
+      .update({ program_position: index })
+      .eq("id", dayId)
+      .eq("program_id", programId);
+    if (error) throw error;
+  }
+}
 
 export function createSupabaseDataLayer(): DataLayer {
   const supabase = getSupabase();
@@ -53,40 +297,47 @@ export function createSupabaseDataLayer(): DataLayer {
   }
 
   return {
-    async listExercises() {
-      const { data } = await supabase.from("exercises").select("*").order("name");
-      return (data ?? []).map(toExercise);
-    },
+    claimSeed: () => claimSeed(supabase),
+    listExercises: () => listExercises(supabase),
     getExercise: (id) => fetchExercise(id),
-    async createExercise(input) {
-      const { data, error } = await supabase
-        .from("exercises")
-        .insert({
-          name: input.name,
-          cue: input.cue,
-          default_sets: input.defaultSets,
-          default_rep_low: input.defaultRepLow,
-          default_rep_high: input.defaultRepHigh,
-        })
-        .select("*")
-        .single();
-      if (error) throw error;
-      return toExercise(data);
-    },
+    createExercise: (input) => createExercise(supabase, input),
     async getWorkoutDays() {
-      const { data } = await supabase.from("workout_days").select("*").order("position");
+      const { data } = await supabase.from("workout_days").select("*").is("deleted_at", null).order("position");
+      const rows = data ?? [];
+
+      const { data: programRows } = await supabase.from("programs").select("id, name").is("deleted_at", null);
+      const programsById = new Map((programRows ?? []).map((p) => [p.id as string, p.name as string]));
+
+      const { data: doneRows } = await supabase
+        .from("sessions")
+        .select("id, workout_day_id, session_sets!inner(id)")
+        .not("workout_day_id", "is", null);
+      const completed = new Set((doneRows ?? []).map((r) => r.workout_day_id as string));
+
+      const availabilityInput = rows.map((d) => ({
+        id: d.id as string,
+        programId: d.program_id && programsById.has(d.program_id) ? (d.program_id as string) : null,
+        programPosition: d.program_position as number | null,
+      }));
+      const nextByProgram = nextAvailablePositionByProgram(availabilityInput, completed);
+
       const days: WorkoutDay[] = [];
-      for (const d of data ?? []) {
+      for (const [i, d] of rows.entries()) {
         const { data: links } = await supabase
           .from("workout_day_exercises")
           .select("exercise_id, position")
           .eq("workout_day_id", d.id)
           .order("position");
+        const effective = availabilityInput[i];
         days.push({
           id: d.id,
           name: d.name,
           position: d.position,
           exerciseIds: (links ?? []).map((l) => l.exercise_id),
+          programId: effective.programId,
+          programPosition: effective.programId ? (d.program_position as number) : null,
+          programName: effective.programId ? programsById.get(effective.programId)! : null,
+          isAvailable: isDayAvailable(effective, nextByProgram),
         });
       }
       return days;
@@ -104,37 +355,18 @@ export function createSupabaseDataLayer(): DataLayer {
       }
       return out;
     },
-    async createDay(name) {
-      const { data, error } = await supabase.from("workout_days").insert({ name }).select("*").single();
-      if (error) throw error;
-      return { id: data.id, name: data.name, position: data.position, exerciseIds: [] };
-    },
-    async updateDayExercises(dayId, exerciseIds) {
-      const { data: existing, error: selectError } = await supabase
-        .from("workout_day_exercises")
-        .select("exercise_id, target_sets")
-        .eq("workout_day_id", dayId);
-      if (selectError) throw selectError;
-      const targetsByExercise: Record<string, unknown> = {};
-      for (const row of existing ?? []) {
-        if (row.target_sets) targetsByExercise[row.exercise_id] = row.target_sets;
-      }
-      await supabase.from("workout_day_exercises").delete().eq("workout_day_id", dayId);
-      if (exerciseIds.length) {
-        await supabase.from("workout_day_exercises").insert(
-          exerciseIds.map((exercise_id, position) => ({
-            workout_day_id: dayId,
-            exercise_id,
-            position,
-            target_sets: targetsByExercise[exercise_id] ?? null,
-          })),
-        );
-      }
-    },
-    async updateDayName(dayId, name) {
-      const { error } = await supabase.from("workout_days").update({ name }).eq("id", dayId);
-      if (error) throw error;
-    },
+    createDay: (name) => createDay(supabase, name),
+    deleteDay: (id) => deleteDay(supabase, id),
+    addExerciseToDay: (dayId, exerciseId) => addExerciseToDay(supabase, dayId, exerciseId),
+    removeExerciseFromDay: (dayId, exerciseId) => removeExerciseFromDay(supabase, dayId, exerciseId),
+    updateDayExercises: (dayId, exerciseIds) => updateDayExercises(supabase, dayId, exerciseIds),
+    updateDayName: (dayId, name) => updateDayName(supabase, dayId, name),
+    createProgram: (name) => createProgram(supabase, name),
+    renameProgram: (programId, name) => renameProgram(supabase, programId, name),
+    deleteProgram: (programId) => deleteProgram(supabase, programId),
+    addDayToProgram: (dayId, programId) => addDayToProgram(supabase, dayId, programId),
+    removeDayFromProgram: (dayId) => removeDayFromProgram(supabase, dayId),
+    reorderProgramDays: (programId, dayIds) => reorderProgramDays(supabase, programId, dayIds),
     async getDayExerciseTargets(dayId) {
       const { data } = await supabase
         .from("workout_day_exercises")
@@ -149,14 +381,20 @@ export function createSupabaseDataLayer(): DataLayer {
       }
       return out;
     },
-    async setDayExerciseTarget(dayId, exerciseId, sets) {
-      const target_sets = sets && sets.length > 0 ? sets.map((s) => ({ weight: s.weight, reps: s.reps })) : null;
-      const { error } = await supabase
-        .from("workout_day_exercises")
-        .update({ target_sets })
+    setDayExerciseTarget: (dayId, exerciseId, sets) => setDayExerciseTarget(supabase, dayId, exerciseId, sets),
+    async getSchemeHistory(dayId, exerciseId) {
+      const { data, error } = await supabase
+        .from("workout_day_exercise_scheme_history")
+        .select("target_sets, recorded_at")
         .eq("workout_day_id", dayId)
-        .eq("exercise_id", exerciseId);
+        .eq("exercise_id", exerciseId)
+        .order("recorded_at");
       if (error) throw error;
+      return (data ?? []).map((row) => {
+        const raw = row.target_sets as { weight: number; reps: number }[] | null;
+        const targetSets = raw && raw.length > 0 ? raw.map((s, i) => ({ setNumber: i + 1, weight: s.weight, reps: s.reps })) : null;
+        return { targetSets, recordedAt: row.recorded_at as string };
+      });
     },
     async getLastSetsForExercise(exerciseId, beforeDate) {
       const { data: s } = await supabase
@@ -213,20 +451,7 @@ export function createSupabaseDataLayer(): DataLayer {
       if (!s) return null;
       return loadSession(s.id);
     },
-    async logExercise(sessionId, exerciseId, sets) {
-      await supabase.from("session_sets").delete().eq("session_id", sessionId).eq("exercise_id", exerciseId);
-      if (sets.length) {
-        await supabase.from("session_sets").insert(
-          sets.map((s) => ({
-            session_id: sessionId,
-            exercise_id: exerciseId,
-            set_number: s.setNumber,
-            weight: s.weight,
-            reps: s.reps,
-          })),
-        );
-      }
-    },
+    logExercise: (sessionId, exerciseId, sets) => logExercise(supabase, sessionId, exerciseId, sets),
     async getExerciseHistory(exerciseId) {
       const { data: setRows } = await supabase
         .from("session_sets")

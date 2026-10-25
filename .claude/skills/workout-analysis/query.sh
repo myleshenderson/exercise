@@ -1,7 +1,25 @@
 #!/usr/bin/env bash
 # Read-only query runner for the exercise app's Supabase database.
 # Usage: query.sh "SELECT ..."   or   echo "SELECT ..." | query.sh
+#
+# LOCAL DEV / DEBUG ONLY — NOT for conversational workout analysis.
+# This connects as the `postgres` superuser, which BYPASSES row-level
+# security: every query here returns every user's rows, unscoped and
+# undifferentiated. It was fine when Myles's account was the only row in
+# every table; a second real user's data now exists, so this must not be
+# used to answer a user's workout questions. Use the app's per-user-scoped
+# MCP tools (api/mcp.ts) for that instead.
+#
+# Requires explicit opt-in via ALLOW_SUPERUSER_QUERY=1 so it can't be
+# invoked by mistake now that the MCP route is live.
 set -euo pipefail
+
+if [[ "${ALLOW_SUPERUSER_QUERY:-}" != "1" ]]; then
+  echo "error: query.sh is a local dev/debug tool that bypasses row-level security (superuser access to ALL users' data)." >&2
+  echo "       It must not be used for conversational workout analysis — use the MCP tools in api/mcp.ts instead." >&2
+  echo "       If you are Myles, deliberately debugging schema/data locally, re-run with ALLOW_SUPERUSER_QUERY=1." >&2
+  exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"

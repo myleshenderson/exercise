@@ -1,5 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { getSupabase } from "../data/supabaseClient";
+
+interface McpSession {
+  id: string;
+  createdAt: string;
+  lastUsedAt: string;
+}
 
 const TOOLS = [
   {
@@ -18,7 +24,31 @@ const TOOLS = [
   },
   {
     name: "get_workout_history",
-    description: "Full raw, unaggregated session history: every session and every logged set.",
+    description:
+      "Full raw, unaggregated session history: every session and every logged set. Optionally filter by date range and/or exercise name.",
+  },
+  {
+    name: "scheme_history_for_day_exercise",
+    description:
+      "Every recorded progressive-scheme version for a day/exercise pair, ordered by recorded_at, for point-in-time lookup.",
+  },
+  {
+    name: "adherence_for_day",
+    description:
+      "Actual logged sets vs. the prescribed target in effect on each session's date, flagging under-/over-shooting on sets, reps, and weight. Optionally filter by day and/or date range.",
+  },
+  {
+    name: "update_exercise",
+    description: "Partially updates a catalog exercise's name, cue, and/or defaults, targeted by id.",
+  },
+  {
+    name: "list_exercises",
+    description: "Every catalog exercise, including ones not attached to any day.",
+  },
+  {
+    name: "delete_exercise",
+    description:
+      "Soft-deletes a catalog exercise by id. Rejected if it's still attached to any day or referenced by logged sets/scheme history.",
   },
 ];
 
@@ -30,6 +60,61 @@ export default function MCPLogin() {
   const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [sessions, setSessions] = useState<McpSession[]>([]);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [sessionsVersion, setSessionsVersion] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await getSupabase().auth.getSession();
+        const session = data?.session;
+        if (!session) return;
+        const res = await fetch("/api/mcp-sessions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ access_token: session.access_token }),
+        });
+        if (!res.ok) return;
+        const body = (await res.json()) as { sessions?: McpSession[] };
+        if (!cancelled) setSessions(body.sessions ?? []);
+      } catch {
+        // Best-effort: the session list is a convenience, not the critical path.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionsVersion]);
+
+  async function revokeSession(id: string) {
+    setRevokingId(id);
+    setSessionsError(null);
+    try {
+      const { data } = await getSupabase().auth.getSession();
+      const session = data?.session;
+      if (!session) {
+        setSessionsError("Your session has expired — please sign in again.");
+        return;
+      }
+      const res = await fetch("/api/mcp-sessions", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ access_token: session.access_token, session_id: id }),
+      });
+      if (!res.ok) {
+        setSessionsError("Could not revoke that session. Please try again.");
+        return;
+      }
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+    } catch {
+      setSessionsError("Could not revoke that session. Please try again.");
+    } finally {
+      setRevokingId(null);
+    }
+  }
 
   const endpointUrl = `${window.location.origin}/api/mcp`;
   const tokenPlaceholder = token ?? "YOUR_TOKEN";
@@ -38,9 +123,17 @@ export default function MCPLogin() {
     {
       mcpServers: {
         "exercise-mcp": {
-          type: "http",
-          url: endpointUrl,
-          headers: { Authorization: `Bearer ${tokenPlaceholder}` },
+          command: "npx",
+          args: [
+            "-y",
+            "mcp-remote",
+            endpointUrl,
+            "--transport",
+            "http-only",
+            "--header",
+            "Authorization: Bearer ${EXERCISE_MCP_TOKEN}",
+          ],
+          env: { EXERCISE_MCP_TOKEN: tokenPlaceholder },
         },
       },
     },
@@ -62,7 +155,7 @@ export default function MCPLogin() {
       const res = await fetch("/api/mcp-login", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ access_token: session.access_token, refresh_token: session.refresh_token }),
+        body: JSON.stringify({ access_token: session.access_token }),
       });
       if (!res.ok) {
         setError("Could not create a token. Please try again.");
@@ -74,6 +167,7 @@ export default function MCPLogin() {
         return;
       }
       setToken(body.token);
+      setSessionsVersion((v) => v + 1);
     } catch {
       setError("Could not create a token. Please try again.");
     } finally {
@@ -108,6 +202,33 @@ export default function MCPLogin() {
             onFocus={(e) => e.currentTarget.select()}
             className="w-full rounded-lg border p-3 font-mono text-sm"
           />
+        </div>
+      )}
+
+      {sessions.length > 0 && (
+        <div className="space-y-2 border-t pt-4">
+          <p className="text-sm font-semibold">Active sessions</p>
+          <p className="text-sm text-gray-600">
+            Revoke a session to immediately stop the MCP client using its token from working.
+          </p>
+          {sessionsError && <p className="text-sm text-red-600">{sessionsError}</p>}
+          <ul className="space-y-2">
+            {sessions.map((s) => (
+              <li key={s.id} className="flex items-center justify-between gap-2 text-sm">
+                <span className="text-gray-600">
+                  Created {new Date(s.createdAt).toLocaleString()} · last used{" "}
+                  {new Date(s.lastUsedAt).toLocaleString()}
+                </span>
+                <button
+                  onClick={() => revokeSession(s.id)}
+                  disabled={revokingId === s.id}
+                  className="shrink-0 rounded border border-red-600 px-2 py-1 text-red-600 disabled:opacity-50"
+                >
+                  {revokingId === s.id ? "Revoking…" : "Revoke"}
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
