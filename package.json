@@ -9,11 +9,17 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.api.json"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.api.json && tsc -p tsconfig.starkeep.json",
+    "starkeep:serve": "tsx starkeep/serve.ts",
+    "starkeep:validate": "tsx starkeep/validate-manifest.ts",
+    "bundle": "tsx starkeep/build-bundle.ts"
   },
   "dependencies": {
+    "@hono/node-server": "1.19.17",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@starkeep/app-client": "0.10.0",
     "@supabase/supabase-js": "^2.108.2",
+    "hono": "4.13.7",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.0",
@@ -21,6 +27,7 @@
     "zod": "^4.5.4"
   },
   "devDependencies": {
+    "@starkeep/admin-manifest": "0.8.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^26.4.0",
@@ -28,9 +35,11 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
     "autoprefixer": "^10.5.0",
+    "esbuild": "0.28.0",
     "jsdom": "^29.1.1",
     "postcss": "^8.5.15",
     "tailwindcss": "^3.4.19",
+    "tsx": "4.22.4",
     "typescript": "^6.0.3",
     "vite": "^8.0.16",
     "vitest": "^4.1.9"

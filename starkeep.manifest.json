@@ -1,0 +1,135 @@
+{
+  "id": "exercise",
+  "name": "Exercise",
+  "version": "0.1.0",
+  "description": "Workout tracker: programs, day templates, logged sessions and sets, with an MCP endpoint for AI clients.",
+  "tier": "community",
+  "targets": ["local", "cloud"],
+  "localRun": {
+    "command": "npm",
+    "args": ["run", "starkeep:serve", "--"],
+    "portFlag": "-p"
+  },
+  "infraRequirements": {
+    "appSpecificSyncable": {
+      "files": false,
+      "tables": [
+        {
+          "name": "programs",
+          "columns": [
+            { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+            { "name": "name", "type": "text", "notNull": true },
+            { "name": "created_at", "type": "timestamp", "notNull": true }
+          ]
+        },
+        {
+          "name": "exercises",
+          "columns": [
+            { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+            { "name": "name", "type": "text", "notNull": true },
+            { "name": "cue", "type": "text", "notNull": true },
+            { "name": "default_sets", "type": "integer", "notNull": true },
+            { "name": "default_rep_low", "type": "integer", "notNull": true },
+            { "name": "default_rep_high", "type": "integer", "notNull": true },
+            { "name": "created_at", "type": "timestamp", "notNull": true }
+          ]
+        },
+        {
+          "name": "workout_days",
+          "columns": [
+            { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+            { "name": "name", "type": "text", "notNull": true },
+            { "name": "position", "type": "integer", "notNull": true },
+            { "name": "program_id", "type": "text" },
+            { "name": "program_position", "type": "integer" },
+            { "name": "created_at", "type": "timestamp", "notNull": true }
+          ]
+        },
+        {
+          "name": "workout_day_exercises",
+          "columns": [
+            { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+            { "name": "workout_day_id", "type": "text", "notNull": true },
+            { "name": "exercise_id", "type": "text", "notNull": true },
+            { "name": "position", "type": "integer", "notNull": true },
+            { "name": "target_sets", "type": "text" }
+          ]
+        },
+        {
+          "name": "workout_day_exercise_scheme_history",
+          "columns": [
+            { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+            { "name": "workout_day_id", "type": "text", "notNull": true },
+            { "name": "exercise_id", "type": "text", "notNull": true },
+            { "name": "target_sets", "type": "text" },
+            { "name": "recorded_at", "type": "timestamp", "notNull": true }
+          ]
+        },
+        {
+          "name": "sessions",
+          "columns": [
+            { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+            { "name": "workout_day_id", "type": "text" },
+            { "name": "performed_on", "type": "text", "notNull": true },
+            { "name": "created_at", "type": "timestamp", "notNull": true }
+          ]
+        },
+        {
+          "name": "session_sets",
+          "columns": [
+            { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+            { "name": "session_id", "type": "text", "notNull": true },
+            { "name": "exercise_id", "type": "text", "notNull": true },
+            { "name": "set_number", "type": "integer", "notNull": true },
+            { "name": "weight", "type": "real", "notNull": true },
+            { "name": "reps", "type": "integer", "notNull": true }
+          ]
+        }
+      ]
+    },
+    "compute": {
+      "enabled": true,
+      "handlers": [
+        {
+          "name": "static",
+          "handler": "index.handler",
+          "memoryMb": 256,
+          "timeoutSeconds": 30,
+          "routes": [
+            "GET /",
+            "ANY /{proxy+}",
+            { "route": "POST /mcp", "auth": "public" }
+          ],
+          "auth": "session",
+          "publicPaths": [
+            "/",
+            "/days",
+            "/workouts",
+            "/mcp-login",
+            "/session/*",
+            "/history/*",
+            "/_immutable/*",
+            "/starkeep-runtime-config",
+            "/api/session/*"
+          ],
+          "staticAssetPaths": [
+            "/",
+            "/days",
+            "/workouts",
+            "/mcp-login",
+            "/session/*",
+            "/history/*",
+            "/_immutable/*"
+          ],
+          "env": {
+            "STARKEEP_API_GATEWAY_URL": "",
+            "STARKEEP_USER_POOL_ID": "",
+            "STARKEEP_USER_POOL_CLIENT_ID": "",
+            "STARKEEP_IDENTITY_POOL_ID": "",
+            "STARKEEP_MCP_TOKEN": ""
+          }
+        }
+      ]
+    }
+  }
+}
