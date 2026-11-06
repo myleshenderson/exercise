@@ -3,7 +3,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { z } from "zod";
 import { requiredEnv } from "./_env.js";
 import { resolveIdentity, type IdentityResult } from "./mcp-auth.js";
 import {
@@ -25,6 +24,17 @@ import {
   removeDayFromProgram,
   reorderProgramDays,
 } from "../src/data/supabase.js";
+import { registerTools, type McpToolHandlers } from "../src/mcp/handlers.js";
+import {
+  catchToolError,
+  invalidIdError,
+  toolError,
+  toolResult,
+  UUID_PATTERN,
+  validateReps,
+  validateSets,
+  validateWeight,
+} from "../src/mcp/format.js";
 
 // Vercel's Node runtime pre-parses JSON request bodies onto req.body before
 // invoking the handler; the SDK's Node types don't know about that.
@@ -34,26 +44,6 @@ function extractBearerToken(req: VercelRequest): string | undefined {
   const header = req.headers.authorization;
   const match = header ? /^Bearer\s+(\S+)\s*$/i.exec(header) : null;
   return match?.[1];
-}
-
-function toolError(message: string): CallToolResult {
-  return { isError: true, content: [{ type: "text", text: message }] };
-}
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-// Every *_id parameter on these tools targets a Postgres `uuid` column (see
-// supabase/migrations/0001_init.sql), so a non-UUID value can never match a row. Rejecting
-// it up front lets us say so plainly, instead of running the lookup and reporting a
-// misleading "not found" for what's actually a malformed argument (e.g. a name passed
-// where an id was expected).
-function invalidIdError(toolName: string, paramName: string, value: string): CallToolResult | undefined {
-  if (UUID_PATTERN.test(value)) return undefined;
-  return toolError(`${toolName} failed: expected a UUID for ${paramName}, got "${value}".`);
-}
-
-function toolResult(data: unknown): CallToolResult {
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
 
 // The MCP spec makes a tools/call request's `arguments` field optional, so a
@@ -154,48 +144,11 @@ async function findExerciseRepRange(
   return { defaultRepLow: row.default_rep_low, defaultRepHigh: row.default_rep_high };
 }
 
-function validateReps(value: number): string | undefined {
-  if (!Number.isInteger(value) || value < 1 || value > 40) return "must be an integer between 1 and 40.";
-  return undefined;
-}
-
-function validateWeight(value: number): string | undefined {
-  if (!(value >= 0 && value <= 500)) return "must be between 0 and 500.";
-  return undefined;
-}
-
-function validateSets(value: number): string | undefined {
-  if (!Number.isInteger(value) || value < 1 || value > 10) return "must be an integer between 1 and 10.";
-  return undefined;
-}
-
-function createMcpServer(bearerToken: string | undefined): McpServer {
-  const server = new McpServer({ name: "exercise-mcp", version: "0.1.0" });
-
-  // Resolved lazily, on the first tool call, rather than eagerly for every request:
-  // initialize and tools/list never need a user identity (and shouldn't need Supabase
-  // env configured to succeed), and resolving one rotates the caller's stored
-  // refresh_token — so doing it eagerly would burn a rotation for requests that never
-  // needed one. Memoized so that if a single invocation calls more than one tool (e.g.
-  // a batched JSON-RPC request), they share one resolution instead of each rotating
-  // the refresh_token out from under the others.
-  let identityPromise: Promise<IdentityResult> | undefined;
-  function getIdentity(): Promise<IdentityResult> {
-    if (!identityPromise) {
-      const url = requiredEnv("SUPABASE_URL");
-      const key = requiredEnv("SUPABASE_SERVICE_ROLE_KEY");
-      // Two separate client instances, not one shared: resolveIdentity calls
-      // .auth.refreshSession() on authClient, which would otherwise silently swap
-      // the service-role identity for the refreshed user's on every subsequent
-      // .from() call on the same client (see mcp-auth.ts's AuthDeps comment).
-      identityPromise = resolveIdentity(bearerToken, {
-        client: createClient(url, key),
-        authClient: createClient(url, key),
-      });
-    }
-    return identityPromise;
-  }
-
+// The Supabase-backed implementation of every tool in src/mcp/tools.ts. Each handler
+// resolves the caller's identity (via the shared, memoized getIdentity) and reads or
+// writes through a client scoped to that user's access_token, so RLS confines it to
+// their rows.
+function createSupabaseHandlers(getIdentity: () => Promise<IdentityResult>): McpToolHandlers {
   async function withIdentity(run: (accessToken: string) => Promise<CallToolResult>): Promise<CallToolResult> {
     const identity = await getIdentity();
     if (!identity.ok) return toolError(identity.error);
@@ -206,25 +159,11 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
     toolName: string,
     run: (accessToken: string) => Promise<CallToolResult>,
   ): Promise<CallToolResult> {
-    return withIdentity(async (accessToken) => {
-      try {
-        return await run(accessToken);
-      } catch (e) {
-        const message = e instanceof Error ? e.message : ((e as { message?: string })?.message ?? String(e));
-        return toolError(`${toolName} failed: ${message}`);
-      }
-    });
+    return withIdentity((accessToken) => catchToolError(toolName, () => run(accessToken)));
   }
 
-  server.registerTool(
-    "progression_for_exercise",
-    {
-      title: "Progression for exercise",
-      description:
-        "Per-session set count, top weight, and volume for an exercise (matched by partial name), for the authenticated user.",
-      inputSchema: { exercise_name: z.string() },
-    },
-    async ({ exercise_name }) =>
+  return {
+    progression_for_exercise: async ({ exercise_name }) =>
       withIdentity(async (accessToken) => {
         const { data, error } = await createUserScopedClient(accessToken).rpc("progression_for_exercise", {
           exercise_name,
@@ -232,17 +171,7 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         if (error) return toolError(`progression_for_exercise failed: ${error.message}`);
         return toolResult(data);
       }),
-  );
-
-  server.registerTool(
-    "sets_for_exercise",
-    {
-      title: "Sets for exercise",
-      description:
-        "Every individual logged set for an exercise (matched by partial name), ungrouped — performed_on, set_number, weight, and reps — for the authenticated user.",
-      inputSchema: { exercise_name: z.string() },
-    },
-    async ({ exercise_name }) =>
+    sets_for_exercise: async ({ exercise_name }) =>
       withIdentity(async (accessToken) => {
         const { data, error } = await createUserScopedClient(accessToken).rpc("sets_for_exercise", {
           exercise_name,
@@ -250,64 +179,25 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         if (error) return toolError(`sets_for_exercise failed: ${error.message}`);
         return toolResult(data);
       }),
-  );
-
-  server.registerTool(
-    "weekly_volume",
-    {
-      title: "Weekly volume",
-      description: "Sessions and total volume per week for the authenticated user.",
-    },
-    async () =>
+    weekly_volume: async () =>
       withIdentity(async (accessToken) => {
         const { data, error } = await createUserScopedClient(accessToken).rpc("weekly_volume");
         if (error) return toolError(`weekly_volume failed: ${error.message}`);
         return toolResult(data);
       }),
-  );
-
-  server.registerTool(
-    "training_gaps",
-    {
-      title: "Training gaps",
-      description: "Days elapsed between consecutive training sessions for the authenticated user.",
-    },
-    async () =>
+    training_gaps: async () =>
       withIdentity(async (accessToken) => {
         const { data, error } = await createUserScopedClient(accessToken).rpc("training_gaps");
         if (error) return toolError(`training_gaps failed: ${error.message}`);
         return toolResult(data);
       }),
-  );
-
-  server.registerTool(
-    "get_day_templates",
-    {
-      title: "Day templates",
-      description:
-        "The authenticated user's day templates with their ordered exercises and each exercise's day-specific progressive scheme, or its uniform defaults when none is set.",
-    },
-    async () =>
+    get_day_templates: async () =>
       withIdentity(async (accessToken) => {
         const { data, error } = await createUserScopedClient(accessToken).rpc("get_day_templates");
         if (error) return toolError(`get_day_templates failed: ${error.message}`);
         return toolResult(data);
       }),
-  );
-
-  server.registerTool(
-    "get_workout_history",
-    {
-      title: "Workout history",
-      description:
-        "The authenticated user's full raw session history: every session with its date, associated day, and every logged set, unaggregated. Optionally filter by date range (start_date/end_date) and/or a partial exercise-name match; omit all filters for the full history.",
-      inputSchema: {
-        start_date: z.string().optional().describe("Only include sessions performed on or after this date (YYYY-MM-DD)."),
-        end_date: z.string().optional().describe("Only include sessions performed on or before this date (YYYY-MM-DD)."),
-        exercise_name: z.string().optional().describe("Only include sets for exercises whose name partially matches this (case-insensitive)."),
-      },
-    },
-    async ({ start_date, end_date, exercise_name }) =>
+    get_workout_history: async ({ start_date, end_date, exercise_name }) =>
       withIdentity(async (accessToken) => {
         const { data, error } = await createUserScopedClient(accessToken).rpc("get_workout_history", {
           start_date: start_date ?? null,
@@ -317,17 +207,7 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         if (error) return toolError(`get_workout_history failed: ${error.message}`);
         return toolResult(data);
       }),
-  );
-
-  server.registerTool(
-    "scheme_history_for_day_exercise",
-    {
-      title: "Scheme history for day/exercise",
-      description:
-        "Every recorded progressive-scheme version for a (workout_day_id, exercise_id) pair, ordered by recorded_at, for the authenticated user — use a <= filter on recorded_at and take the latest row to find which scheme was in effect at or before a given date.",
-      inputSchema: { workout_day_id: z.string(), exercise_id: z.string() },
-    },
-    async ({ workout_day_id, exercise_id }) =>
+    scheme_history_for_day_exercise: async ({ workout_day_id, exercise_id }) =>
       withIdentity(async (accessToken) => {
         const { data, error } = await createUserScopedClient(accessToken).rpc("scheme_history_for_day_exercise", {
           workout_day_id,
@@ -336,21 +216,7 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         if (error) return toolError(`scheme_history_for_day_exercise failed: ${error.message}`);
         return toolResult(data);
       }),
-  );
-
-  server.registerTool(
-    "adherence_for_day",
-    {
-      title: "Adherence for day",
-      description:
-        "Compares the authenticated user's actual logged sets against the prescribed target for the same (day, exercise) pairing and session date - the scheme actually in effect on that date (via point-in-time history), falling back to the exercise's uniform defaults when no scheme was ever defined. Flags under-/over-shooting on sets, reps, and weight. Optionally filter by workout_day_id and/or a date range (start_date/end_date); omit all filters for every day and date.",
-      inputSchema: {
-        workout_day_id: z.string().optional().describe("Only include sessions for this workout day."),
-        start_date: z.string().optional().describe("Only include sessions performed on or after this date (YYYY-MM-DD)."),
-        end_date: z.string().optional().describe("Only include sessions performed on or before this date (YYYY-MM-DD)."),
-      },
-    },
-    async ({ workout_day_id, start_date, end_date }) =>
+    adherence_for_day: async ({ workout_day_id, start_date, end_date }) =>
       withIdentity(async (accessToken) => {
         const { data, error } = await createUserScopedClient(accessToken).rpc("adherence_for_day", {
           for_workout_day_id: workout_day_id ?? null,
@@ -360,17 +226,7 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         if (error) return toolError(`adherence_for_day failed: ${error.message}`);
         return toolResult(data);
       }),
-  );
-
-  server.registerTool(
-    "create_day_template",
-    {
-      title: "Create day template",
-      description:
-        "Creates a new, empty day template for the authenticated user. Returns the new day, including its id. If program_id is given, appends the day to the end of that program.",
-      inputSchema: { name: z.string(), program_id: z.string().optional() },
-    },
-    async ({ name, program_id }) =>
+    create_day_template: async ({ name, program_id }) =>
       withWriteTool("create_day_template", async (accessToken) => {
         const client = createUserScopedClient(accessToken);
         if (program_id) {
@@ -385,16 +241,7 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         // piece of program state worth echoing back, and is known directly from the input.
         return toolResult({ id: day.id, name: day.name, position: day.position, exerciseIds: day.exerciseIds, programId: program_id ?? null });
       }),
-  );
-
-  server.registerTool(
-    "rename_day_template",
-    {
-      title: "Rename day template",
-      description: "Renames an existing day template belonging to the authenticated user, targeted by id.",
-      inputSchema: { day_id: z.string(), name: z.string() },
-    },
-    async ({ day_id, name }) =>
+    rename_day_template: async ({ day_id, name }) =>
       withWriteTool("rename_day_template", async (accessToken) => {
         const dayIdError = invalidIdError("rename_day_template", "day_id", day_id);
         if (dayIdError) return dayIdError;
@@ -404,17 +251,7 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         await updateDayName(client, day_id, name);
         return toolResult({ id: day.id, name, position: day.position });
       }),
-  );
-
-  server.registerTool(
-    "delete_day_template",
-    {
-      title: "Delete day template",
-      description:
-        "Soft-deletes a day template belonging to the authenticated user, targeted by id: marks it deleted so it no longer appears in get_day_templates or accepts further edits, but its exercise attachments, scheme history, and any sessions that referenced it are left untouched — historical scheme_history_for_day_exercise/adherence_for_day lookups keep working.",
-      inputSchema: { day_id: z.string() },
-    },
-    async ({ day_id }) =>
+    delete_day_template: async ({ day_id }) =>
       withWriteTool("delete_day_template", async (accessToken) => {
         const dayIdError = invalidIdError("delete_day_template", "day_id", day_id);
         if (dayIdError) return dayIdError;
@@ -424,23 +261,7 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         await deleteDay(client, day_id);
         return toolResult({ id: day.id, name: day.name, deleted: true });
       }),
-  );
-
-  server.registerTool(
-    "create_exercise",
-    {
-      title: "Create exercise",
-      description:
-        "Creates a catalog exercise not yet attached to any day, for the authenticated user. Omitted optionals fall back to the same defaults as the exercises table's own column defaults.",
-      inputSchema: {
-        name: z.string(),
-        cue: z.string().optional(),
-        default_sets: z.number().optional(),
-        default_rep_low: z.number().optional(),
-        default_rep_high: z.number().optional(),
-      },
-    },
-    async ({ name, cue, default_sets, default_rep_low, default_rep_high }) =>
+    create_exercise: async ({ name, cue, default_sets, default_rep_low, default_rep_high }) =>
       withWriteTool("create_exercise", async (accessToken) => {
         const repLow = default_rep_low ?? 10;
         const repHigh = default_rep_high ?? 12;
@@ -461,24 +282,7 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         });
         return toolResult(exercise);
       }),
-  );
-
-  server.registerTool(
-    "update_exercise",
-    {
-      title: "Update exercise",
-      description:
-        "Partially updates a catalog exercise belonging to the authenticated user, targeted by id. Only the fields supplied are changed; any field left out keeps its current value.",
-      inputSchema: {
-        id: z.string(),
-        name: z.string().optional(),
-        cue: z.string().optional(),
-        default_sets: z.number().optional(),
-        default_rep_low: z.number().optional(),
-        default_rep_high: z.number().optional(),
-      },
-    },
-    async ({ id, name, cue, default_sets, default_rep_low, default_rep_high }) =>
+    update_exercise: async ({ id, name, cue, default_sets, default_rep_low, default_rep_high }) =>
       withWriteTool("update_exercise", async (accessToken) => {
         const idError = invalidIdError("update_exercise", "id", id);
         if (idError) return idError;
@@ -526,31 +330,12 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         });
         return toolResult(exercise);
       }),
-  );
-
-  server.registerTool(
-    "list_exercises",
-    {
-      title: "List exercises",
-      description:
-        "Every catalog exercise for the authenticated user, including ones not attached to any day. Excludes soft-deleted exercises.",
-    },
-    async () =>
+    list_exercises: async () =>
       withIdentity(async (accessToken) => {
         const exercises = await listExercises(createUserScopedClient(accessToken));
         return toolResult(exercises);
       }),
-  );
-
-  server.registerTool(
-    "delete_exercise",
-    {
-      title: "Delete exercise",
-      description:
-        "Soft-deletes a catalog exercise belonging to the authenticated user, targeted by id: marks it deleted so it no longer appears in list_exercises. Rejected outright if the exercise is still attached to any day or referenced by logged sets/scheme history — detach it from days first via remove_exercise_from_day.",
-      inputSchema: { exercise_id: z.string() },
-    },
-    async ({ exercise_id }) =>
+    delete_exercise: async ({ exercise_id }) =>
       withWriteTool("delete_exercise", async (accessToken) => {
         const exerciseIdError = invalidIdError("delete_exercise", "exercise_id", exercise_id);
         if (exerciseIdError) return exerciseIdError;
@@ -571,16 +356,7 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         await deleteExercise(client, exercise_id);
         return toolResult({ id: exercise.id, name: exercise.name, deleted: true });
       }),
-  );
-
-  server.registerTool(
-    "add_exercise_to_day",
-    {
-      title: "Add exercise to day",
-      description: "Appends an existing catalog exercise to the end of a day template's exercise list, for the authenticated user.",
-      inputSchema: { day_id: z.string(), exercise_id: z.string() },
-    },
-    async ({ day_id, exercise_id }) =>
+    add_exercise_to_day: async ({ day_id, exercise_id }) =>
       withWriteTool("add_exercise_to_day", async (accessToken) => {
         const dayIdError = invalidIdError("add_exercise_to_day", "day_id", day_id);
         if (dayIdError) return dayIdError;
@@ -604,16 +380,7 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         await addExerciseToDay(client, day_id, exercise_id);
         return toolResult({ day_id, exercise_id });
       }),
-  );
-
-  server.registerTool(
-    "remove_exercise_from_day",
-    {
-      title: "Remove exercise from day",
-      description: "Removes one exercise from a day template, for the authenticated user. Touches only that one attachment.",
-      inputSchema: { day_id: z.string(), exercise_id: z.string() },
-    },
-    async ({ day_id, exercise_id }) =>
+    remove_exercise_from_day: async ({ day_id, exercise_id }) =>
       withWriteTool("remove_exercise_from_day", async (accessToken) => {
         const dayIdError = invalidIdError("remove_exercise_from_day", "day_id", day_id);
         if (dayIdError) return dayIdError;
@@ -628,17 +395,7 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         await removeExerciseFromDay(client, day_id, exercise_id);
         return toolResult({ day_id, exercise_id, removed: true });
       }),
-  );
-
-  server.registerTool(
-    "reorder_day_exercises",
-    {
-      title: "Reorder day exercises",
-      description:
-        "Rewrites a day template's exercise order for the authenticated user. exercise_ids must be exactly the day's current exercise-id set (same members, any order); membership changes must go through add_exercise_to_day/remove_exercise_from_day instead.",
-      inputSchema: { day_id: z.string(), exercise_ids: z.array(z.string()) },
-    },
-    async ({ day_id, exercise_ids }) =>
+    reorder_day_exercises: async ({ day_id, exercise_ids }) =>
       withWriteTool("reorder_day_exercises", async (accessToken) => {
         const dayIdError = invalidIdError("reorder_day_exercises", "day_id", day_id);
         if (dayIdError) return dayIdError;
@@ -679,21 +436,7 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         await updateDayExercises(client, day_id, exercise_ids);
         return toolResult({ day_id, exercise_ids });
       }),
-  );
-
-  server.registerTool(
-    "set_day_exercise_scheme",
-    {
-      title: "Set day exercise scheme",
-      description:
-        "Sets the day-specific rep/weight scheme for one exercise on one day, for the authenticated user. null (or an empty array) clears it, reverting that exercise to its own uniform defaults on that day.",
-      inputSchema: {
-        day_id: z.string(),
-        exercise_id: z.string(),
-        sets: z.array(z.object({ weight: z.number(), reps: z.number() })).nullable(),
-      },
-    },
-    async ({ day_id, exercise_id, sets }) =>
+    set_day_exercise_scheme: async ({ day_id, exercise_id, sets }) =>
       withWriteTool("set_day_exercise_scheme", async (accessToken) => {
         const dayIdError = invalidIdError("set_day_exercise_scheme", "day_id", day_id);
         if (dayIdError) return dayIdError;
@@ -728,30 +471,12 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         await setDayExerciseTarget(client, day_id, exercise_id, setEntries);
         return toolResult({ day_id, exercise_id, sets: setEntries });
       }),
-  );
-
-  server.registerTool(
-    "create_program",
-    {
-      title: "Create program",
-      description: "Creates a new, empty program for the authenticated user. Returns it, including its id.",
-      inputSchema: { name: z.string() },
-    },
-    async ({ name }) =>
+    create_program: async ({ name }) =>
       withWriteTool("create_program", async (accessToken) => {
         const program = await createProgram(createUserScopedClient(accessToken), name);
         return toolResult(program);
       }),
-  );
-
-  server.registerTool(
-    "rename_program",
-    {
-      title: "Rename program",
-      description: "Renames an existing program belonging to the authenticated user, targeted by id.",
-      inputSchema: { program_id: z.string(), name: z.string() },
-    },
-    async ({ program_id, name }) =>
+    rename_program: async ({ program_id, name }) =>
       withWriteTool("rename_program", async (accessToken) => {
         const client = createUserScopedClient(accessToken);
         const program = await findProgram(client, program_id);
@@ -759,17 +484,7 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         await renameProgram(client, program_id, name);
         return toolResult({ id: program.id, name });
       }),
-  );
-
-  server.registerTool(
-    "delete_program",
-    {
-      title: "Delete program",
-      description:
-        "Soft-deletes a program belonging to the authenticated user, targeted by id: it's no longer a valid target for other program tools, but member days keep their program_id/program_position (not unassigned), so the program's structure and completion history survive and get_day_templates treats its former days as untracked (always available) in the meantime.",
-      inputSchema: { program_id: z.string() },
-    },
-    async ({ program_id }) =>
+    delete_program: async ({ program_id }) =>
       withWriteTool("delete_program", async (accessToken) => {
         const client = createUserScopedClient(accessToken);
         const program = await findProgram(client, program_id);
@@ -777,17 +492,7 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         await deleteProgram(client, program_id);
         return toolResult({ id: program.id, name: program.name, deleted: true });
       }),
-  );
-
-  server.registerTool(
-    "add_day_to_program",
-    {
-      title: "Add day to program",
-      description:
-        "Assigns an existing day template to a program, appended at the end. Errors if the day already belongs to a program; use remove_day_from_program first to reassign it.",
-      inputSchema: { day_id: z.string(), program_id: z.string() },
-    },
-    async ({ day_id, program_id }) =>
+    add_day_to_program: async ({ day_id, program_id }) =>
       withWriteTool("add_day_to_program", async (accessToken) => {
         const client = createUserScopedClient(accessToken);
         const day = await findDay(client, day_id);
@@ -800,16 +505,7 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         await addDayToProgram(client, day_id, program_id);
         return toolResult({ day_id, program_id });
       }),
-  );
-
-  server.registerTool(
-    "remove_day_from_program",
-    {
-      title: "Remove day from program",
-      description: "Clears a day template's program assignment, reverting it to untracked (always available).",
-      inputSchema: { day_id: z.string() },
-    },
-    async ({ day_id }) =>
+    remove_day_from_program: async ({ day_id }) =>
       withWriteTool("remove_day_from_program", async (accessToken) => {
         const client = createUserScopedClient(accessToken);
         const day = await findDay(client, day_id);
@@ -817,17 +513,7 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         await removeDayFromProgram(client, day_id);
         return toolResult({ day_id, removed: true });
       }),
-  );
-
-  server.registerTool(
-    "reorder_program_days",
-    {
-      title: "Reorder program days",
-      description:
-        "Rewrites a program's day order for the authenticated user. day_ids must be exactly the program's current membership (same members, any order); membership changes must go through add_day_to_program/remove_day_from_program instead.",
-      inputSchema: { program_id: z.string(), day_ids: z.array(z.string()) },
-    },
-    async ({ program_id, day_ids }) =>
+    reorder_program_days: async ({ program_id, day_ids }) =>
       withWriteTool("reorder_program_days", async (accessToken) => {
         const client = createUserScopedClient(accessToken);
         const program = await findProgram(client, program_id);
@@ -860,8 +546,37 @@ function createMcpServer(bearerToken: string | undefined): McpServer {
         await reorderProgramDays(client, program_id, day_ids);
         return toolResult({ program_id, day_ids });
       }),
-  );
+  };
+}
 
+function createMcpServer(bearerToken: string | undefined): McpServer {
+  const server = new McpServer({ name: "exercise-mcp", version: "0.1.0" });
+
+  // Resolved lazily, on the first tool call, rather than eagerly for every request:
+  // initialize and tools/list never need a user identity (and shouldn't need Supabase
+  // env configured to succeed), and resolving one rotates the caller's stored
+  // refresh_token — so doing it eagerly would burn a rotation for requests that never
+  // needed one. Memoized so that if a single invocation calls more than one tool (e.g.
+  // a batched JSON-RPC request), they share one resolution instead of each rotating
+  // the refresh_token out from under the others.
+  let identityPromise: Promise<IdentityResult> | undefined;
+  function getIdentity(): Promise<IdentityResult> {
+    if (!identityPromise) {
+      const url = requiredEnv("SUPABASE_URL");
+      const key = requiredEnv("SUPABASE_SERVICE_ROLE_KEY");
+      // Two separate client instances, not one shared: resolveIdentity calls
+      // .auth.refreshSession() on authClient, which would otherwise silently swap
+      // the service-role identity for the refreshed user's on every subsequent
+      // .from() call on the same client (see mcp-auth.ts's AuthDeps comment).
+      identityPromise = resolveIdentity(bearerToken, {
+        client: createClient(url, key),
+        authClient: createClient(url, key),
+      });
+    }
+    return identityPromise;
+  }
+
+  registerTools(server, createSupabaseHandlers(getIdentity));
   return server;
 }
 
