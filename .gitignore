@@ -10,3 +10,6 @@ supabase/.temp/
 
 # Retired beads tracker data, still on disk until archived to ~/wtree-cutover on the host
 .beads/
+
+# Starkeep cloud bundle written by `npm run bundle` (starkeep/build-bundle.ts)
+/dist.zip
