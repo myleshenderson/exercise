@@ -17,6 +17,8 @@
  *     browser app reads (authoring guide §3).
  *   - `/api/session` and `/api/session/*`: the platform session routes,
  *     mounted exactly as photos mounts them.
+ *   - in local mode, an Origin and Content-Type gate in front of all of
+ *     `/api/*` (`originGuard.ts`);
  *   - `/api/local-data/*`: the browser's signing proxy to the data plane,
  *     mounted exactly as photos mounts it. The browser calls
  *     `${BASE_URL}api/local-data/<data-server path>`, e.g.
@@ -40,6 +42,7 @@ import { authenticateMcpRequest } from "./mcp-auth.js";
 import { handleMcpLogin } from "./mcp-login.js";
 import { handleMcpSessions } from "./mcp-sessions.js";
 import { handleMcpRequest, type ExerciseMcpDeps } from "./mcp.js";
+import { localOriginGuard } from "./originGuard.js";
 
 export interface ExerciseAppOptions {
   /**
@@ -65,6 +68,14 @@ export function isServerPath(pathname: string): boolean {
 export function createApp(opts: ExerciseAppOptions = {}): Hono {
   const app = new Hono();
   const mcpHandler = opts.mcpHandler ?? handleMcpRequest;
+
+  // Local mode only: refuse a foreign `Origin` (403) and a non-JSON
+  // POST/PATCH/DELETE (415) on every `/api/*` route before its handler runs,
+  // so a page on another site cannot drive the open signing proxy
+  // (`originGuard.ts`). Registered first so it precedes every route (Hono's
+  // `/api/*` also matches bare `/api`). `/mcp`
+  // is outside `/api/*` on purpose: it has its own bearer-token gate.
+  app.use("/api/*", localOriginGuard());
 
   // Stateless JSON-only transport: no standalone GET stream (a buffered
   // Lambda response cannot carry one) and no session to DELETE. Answered

@@ -23,6 +23,7 @@ come in later issues of epic AI-386.
 | `starkeep/mcp-auth.ts` | `POST /mcp` gate: unseals the bearer token, mints and caches the user's ID token (cloud), checks the `mcp_tokens` row, resolves `{ sub, userToken, tokenId }`. |
 | `starkeep/mcp-login.ts`, `starkeep/mcp-sessions.ts` | Mint, list and revoke MCP tokens from the browser session; same JSON as `api/mcp-login.ts` / `api/mcp-sessions.ts`. |
 | `starkeep/token.ts` | The `exr_` sealed token: AES-256-GCM under an HKDF key from the app's HMAC secret. |
+| `starkeep/originGuard.ts` | Local-mode gate on `/api/*`: 403 for a non-loopback `Origin`, 415 for a non-JSON `POST`/`PATCH`/`DELETE`. |
 | `starkeep/caller.ts` | Resolves the browser caller: platform session in the cloud, open on loopback. |
 | `starkeep/serverTransport.ts` | `createServerTransport({ userToken? })`: server-side `Transport` to the app's tables over `signedFetch`, adding `X-Starkeep-User-Token` when given. |
 | `starkeep/mcpTokens.ts` | The `mcp_tokens` row calls (find, list, insert, delete, touch). |
@@ -59,9 +60,17 @@ npm run starkeep:serve -- -p <port>
 
 `--port <n>` works too, and so does `PORT=<n>` when no flag is passed. The
 server binds `127.0.0.1` only and returns 403 for a `Host` header that is not
-loopback, as photos does. If `dist/` is missing or older than `src/`,
-`index.html`, `vite.config.ts` or `package.json`, the server runs `vite build`
-before it listens. `GET /` serves `dist/index.html`. Any path that is not a
+loopback, as photos does. Every `/api/*` request carrying an `Origin` header
+that is not `http://127.0.0.1`, `http://localhost` or `http://[::1]` on the
+server's own port gets 403 `{ "error": "forbidden_origin" }` before any
+handler runs (`starkeep/originGuard.ts`); `/mcp`, which has its own bearer
+token, is exempt. A `POST`, `PUT`, `PATCH` or `DELETE` under `/api/*` whose
+`Content-Type` is not `application/json` gets 415, so the "simple" cross-site
+requests a hostile page can send without a CORS preflight never reach the
+signing proxy (cloud mode skips both checks).
+
+If `dist/` is missing or older than `src/`, `index.html`, `vite.config.ts` or
+`package.json`, the server runs `vite build` before it listens. `GET /` serves `dist/index.html`. Any path that is not a
 server path and not a file in `dist/` also gets `index.html`, the same
 fallback `vercel.json` gives.
 
