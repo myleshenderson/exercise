@@ -18,6 +18,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { createStarkeepDataLayer } from "../src/data/starkeep.js";
 import { createRowClient } from "../src/data/starkeep/rows.js";
+import { withDefaultToolArguments } from "../src/mcp/defaults.js";
 import { registerTools, type McpToolHandlers } from "../src/mcp/handlers.js";
 import { toolError } from "../src/mcp/format.js";
 import { TOOL_DEFINITIONS } from "../src/mcp/tools.js";
@@ -62,24 +63,6 @@ export function createExerciseMcpServer(deps: ExerciseMcpDeps = {}): McpServer {
   const server = new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION });
   registerTools(server, createRequestHandlers(deps));
   return server;
-}
-
-/**
- * The MCP spec makes a `tools/call` request's `arguments` optional, but the
- * SDK's schema validation rejects a missing object even when every field is
- * optional (get_workout_history, adherence_for_day). Default it to `{}`, as
- * `api/mcp.ts`'s `withDefaultToolArguments` does, for one message or a batch.
- */
-function withDefaultToolArguments(body: unknown): unknown {
-  for (const message of Array.isArray(body) ? body : [body]) {
-    if (message && typeof message === "object" && (message as Record<string, unknown>).method === "tools/call") {
-      const params = (message as Record<string, unknown>).params;
-      if (params && typeof params === "object" && (params as Record<string, unknown>).arguments === undefined) {
-        (params as Record<string, unknown>).arguments = {};
-      }
-    }
-  }
-  return body;
 }
 
 /** The parsed JSON body, or undefined to let the transport read (and reject) it itself. */

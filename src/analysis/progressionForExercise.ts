@@ -1,6 +1,6 @@
-import type { ExerciseRow, SessionRow, SessionSetRow } from "./rows";
-import { matchingSetsWithDate } from "./matchingSets";
-import { addDecimal, compareDates, mulDecimalInt, roundDecimal, toDecimal, type Decimal } from "./sqlSemantics";
+import type { ExerciseRow, SessionRow, SessionSetRow } from "./rows.js";
+import { matchingSetsWithDate } from "./matchingSets.js";
+import { addDecimal, compareDates, mulDecimalInt, roundDecimal, toDecimal, type Decimal } from "./sqlSemantics.js";
 
 export interface ProgressionForExerciseTables {
   sessions: readonly Pick<SessionRow, "id" | "performed_on">[];

@@ -6,7 +6,7 @@ import type {
   SessionSetRow,
   WorkoutDayExerciseRow,
   WorkoutDayRow,
-} from "./rows";
+} from "./rows.js";
 import {
   ascNullsLast,
   compareDates,
@@ -18,7 +18,7 @@ import {
   timestampToUtcDate,
   uuidEquals,
   uuidKey,
-} from "./sqlSemantics";
+} from "./sqlSemantics.js";
 
 export interface AdherenceForDayTables {
   sessions: readonly Pick<SessionRow, "id" | "performed_on" | "workout_day_id">[];

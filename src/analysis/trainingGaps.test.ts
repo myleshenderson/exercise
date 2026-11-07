@@ -1,5 +1,5 @@
-import { trainingGaps } from "./trainingGaps";
-import { session } from "./testFixtures";
+import { trainingGaps } from "./trainingGaps.js";
+import { session } from "./testFixtures.js";
 
 // Expected values worked by hand from 0005_analysis_rpc.sql:
 // distinct performed_on, performed_on - lag(performed_on), ordered by date.

@@ -1,5 +1,5 @@
-import type { JsonValue, SchemeHistoryRow } from "./rows";
-import { timestampMicros, uuidEquals } from "./sqlSemantics";
+import type { JsonValue, SchemeHistoryRow } from "./rows.js";
+import { timestampMicros, uuidEquals } from "./sqlSemantics.js";
 
 export interface SchemeHistoryForDayExerciseTables {
   schemeHistory: readonly Pick<SchemeHistoryRow, "workout_day_id" | "exercise_id" | "target_sets" | "recorded_at">[];

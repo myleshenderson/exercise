@@ -20,7 +20,7 @@
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { DataLayer } from "../src/data/DataLayer.js";
-import { ExerciseInUseError } from "../src/data/starkeep.js";
+import { ExerciseInUseError, selectIn } from "../src/data/starkeep.js";
 import type { Row, RowClient, Where } from "../src/data/starkeep/rows.js";
 import type { McpToolHandlers } from "../src/mcp/handlers.js";
 import {
@@ -51,7 +51,7 @@ import {
   type WorkoutDayExerciseRow,
   type WorkoutDayRow,
 } from "../src/analysis/index.js";
-import { compileIlike, compareText } from "../src/analysis/sqlSemantics.js";
+import { compileIlike } from "../src/analysis/sqlSemantics.js";
 
 // ---- Starkeep rows (starkeep.manifest.json tables) --------------------------
 
@@ -227,9 +227,6 @@ const toSetRow = (r: SkSet): SessionSetRow => ({
 
 // ---- helpers ------------------------------------------------------------------
 
-/** Ids per `in` filter, as in src/data/starkeep.ts: keeps each URL well bounded. */
-const IN_CHUNK = 100;
-
 /**
  * Postgres compares uuids by value, so `api/mcp.ts` finds a row whatever the
  * case of the id it was given. The row API compares `text` exactly, and every
@@ -258,22 +255,6 @@ function errorMessage(e: unknown): string {
 }
 
 export function createStarkeepHandlers(data: DataLayer, rows: RowClient): McpToolHandlers {
-  /** selectAll with `column in ids`, chunked; no request at all for no ids. */
-  async function selectIn<R extends Row>(
-    table: string,
-    column: string,
-    ids: (string | null | undefined)[],
-    opts: { where?: Where; select?: string[]; order?: string[] } = {},
-  ): Promise<R[]> {
-    const unique = [...new Set(ids.filter((id): id is string => typeof id === "string"))];
-    const parts: string[][] = [];
-    for (let i = 0; i < unique.length; i += IN_CHUNK) parts.push(unique.slice(i, i + IN_CHUNK));
-    const pages = await Promise.all(
-      parts.map((part) => rows.selectAll<R>(table, { ...opts, where: { ...opts.where, [column]: { in: part } } })),
-    );
-    return pages.flat();
-  }
-
   async function firstRow<R extends Row>(table: string, where: Where, select?: string[]): Promise<R | null> {
     const { rows: found } = await rows.select<R>(table, { where, select, limit: 1 });
     return found[0] ?? null;
@@ -326,9 +307,9 @@ export function createStarkeepHandlers(data: DataLayer, rows: RowClient): McpToo
     const pattern = compileIlike(`%${exerciseName}%`);
     const exercises = await rows.selectAll<SkExercise>(T.exercises, { select: ["id", "name"] });
     const matching = exercises.filter((e) => pattern.test(e.name)).map((e) => e.id);
-    const sets = (await selectIn<SkSet>(T.sets, "exercise_id", matching)).map(toSetRow);
+    const sets = (await selectIn<SkSet>(rows, T.sets, "exercise_id", matching)).map(toSetRow);
     const sessions = (
-      await selectIn<SkSession>(T.sessions, "id", sets.map((s) => s.session_id), { select: ["id", "performed_on"] })
+      await selectIn<SkSession>(rows, T.sessions, "id", sets.map((s) => s.session_id), { select: ["id", "performed_on"] })
     ).map((s) => ({ id: s.id, performed_on: s.performed_on }));
     return { exercises: exercises.map((e) => ({ id: e.id, name: e.name })), sessions, sessionSets: sets };
   }
@@ -395,12 +376,12 @@ export function createStarkeepHandlers(data: DataLayer, rows: RowClient): McpToo
         const sessions = (
           await rows.selectAll<SkSession>(T.sessions, { where: dateWhere(start_date, end_date) })
         ).map(toSessionRow);
-        const sets = (await selectIn<SkSet>(T.sets, "session_id", sessions.map((s) => s.id))).map(toSetRow);
+        const sets = (await selectIn<SkSet>(rows, T.sets, "session_id", sessions.map((s) => s.id))).map(toSetRow);
         // Archived days included: the SQL joins them unfiltered, so a session
         // keeps its day's name after the day is deleted.
         const [days, exercises] = await Promise.all([
-          selectIn<SkDay>(T.days, "id", sessions.map((s) => s.workout_day_id), { select: ["id", "name"] }),
-          selectIn<SkExercise>(T.exercises, "id", sets.map((s) => s.exercise_id), { select: ["id", "name"] }),
+          selectIn<SkDay>(rows, T.days, "id", sessions.map((s) => s.workout_day_id), { select: ["id", "name"] }),
+          selectIn<SkExercise>(rows, T.exercises, "id", sets.map((s) => s.exercise_id), { select: ["id", "name"] }),
         ]);
         return getWorkoutHistory(
           {
@@ -436,12 +417,12 @@ export function createStarkeepHandlers(data: DataLayer, rows: RowClient): McpToo
         // scheme_history_for_day_exercise reads it; a (day, exercise) pair
         // never spans two `in` chunks, so that order holds per pair.
         const [sets, days, links, history] = await Promise.all([
-          selectIn<SkSet>(T.sets, "session_id", sessions.map((s) => s.id)).then((r) => r.map(toSetRow)),
-          selectIn<SkDay>(T.days, "id", dayIds, { select: ["id", "name"] }),
-          selectIn<SkLink>(T.links, "workout_day_id", dayIds),
-          selectIn<SkHistory>(T.history, "workout_day_id", dayIds, { order: ["recorded_at.asc"] }),
+          selectIn<SkSet>(rows, T.sets, "session_id", sessions.map((s) => s.id)).then((r) => r.map(toSetRow)),
+          selectIn<SkDay>(rows, T.days, "id", dayIds, { select: ["id", "name"] }),
+          selectIn<SkLink>(rows, T.links, "workout_day_id", dayIds),
+          selectIn<SkHistory>(rows, T.history, "workout_day_id", dayIds, { order: ["recorded_at.asc"] }),
         ]);
-        const exercises = await selectIn<SkExercise>(T.exercises, "id", sets.map((s) => s.exercise_id));
+        const exercises = await selectIn<SkExercise>(rows, T.exercises, "id", sets.map((s) => s.exercise_id));
         return adherenceForDay(
           {
             sessions,
@@ -567,11 +548,8 @@ export function createStarkeepHandlers(data: DataLayer, rows: RowClient): McpToo
 
     list_exercises: async () => {
       // Not wrapped, as in api/mcp.ts: a failure surfaces as the SDK's own tool error.
-      const exercises = await data.listExercises();
-      // Supabase orders by name in the database's en_US collation; the row API's
-      // order is the data plane's. Re-sort with the analysis port of that
-      // collation (stable, so equal names keep the row API's order).
-      return toolResult(exercises.slice().sort((a, b) => compareText(a.name, b.name)));
+      // The DataLayer already orders by name with Supabase's en_US collation.
+      return toolResult(await data.listExercises());
     },
 
     delete_exercise: ({ exercise_id }) =>

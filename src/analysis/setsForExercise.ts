@@ -1,6 +1,6 @@
-import type { ExerciseRow, SessionRow, SessionSetRow } from "./rows";
-import { matchingSetsWithDate } from "./matchingSets";
-import { compareDates, compareNumbers } from "./sqlSemantics";
+import type { ExerciseRow, SessionRow, SessionSetRow } from "./rows.js";
+import { matchingSetsWithDate } from "./matchingSets.js";
+import { compareDates, compareNumbers } from "./sqlSemantics.js";
 
 export interface SetsForExerciseTables {
   sessions: readonly Pick<SessionRow, "id" | "performed_on">[];

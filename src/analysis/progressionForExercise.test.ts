@@ -1,5 +1,5 @@
-import { progressionForExercise } from "./progressionForExercise";
-import { exercise, session, set } from "./testFixtures";
+import { progressionForExercise } from "./progressionForExercise.js";
+import { exercise, session, set } from "./testFixtures.js";
 
 // Expected values worked by hand from 0005_analysis_rpc.sql:
 // count(*), max(weight), round(sum(weight*reps)) grouped by performed_on,

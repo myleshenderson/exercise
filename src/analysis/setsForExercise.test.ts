@@ -1,5 +1,5 @@
-import { setsForExercise } from "./setsForExercise";
-import { exercise, session, set } from "./testFixtures";
+import { setsForExercise } from "./setsForExercise.js";
+import { exercise, session, set } from "./testFixtures.js";
 
 // Expected values worked by hand from 0010_sets_for_exercise_rpc.sql:
 // one row per matching set, ordered by performed_on, set_number.

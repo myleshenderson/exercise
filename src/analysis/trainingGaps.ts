@@ -1,5 +1,5 @@
-import type { SessionRow } from "./rows";
-import { compareDates, dayNumber } from "./sqlSemantics";
+import type { SessionRow } from "./rows.js";
+import { compareDates, dayNumber } from "./sqlSemantics.js";
 
 export interface TrainingGapsTables {
   sessions: readonly Pick<SessionRow, "performed_on">[];

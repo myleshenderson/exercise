@@ -10,7 +10,7 @@ import {
   addDecimal,
   dayNumber,
   mulDecimalInt,
-} from "./sqlSemantics";
+} from "./sqlSemantics.js";
 
 describe("sqlSemantics", () => {
   it("round(numeric) is exact and rounds half away from zero", () => {
