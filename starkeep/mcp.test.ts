@@ -1,9 +1,24 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
-import { createApp } from "./server.js";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { FakeDataPlane, TEST_CREDS } from "./test-support.js";
 
-const TOKEN = "s3cret-token";
-const app = createApp({ mcpToken: TOKEN });
+vi.mock("@starkeep/app-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@starkeep/app-client")>();
+  return { ...actual, loadAppCredentials: async () => TEST_CREDS };
+});
+
+const { createApp } = await import("./server.js");
+
+// Local mode: a sealed token whose row lives in a fake data plane.
+const plane = new FakeDataPlane();
+const { token: TOKEN } = plane.seed();
+const app = createApp();
+
+beforeAll(() => {
+  delete process.env.STARKEEP_APP_CLIENT_MODE;
+  vi.stubGlobal("fetch", plane.fetch);
+});
+afterAll(() => vi.unstubAllGlobals());
 
 async function rpc(body: unknown) {
   const res = await app.request("/mcp", {

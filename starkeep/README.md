@@ -7,8 +7,9 @@ Starkeep-specific lives in `starkeep/`, `starkeep.manifest.json` and
 `tsconfig.starkeep.json`.
 
 What works today: the SPA is served on both surfaces, `POST /mcp` is an MCP
-endpoint behind a bearer token, and `/api/local-data/*` is the browser's signing
-proxy to the app's tables. The endpoint completes `initialize` and
+endpoint behind per-user bearer tokens that the MCP screen mints and revokes
+(`/api/mcp-login`, `/api/mcp-sessions`; see [MCP tokens](#mcp-tokens)), and
+`/api/local-data/*` is the browser's signing proxy to the app's tables. The endpoint completes `initialize` and
 registers **no tools** yet. Tools, the Starkeep DataLayer and browser sign-in
 come in later issues of epic AI-386.
 
@@ -17,9 +18,14 @@ come in later issues of epic AI-386.
 | File | What it is |
 | --- | --- |
 | `starkeep.manifest.json` | App id `exercise`, tier `community`, targets `local` + `cloud`, the syncable tables, the `static` compute handler. |
-| `starkeep/server.ts` | The Hono app (`app.fetch`) both surfaces run: `POST /mcp`, `GET /starkeep-runtime-config`, `/api/session[/*]`, `/api/local-data/*`. |
-| `starkeep/mcp.ts` | `createExerciseMcpServer(deps)` (zero tools) and the stateless JSON transport per request. |
-| `starkeep/mcp-auth.ts` | `Authorization: Bearer` check against `STARKEEP_MCP_TOKEN`, compared in constant time. |
+| `starkeep/server.ts` | The Hono app (`app.fetch`) both surfaces run: `POST /mcp`, `POST /api/mcp-login`, `/api/mcp-sessions`, `GET /starkeep-runtime-config`, `/api/session[/*]`, `/api/local-data/*`. |
+| `starkeep/mcp.ts` | `createExerciseMcpServer(deps)` (zero tools) and the stateless JSON transport per request. `deps.context` is who the request acts for. |
+| `starkeep/mcp-auth.ts` | `POST /mcp` gate: unseals the bearer token, mints and caches the user's ID token (cloud), checks the `mcp_tokens` row, resolves `{ sub, userToken, tokenId }`. |
+| `starkeep/mcp-login.ts`, `starkeep/mcp-sessions.ts` | Mint, list and revoke MCP tokens from the browser session; same JSON as `api/mcp-login.ts` / `api/mcp-sessions.ts`. |
+| `starkeep/token.ts` | The `exr_` sealed token: AES-256-GCM under an HKDF key from the app's HMAC secret. |
+| `starkeep/caller.ts` | Resolves the browser caller: platform session in the cloud, open on loopback. |
+| `starkeep/serverTransport.ts` | `createServerTransport({ userToken? })`: server-side `Transport` to the app's tables over `signedFetch`, adding `X-Starkeep-User-Token` when given. |
+| `starkeep/mcpTokens.ts` | The `mcp_tokens` row calls (find, list, insert, delete, touch). |
 | `starkeep/serve.ts` | Local entry (`localRun`): Node server on loopback, Hono for server paths, `dist/` for the rest. |
 | `starkeep/handler.ts` | Cloud Lambda entry: `createWebAppHandler` + `honoUpstream`. |
 | `starkeep/client-routes.ts` | The SPA's client routes, used as cloud `shellPaths`. |
@@ -95,41 +101,37 @@ editing `src/`, which AI-600 tracks.
    `starkeep-apps`. Run `npm install` in this repo. Installed apps run from
    their source checkout, and admin-web refuses to start an app that has no
    `node_modules`.
-3. Pick an MCP token and export it in the shell that will start admin-web.
-   Apps that admin-web starts inherit its environment:
-
-   ```bash
-   export STARKEEP_MCP_TOKEN="$(openssl rand -hex 32)"
-   ```
-
-4. Start admin-web from `starkeep-core` with `pnpm --filter admin-web dev`,
+3. Start admin-web from `starkeep-core` with `pnpm --filter admin-web dev`,
    then open http://localhost:3000.
-5. In the **Local** section, on the **Data Server** card, click **Start Data
+4. In the **Local** section, on the **Data Server** card, click **Start Data
    Server**. It listens on port 9820.
-6. Click **Discover apps** in the header and add the absolute path of this
+5. Click **Discover apps** in the header and add the absolute path of this
    repo's **parent** directory (e.g. `~/starkeep`). Admin scans each folder
    inside a registered folder for a `starkeep.manifest.json`.
-7. On the **Exercise** card, click **Install**, review the grants (eight
+6. On the **Exercise** card, click **Install**, review the grants (eight
    app-private tables, no shared file types) and click **Approve & Install**.
    This writes the app credential to `~/.starkeep/app-creds/exercise.json`.
-8. Click **Start Exercise**, then **Open Exercise ↗**. Check MCP with:
+7. Click **Start Exercise**, then **Open Exercise ↗**. Open the MCP screen
+   (`/mcp-login`), click to create a token, and check MCP with it:
 
    ```bash
+   TOKEN=exr_...   # from the MCP screen, or: curl -s -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:<port>/api/mcp-login
    curl -s -X POST http://127.0.0.1:<port>/mcp \
-     -H "authorization: Bearer $STARKEEP_MCP_TOKEN" \
+     -H "authorization: Bearer $TOKEN" \
      -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
    # → {"result":{"tools":[]},"jsonrpc":"2.0","id":1}
    ```
 
 You can also run the server without admin-web:
-`STARKEEP_MCP_TOKEN=dev npm run starkeep:serve -- -p 5199`.
+`npm run starkeep:serve -- -p 5199`. It needs the app credential in
+`~/.starkeep/app-creds/exercise.json` and a running data server, because tokens
+are rows in `mcp_tokens`.
 
 ## Environment variables
 
 | Variable | Surface | Set by | Used for |
 | --- | --- | --- | --- |
-| `STARKEEP_MCP_TOKEN` | both | operator (see below) | Bearer token for `POST /mcp`. Read once at startup. Unset or empty: every `/mcp` request returns **503**, never open access. |
 | `PORT` | local | person running by hand | Fallback when no `-p`/`--port` is passed. |
 | `STARKEEP_DIR` | local | admin-web's env | Root of Starkeep state (default `~/.starkeep`); credentials live in `app-creds/` under it. |
 | `STARKEEP_APP_BASE_PATH` | bundle + cloud | installer / Lambda env | Mount prefix `/apps/exercise`: Vite `base` at bundle time, and the web adapter's `basePath` at runtime. |
@@ -148,15 +150,6 @@ server, e.g. `GET /app-data/db/<table>?where=…` (authoring guide §6a). In the
 cloud, the same calls work through the `STARKEEP_APP_CLIENT_MODE`,
 `STARKEEP_CLOUD_DATA_BASE` and `STARKEEP_APP_CREDS_PARAMETER_NAME` variables
 the platform injects.
-
-**Setting `STARKEEP_MCP_TOKEN` in the cloud.** The installer only fills empty
-`env` placeholders whose key it recognises (the four pool/gateway keys), and
-`STARKEEP_MCP_TOKEN` is not one of them. A fresh cloud install therefore
-deploys with an empty token, and `/mcp` answers 503 until an operator sets the
-value. There are two ways: put the token in the manifest `env` of a local,
-uncommitted copy before installing, or set it on the Lambda afterwards
-(AI-596 does this by hand). A non-empty value in the manifest `env` is
-deployed as-is, so never commit one.
 
 ## Browser data proxy: `/api/local-data/*`
 
@@ -220,17 +213,19 @@ declared as its own route with a per-route override:
 { "route": "POST /mcp", "auth": "public" }
 ```
 
-**Justification:** remote MCP client authenticates with a per-install bearer
-token held in env STARKEEP_MCP_TOKEN; the app enforces it on every request.
+**Justification:** per-user sealed bearer tokens minted from the app's own
+session; see starkeep/README.md.
 
 A remote MCP client cannot carry the platform's session cookie or a Cognito
 JWT, so the gateway authorizer cannot gate this route. The app is the
 boundary (authoring guide §10):
 
-- Missing or empty `STARKEEP_MCP_TOKEN` at startup: every `/mcp` request returns `503 {"error":"mcp_token_not_configured"}`.
-- Missing `Authorization`, a scheme other than `Bearer`, or the wrong token: `401 {"error":"unauthorized"}`. Tokens are compared with `crypto.timingSafeEqual` over the SHA-256 digests of both sides, so the buffers always have equal length.
+- Missing `Authorization`, a scheme other than `Bearer`, a token that does not unseal, or no `mcp_tokens` row for it (revoked, or another user's): `401 {"error":"unauthorized"}`.
+- Cognito refuses the sealed refresh token, or the row's `expires_at` has passed: `401 {"error":"token_expired"}`. The user mints a new token on the MCP screen.
+- Cognito failing rather than refusing (5xx, throttling, network): `503 {"error":"auth_unavailable"}`, so the client retries. App not installed or credential load failing: `503`. Data plane error on the row read: `502`, never a pass.
 - `GET` (and any other non-POST method) on `/mcp`: `405`, `Allow: POST`.
-- No cookies, no Cognito, no OAuth on this route.
+- No cookies and no OAuth on this route. The only Cognito call is the
+  server's own refresh-token exchange (see [MCP tokens](#mcp-tokens)).
 
 `/mcp` is deliberately **not** in `publicPaths`. Under `auth: "session"` each
 `publicPaths` entry becomes an `ANY` route, which would replace the narrower
@@ -242,6 +237,74 @@ undefined`), `enableJsonResponse: true`, one server and transport per request,
 never SSE. The class is `WebStandardStreamableHTTPServerTransport`. It is the
 web-`Request` version of `StreamableHTTPServerTransport`, which only wraps it
 for Node `req`/`res`. Hono hands the app a web `Request`.
+
+## MCP tokens
+
+A call from Claude to `POST /mcp` has no browser session, so the token it
+presents has to carry the user's identity. This reproduces the Supabase
+design (`api/mcp-login.ts`, `api/mcp-sessions.ts`, `api/mcp-auth.ts`): one
+opaque bearer token per connection, minted and revoked from the MCP screen.
+
+**Format.** `exr_` + base64url of an AES-256-GCM sealed blob (12-byte IV,
+ciphertext, 16-byte tag). The key is HKDF-SHA256 of the app's HMAC secret
+(`loadAppCredentials("exercise").hmacSecret`, empty salt, info
+`"exercise-mcp-token-v1"`, 32 bytes). The plaintext is
+`{ "v": 1, "id": <uuid>, "rt": <Cognito refresh token | null>, "sub": <user sub | null> }`.
+A tampered, truncated or foreign token fails to unseal and gets 401. A new
+HMAC secret (reinstall) invalidates every outstanding token.
+
+**What is stored.** One `mcp_tokens` row per token: `id`, `token_hash` =
+hex `sha256(id)`, `label` (null), `created_at`, `last_used_at` (null until first
+use, then written at most once a minute), `expires_at`. The token and the
+refresh token inside it are returned once by `POST /api/mcp-login` and never
+stored. Revoking (`DELETE /api/mcp-sessions { session_id }`) deletes the row,
+and the next `/mcp` call with that token finds no row and gets 401. Cognito
+`RevokeToken` is not called.
+
+**Endpoints** (same JSON as the Vercel functions, so `src/screens/MCPLogin.tsx`
+only changes its base path):
+
+| Route | Success | Errors |
+| --- | --- | --- |
+| `POST /api/mcp-login` | `{ token, expires_at }` | 401 `Invalid session`, 500 `Could not create token`, 405 |
+| `POST` or `GET /api/mcp-sessions` | `{ sessions: [{ id, createdAt, lastUsedAt }] }`, newest first (`lastUsedAt` is `createdAt` until first use) | 401, 500 `Could not list sessions`, 405 |
+| `DELETE /api/mcp-sessions` `{ session_id }` | `{ ok: true }` | 400, 404 `Session not found`, 500 `Could not revoke session` |
+
+`POST` and `DELETE` must be `content-type: application/json` (415 otherwise),
+so a cross-site form cannot mint or revoke with the user's cookie or against
+the loopback server.
+
+**Cloud.** The browser routes need the platform session: the `sk_session`
+cookie (the user's Cognito refresh token) and an ID token from `mintIdToken`,
+the resolver behind `sessionAuth()`. No session gives 401. `POST
+/api/mcp-login` goes further. Before sealing the refresh token, it exchanges
+it with Cognito (`refreshTokens`) and verifies the resulting ID token
+(`verifyIdToken`), so a dead refresh token gives 401 instead of a token that
+is dead on arrival. The token seals that refresh token and the `sub` from the
+same exchange; the row is written with the ID
+token as `X-Starkeep-User-Token`, so the data plane files it under that user,
+and list and revoke only ever see the caller's rows. On `/mcp` the server
+exchanges the sealed refresh token for an ID token (`refreshTokens`) and
+caches it in module scope, keyed by token id, until 60 s before its `exp`.
+That ID token goes on the row read and is handed to the tool handlers as
+`deps.context = { sub, userToken, tokenId }`. The minted ID token's `sub`
+must equal the sealed `sub`, or the call gets 401. If Cognito refuses the refresh
+token (expired, revoked, or the user's sessions were signed out globally),
+`/mcp` answers 401 `token_expired`.
+
+**Why 30 days in the cloud.** `expires_at` is creation time + 30 days because
+refresh tokens for cloud apps live 30 days (`SESSION_MAX_AGE_S`). A token
+cannot outlive the refresh token sealed in it. That refresh token was issued
+at sign-in, possibly days before the MCP token was created, so Cognito may
+refuse it before `expires_at`. Either way the result is 401 `token_expired`.
+
+**Local mode** (`STARKEEP_APP_CLIENT_MODE` not `cloud`): there is no session
+and no user token anywhere. `POST /api/mcp-login` works without signing in,
+because the server binds `127.0.0.1`, refuses a non-loopback `Host`, and the
+library has one owner. `rt` and `sub` are null, `expires_at` is ten years out,
+and the row read on `/mcp` is HMAC-signed only. A token minted locally does
+not work against a cloud install (its `rt` is null), and the HMAC secrets
+differ anyway.
 
 ## Table mapping (contract for the DataLayer issue)
 
@@ -268,9 +331,10 @@ column names are unchanged, except that soft delete's `deleted_at` becomes
 - Table `mcp_tokens`: MCP bearer tokens, stored per install like every other
   table here (there is no user column). It replaces Supabase's `mcp_sessions`
   and has no Supabase counterpart. `token_hash` holds a hash, never the token
-  itself. The per-user token issue builds on it. Like every declared table it
-  is reachable through `/api/local-data/app-data/db/mcp_tokens`, so the hash
-  is the only protection; nothing here reads it yet.
+  itself. See [MCP tokens](#mcp-tokens). Like every declared table it is
+  reachable through `/api/local-data/app-data/db/mcp_tokens`; that exposes
+  only the user's own rows (ids, hashes, timestamps), from which no token can
+  be built without the app's HMAC secret.
 
 **Soft delete: app-managed `archived_at`.** Supabase's `deleted_at` on
 `programs`, `workout_days` and `exercises` maps to a nullable `archived_at`

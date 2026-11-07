@@ -16,17 +16,23 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import type { McpRequestContext } from "./mcp-auth.js";
 
 /** The MCP `serverInfo.name` a client sees after `initialize`. */
 export const MCP_SERVER_NAME = "exercise";
 export const MCP_SERVER_VERSION = "0.1.0";
 
 /**
- * What the server needs to answer tool calls. Empty for now: the wiring issue
- * adds the data handlers here and calls `registerTools(server, handlers)` from
- * `src/mcp/` inside {@link createExerciseMcpServer}.
+ * What the server needs to answer tool calls. `context` is who the request
+ * acts for, resolved by `mcp-auth.ts` from the bearer token: the tool handlers
+ * (AI-604) build `createServerTransport({ userToken: context.userToken })`
+ * from it per request. No tools yet: AI-604 calls
+ * `registerTools(server, handlers)` from `src/mcp/` inside
+ * {@link createExerciseMcpServer}.
  */
-export type ExerciseMcpDeps = Record<string, never>;
+export interface ExerciseMcpDeps {
+  context?: McpRequestContext;
+}
 
 export function createExerciseMcpServer(_deps: ExerciseMcpDeps = {}): McpServer {
   const server = new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION });
