@@ -4,6 +4,7 @@ import type { DataLayer } from "./DataLayer";
 import { createStarkeepDataLayer, ExerciseInUseError, SEED_CLAIM_PREFIX } from "./starkeep";
 import { createFakeTransport, type FakeTransport } from "./starkeep/fakeTransport";
 import { ensureSeeded } from "./ensureSeeded";
+import { compareText } from "../analysis/sqlSemantics";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const tables = manifest.infraRequirements.appSpecificSyncable.tables;
@@ -131,6 +132,14 @@ describe("exercises", () => {
     expect(await db.getExercise(curl.id)).not.toBeNull();
     expect(fake.tables.exercises.find((r) => r.id === curl.id)!.archived_at).toBe("2026-11-01T00:00:00.004Z");
     expectNoForbiddenColumns(fake);
+  });
+
+  test("listExercises orders names by compareText (Supabase's en_US collation), not row-API byte order", async () => {
+    const { db } = setup();
+    for (const name of ["bench", "Curl", "ab wheel", "Arnold press", "curl"]) await db.createExercise(ex(name));
+    const names = (await db.listExercises()).map((e) => e.name);
+    expect(names).toEqual(["ab wheel", "Arnold press", "bench", "curl", "Curl"]);
+    expect(names).toEqual(names.slice().sort(compareText));
   });
 
   test("listExercises returns every row past the 500-row page limit", async () => {

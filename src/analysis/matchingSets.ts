@@ -1,5 +1,5 @@
-import type { ExerciseRow, SessionRow, SessionSetRow } from "./rows";
-import { compileIlike, uuidKey } from "./sqlSemantics";
+import type { ExerciseRow, SessionRow, SessionSetRow } from "./rows.js";
+import { compileIlike, uuidKey } from "./sqlSemantics.js";
 
 /**
  * The shared core of `progression_for_exercise` and `sets_for_exercise`:

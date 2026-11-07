@@ -6,8 +6,8 @@ import type {
   SessionSetRow,
   WorkoutDayExerciseRow,
   WorkoutDayRow,
-} from "./rows";
-import { ascNullsLast, compareNumbers, groupByUuid, uuidKey } from "./sqlSemantics";
+} from "./rows.js";
+import { ascNullsLast, compareNumbers, groupByUuid, uuidKey } from "./sqlSemantics.js";
 
 export interface GetDayTemplatesTables {
   /** Include soft-deleted days and programs; they are filtered here as the SQL does. */

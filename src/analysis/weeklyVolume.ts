@@ -1,4 +1,4 @@
-import type { SessionRow, SessionSetRow } from "./rows";
+import type { SessionRow, SessionSetRow } from "./rows.js";
 import {
   addDecimal,
   compareDates,
@@ -9,7 +9,7 @@ import {
   toDecimal,
   uuidKey,
   type Decimal,
-} from "./sqlSemantics";
+} from "./sqlSemantics.js";
 
 export interface WeeklyVolumeTables {
   sessions: readonly Pick<SessionRow, "id" | "performed_on">[];

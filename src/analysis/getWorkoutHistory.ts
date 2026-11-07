@@ -1,4 +1,4 @@
-import type { ExerciseRow, SessionRow, SessionSetRow, WorkoutDayRow } from "./rows";
+import type { ExerciseRow, SessionRow, SessionSetRow, WorkoutDayRow } from "./rows.js";
 import {
   ascNullsLast,
   compareDates,
@@ -8,7 +8,7 @@ import {
   dayNumber,
   groupByUuid,
   uuidKey,
-} from "./sqlSemantics";
+} from "./sqlSemantics.js";
 
 export interface GetWorkoutHistoryTables {
   sessions: readonly Pick<SessionRow, "id" | "performed_on" | "workout_day_id">[];

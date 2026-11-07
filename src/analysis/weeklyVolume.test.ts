@@ -1,5 +1,5 @@
-import { weeklyVolume } from "./weeklyVolume";
-import { session, set } from "./testFixtures";
+import { weeklyVolume } from "./weeklyVolume.js";
+import { session, set } from "./testFixtures.js";
 
 // Expected values worked by hand from 0005_analysis_rpc.sql:
 // date_trunc('week', performed_on)::date (ISO Monday), count(distinct s.id),

@@ -15,7 +15,7 @@
  *   last writer wins), the later insert replaces the row.
  * - `order` sorts nulls last unless told otherwise and appends the primary key.
  */
-import type { Transport } from "./rows";
+import type { Transport } from "./rows.js";
 
 export interface FakeColumn {
   name: string;

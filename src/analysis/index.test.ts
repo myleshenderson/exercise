@@ -1,4 +1,4 @@
-import * as analysis from "./index";
+import * as analysis from "./index.js";
 
 describe("src/analysis index", () => {
   it("exports exactly the eight analysis functions", () => {

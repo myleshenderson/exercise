@@ -1,5 +1,5 @@
-import { getWorkoutHistory } from "./getWorkoutHistory";
-import { day, exercise, session, set } from "./testFixtures";
+import { getWorkoutHistory } from "./getWorkoutHistory.js";
+import { day, exercise, session, set } from "./testFixtures.js";
 
 // Expected values worked by hand from 0011_workout_history_filters.sql:
 // sessions LEFT JOIN workout_days LEFT JOIN session_sets LEFT JOIN exercises,

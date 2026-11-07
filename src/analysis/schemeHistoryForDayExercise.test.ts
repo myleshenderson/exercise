@@ -1,5 +1,5 @@
-import { schemeHistoryForDayExercise } from "./schemeHistoryForDayExercise";
-import { history } from "./testFixtures";
+import { schemeHistoryForDayExercise } from "./schemeHistoryForDayExercise.js";
+import { history } from "./testFixtures.js";
 
 // Expected values worked by hand from 20260906151951_scheme_history.sql:
 // rows for the (workout_day_id, exercise_id) pair, order by recorded_at.

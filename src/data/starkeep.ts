@@ -23,6 +23,7 @@
 import type { DataLayer, DayLookup } from "./DataLayer.js";
 import type { Exercise, Program, Session, SetEntry, WorkoutDay } from "../types.js";
 import { nextAvailablePositionByProgram, isDayAvailable } from "../lib/programAvailability.js";
+import { compareText } from "../analysis/sqlSemantics.js";
 import { createRowClient, type Row, type RowClient, type Transport, type Where } from "./starkeep/rows.js";
 
 interface ExerciseRow {
@@ -161,6 +162,27 @@ function chunks<T>(items: T[], size = IN_CHUNK): T[][] {
   return out;
 }
 
+/**
+ * selectAll with `column in ids`, chunked to {@link IN_CHUNK} ids per request;
+ * rows from every chunk, in chunk order, otherwise unsorted. Null/undefined ids
+ * and duplicates are dropped, and no ids means no request at all. Shared by
+ * this DataLayer and starkeep/handlers.ts.
+ */
+export async function selectIn<R extends Row>(
+  rows: RowClient,
+  table: string,
+  column: string,
+  ids: readonly (string | null | undefined)[],
+  opts: { where?: Where; select?: string[]; order?: string[] } = {},
+): Promise<R[]> {
+  const unique = [...new Set(ids.filter((id): id is string => typeof id === "string"))];
+  const out: R[] = [];
+  for (const part of chunks(unique)) {
+    out.push(...(await rows.selectAll<R>(table, { ...opts, where: { ...opts.where, [column]: { in: part } } })));
+  }
+  return out;
+}
+
 const now = () => new Date().toISOString();
 const newId = () => crypto.randomUUID();
 
@@ -177,20 +199,6 @@ export function createStarkeepDataLayer(transport: Transport, opts: StarkeepData
 
 export function createStarkeepDataLayerFromRows(rows: RowClient, opts: StarkeepDataLayerOptions = {}): DataLayer {
   const claimSettleMs = opts.claimSettleMs ?? DEFAULT_CLAIM_SETTLE_MS;
-
-  /** selectAll with `column in ids`, chunked; rows from every chunk, unsorted. */
-  async function selectIn<R extends Row>(
-    table: string,
-    column: string,
-    ids: string[],
-    opts: { where?: Where; select?: string[] } = {},
-  ): Promise<R[]> {
-    const out: R[] = [];
-    for (const part of chunks([...new Set(ids)])) {
-      out.push(...(await rows.selectAll<R>(table, { ...opts, where: { ...opts.where, [column]: { in: part } } })));
-    }
-    return out;
-  }
 
   async function first<R extends Row>(table: string, where: Where, order: string[] = []): Promise<R | null> {
     const { rows: found } = await rows.select<R>(table, { where, order, limit: 1 });
@@ -226,7 +234,7 @@ export function createStarkeepDataLayerFromRows(rows: RowClient, opts: StarkeepD
   /** Sessions with their sets, in the order of `sessionRows`. */
   async function hydrate(sessionRows: SessionRow[], allSets?: SetRow[]): Promise<Session[]> {
     if (sessionRows.length === 0) return [];
-    const sets = allSets ?? (await selectIn<SetRow>(T.sets, "session_id", sessionRows.map((s) => s.id)));
+    const sets = allSets ?? (await selectIn<SetRow>(rows, T.sets, "session_id", sessionRows.map((s) => s.id)));
     const bySession = new Map<string, SetRow[]>();
     for (const s of sets) {
       const list = bySession.get(s.session_id);
@@ -298,7 +306,11 @@ export function createStarkeepDataLayerFromRows(rows: RowClient, opts: StarkeepD
 
     async listExercises() {
       const found = await rows.selectAll<ExerciseRow>(T.exercises, { where: LIVE, order: ["name.asc"] });
-      return found.map(toExercise);
+      // supabase.ts orders by name in the database's en_US collation; the row
+      // API's `name.asc` is the data plane's byte order. Re-sort with the
+      // analysis port of that collation (stable, so equal names keep the row
+      // API's order) so the UI and list_exercises match Supabase.
+      return found.sort((a, b) => compareText(a.name, b.name)).map(toExercise);
     },
     getExercise: (id) => fetchExercise(id),
     async createExercise(input) {
@@ -368,7 +380,7 @@ export function createStarkeepDataLayerFromRows(rows: RowClient, opts: StarkeepD
       const programmedDayIds = availabilityInput.filter((d) => d.programId !== null).map((d) => d.id);
       const completed = new Set<string>();
       if (programmedDayIds.length > 0) {
-        const sessionRows = await selectIn<SessionRow>(T.sessions, "workout_day_id", programmedDayIds, {
+        const sessionRows = await selectIn<SessionRow>(rows, T.sessions, "workout_day_id", programmedDayIds, {
           select: ["id", "workout_day_id"],
         });
         const dayBySession = new Map(sessionRows.map((s) => [s.id, s.workout_day_id as string]));
@@ -384,7 +396,7 @@ export function createStarkeepDataLayerFromRows(rows: RowClient, opts: StarkeepD
       }
       const nextByProgram = nextAvailablePositionByProgram(availabilityInput, completed);
 
-      const links = await selectIn<LinkRow>(T.links, "workout_day_id", dayRows.map((d) => d.id), {
+      const links = await selectIn<LinkRow>(rows, T.links, "workout_day_id", dayRows.map((d) => d.id), {
         select: ["workout_day_id", "exercise_id", "position"],
       });
       const linksByDay = new Map<string, LinkRow[]>();
@@ -411,7 +423,7 @@ export function createStarkeepDataLayerFromRows(rows: RowClient, opts: StarkeepD
     },
     async getDayExercises(dayId) {
       const links = await dayLinks(dayId);
-      const found = await selectIn<ExerciseRow>(T.exercises, "id", links.map((l) => l.exercise_id));
+      const found = await selectIn<ExerciseRow>(rows, T.exercises, "id", links.map((l) => l.exercise_id));
       const byId = new Map(found.map((e) => [e.id, toExercise(e)]));
       return links.map((l) => byId.get(l.exercise_id)).filter((e): e is Exercise => !!e);
     },
@@ -535,7 +547,7 @@ export function createStarkeepDataLayerFromRows(rows: RowClient, opts: StarkeepD
       // sets, then their sessions before the date, newest first.
       const sets = await rows.selectAll<SetRow>(T.sets, { where: { exercise_id: exerciseId } });
       if (sets.length === 0) return [];
-      const sessionRows = await selectIn<SessionRow>(T.sessions, "id", sets.map((s) => s.session_id), {
+      const sessionRows = await selectIn<SessionRow>(rows, T.sessions, "id", sets.map((s) => s.session_id), {
         where: { performed_on: { lt: beforeDate } },
       });
       const newest = sessionRows.sort(newestFirst)[0];
@@ -588,7 +600,7 @@ export function createStarkeepDataLayerFromRows(rows: RowClient, opts: StarkeepD
     async getExerciseHistory(exerciseId) {
       const setRows = await rows.selectAll<SetRow>(T.sets, { where: { exercise_id: exerciseId }, select: ["session_id"] });
       const ids = [...new Set(setRows.map((r) => r.session_id))];
-      const sessionRows = await selectIn<SessionRow>(T.sessions, "id", ids);
+      const sessionRows = await selectIn<SessionRow>(rows, T.sessions, "id", ids);
       const byId = new Map(sessionRows.map((s) => [s.id, s]));
       const ordered = ids.map((id) => byId.get(id)).filter((s): s is SessionRow => !!s);
       const sessions = await hydrate(ordered);

@@ -1,5 +1,5 @@
-import { getDayTemplates } from "./getDayTemplates";
-import { day, dayExercise, exercise, program, session, set } from "./testFixtures";
+import { getDayTemplates } from "./getDayTemplates.js";
+import { day, dayExercise, exercise, program, session, set } from "./testFixtures.js";
 
 // Expected values worked by hand from 20260906180100_day_sequencing.sql:
 // non-deleted days LEFT JOIN non-deleted programs, LEFT JOIN program_next

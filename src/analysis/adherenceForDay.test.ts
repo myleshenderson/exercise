@@ -1,5 +1,5 @@
-import { adherenceForDay } from "./adherenceForDay";
-import { day, dayExercise, exercise, history, session, set } from "./testFixtures";
+import { adherenceForDay } from "./adherenceForDay.js";
+import { day, dayExercise, exercise, history, session, set } from "./testFixtures.js";
 
 // Expected values worked by hand from 20260906152003_adherence_for_day_rpc.sql:
 // group sets per (session, exercise); target = latest history row with
