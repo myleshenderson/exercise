@@ -98,6 +98,13 @@
             { "name": "last_used_at", "type": "timestamp" },
             { "name": "expires_at", "type": "timestamp", "notNull": true }
           ]
+        },
+        {
+          "name": "app_meta",
+          "columns": [
+            { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+            { "name": "value", "type": "text" }
+          ]
         }
       ]
     },

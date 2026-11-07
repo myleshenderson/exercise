@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { DataLayer } from "./DataLayer.js";
+import type { DataLayer, DayLookup } from "./DataLayer.js";
 import type { Exercise, WorkoutDay, Session, SetEntry, Program } from "../types.js";
 import { getSupabase } from "./supabaseClient.js";
 import { nextAvailablePositionByProgram, isDayAvailable } from "../lib/programAvailability.js";
@@ -264,6 +264,52 @@ export async function reorderProgramDays(client: SupabaseClient, programId: stri
   }
 }
 
+export async function findDayByName(client: SupabaseClient, name: string): Promise<DayLookup | null> {
+  const { data, error } = await client
+    .from("workout_days")
+    .select("id, name, position, program_id, program_position")
+    .eq("name", name)
+    .is("deleted_at", null)
+    .order("created_at")
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return {
+    id: data.id,
+    name: data.name,
+    position: data.position,
+    programId: data.program_id ?? null,
+    programPosition: data.program_position ?? null,
+  };
+}
+
+export async function findExerciseByName(client: SupabaseClient, name: string): Promise<Exercise | null> {
+  const { data, error } = await client
+    .from("exercises")
+    .select("*")
+    .eq("name", name)
+    .is("deleted_at", null)
+    .order("created_at")
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? toExercise(data) : null;
+}
+
+export async function findProgramByName(client: SupabaseClient, name: string): Promise<Program | null> {
+  const { data, error } = await client
+    .from("programs")
+    .select("id, name")
+    .eq("name", name)
+    .is("deleted_at", null)
+    .order("created_at")
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? { id: data.id, name: data.name } : null;
+}
+
 export function createSupabaseDataLayer(): DataLayer {
   const supabase = getSupabase();
 
@@ -301,6 +347,11 @@ export function createSupabaseDataLayer(): DataLayer {
     listExercises: () => listExercises(supabase),
     getExercise: (id) => fetchExercise(id),
     createExercise: (input) => createExercise(supabase, input),
+    updateExercise: (id, patch) => updateExercise(supabase, id, patch),
+    deleteExercise: (id) => deleteExercise(supabase, id),
+    findDayByName: (name) => findDayByName(supabase, name),
+    findExerciseByName: (name) => findExerciseByName(supabase, name),
+    findProgramByName: (name) => findProgramByName(supabase, name),
     async getWorkoutDays() {
       const { data } = await supabase.from("workout_days").select("*").is("deleted_at", null).order("position");
       const rows = data ?? [];

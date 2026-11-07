@@ -109,7 +109,7 @@ editing `src/`, which AI-600 tracks.
 6. Click **Discover apps** in the header and add the absolute path of this
    repo's **parent** directory (e.g. `~/starkeep`). Admin scans each folder
    inside a registered folder for a `starkeep.manifest.json`.
-7. On the **Exercise** card, click **Install**, review the grants (eight
+7. On the **Exercise** card, click **Install**, review the grants (nine
    app-private tables, no shared file types) and click **Approve & Install**.
    This writes the app credential to `~/.starkeep/app-creds/exercise.json`.
 8. Click **Start Exercise**, then **Open Exercise ↗**. Check MCP with:
@@ -247,7 +247,7 @@ for Node `req`/`res`. Hono hands the app a web `Request`.
 
 Every application table from `supabase/migrations/` is declared under
 `infraRequirements.appSpecificSyncable.tables`, plus the Starkeep-only
-`mcp_tokens`. Locally each one becomes `exercise_syncable_<name>`. Table and
+`mcp_tokens` and `app_meta`. Locally each one becomes `exercise_syncable_<name>`. Table and
 column names are unchanged, except that soft delete's `deleted_at` becomes
 `archived_at` (below).
 
@@ -271,6 +271,15 @@ column names are unchanged, except that soft delete's `deleted_at` becomes
   itself. The per-user token issue builds on it. Like every declared table it
   is reachable through `/api/local-data/app-data/db/mcp_tokens`, so the hash
   is the only protection; nothing here reads it yet.
+- Table `app_meta`: per-install key/value bookkeeping for the DataLayer. It
+  replaces Supabase's `seed_claims`. Starkeep's insert is a last-writer-wins
+  upsert, so a duplicate key never fails and one shared row cannot pick a
+  winner. `src/data/starkeep.ts` `claimSeed()` therefore returns false if any
+  `seed_claim:*` row exists; otherwise it writes its own
+  `seed_claim:<uuid>` row (value: the ISO time), waits briefly for concurrent
+  claims to land, and seeds only if its id sorts first. The key column is
+  `id`, not `key`, because every table here keys on a text `id`
+  (`starkeep/manifest.test.ts`).
 
 **Soft delete: app-managed `archived_at`.** Supabase's `deleted_at` on
 `programs`, `workout_days` and `exercises` maps to a nullable `archived_at`
@@ -350,6 +359,8 @@ text, blob, timestamp, boolean`):
 | | `created_at` | (none) | timestamp nn |
 | | `last_used_at` | (none) | timestamp |
 | | `expires_at` | (none) | timestamp nn |
+| `app_meta` (Starkeep-only) | `id` (the key, e.g. `seed_claim:<uuid>`) | (none) | text PK nn |
+| | `value` | (none) | text |
 
 Supabase rules the DataLayer has to reproduce by hand: the partial unique
 index `workout_days (program_id, program_position) where program_id is not
