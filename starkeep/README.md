@@ -6,8 +6,9 @@ Vercel deployment (`api/`, `src/`, `vercel.json`) does not change: everything
 Starkeep-specific lives in `starkeep/`, `starkeep.manifest.json` and
 `tsconfig.starkeep.json`.
 
-What works today: the SPA is served on both surfaces, and `POST /mcp` is an MCP
-endpoint behind a bearer token. The endpoint completes `initialize` and
+What works today: the SPA is served on both surfaces, `POST /mcp` is an MCP
+endpoint behind a bearer token, and `/api/local-data/*` is the browser's signing
+proxy to the app's tables. The endpoint completes `initialize` and
 registers **no tools** yet. Tools, the Starkeep DataLayer and browser sign-in
 come in later issues of epic AI-386.
 
@@ -16,7 +17,7 @@ come in later issues of epic AI-386.
 | File | What it is |
 | --- | --- |
 | `starkeep.manifest.json` | App id `exercise`, tier `community`, targets `local` + `cloud`, the syncable tables, the `static` compute handler. |
-| `starkeep/server.ts` | The Hono app (`app.fetch`) both surfaces run: `POST /mcp`, `GET /starkeep-runtime-config`, `/api/session[/*]`. |
+| `starkeep/server.ts` | The Hono app (`app.fetch`) both surfaces run: `POST /mcp`, `GET /starkeep-runtime-config`, `/api/session[/*]`, `/api/local-data/*`. |
 | `starkeep/mcp.ts` | `createExerciseMcpServer(deps)` (zero tools) and the stateless JSON transport per request. |
 | `starkeep/mcp-auth.ts` | `Authorization: Bearer` check against `STARKEEP_MCP_TOKEN`, compared in constant time. |
 | `starkeep/serve.ts` | Local entry (`localRun`): Node server on loopback, Hono for server paths, `dist/` for the rest. |
@@ -108,7 +109,7 @@ editing `src/`, which AI-600 tracks.
 6. Click **Discover apps** in the header and add the absolute path of this
    repo's **parent** directory (e.g. `~/starkeep`). Admin scans each folder
    inside a registered folder for a `starkeep.manifest.json`.
-7. On the **Exercise** card, click **Install**, review the grants (seven
+7. On the **Exercise** card, click **Install**, review the grants (eight
    app-private tables, no shared file types) and click **Approve & Install**.
    This writes the app credential to `~/.starkeep/app-creds/exercise.json`.
 8. Click **Start Exercise**, then **Open Exercise ↗**. Check MCP with:
@@ -157,6 +158,57 @@ uncommitted copy before installing, or set it on the Lambda afterwards
 (AI-596 does this by hand). A non-empty value in the manifest `env` is
 deployed as-is, so never commit one.
 
+## Browser data proxy: `/api/local-data/*`
+
+The SPA never holds the app's HMAC secret. It reaches the data plane through
+a same-origin proxy that signs and forwards, mounted exactly as photos mounts
+it (authoring guide §4):
+
+```ts
+const proxy = createDataProxyHandler({ appId: "exercise", endUserAuth: sessionAuth() });
+app.all("/api/local-data/*", (c) => {
+  const path = c.req.path.slice("/api/local-data/".length).split("/").filter(Boolean);
+  return proxy(c.req.raw, { params: Promise.resolve({ path }) });
+});
+```
+
+**URL shape.** The browser calls
+
+```
+${import.meta.env.BASE_URL}api/local-data/<data-server path>[?<query>]
+```
+
+and the proxy forwards `/<data-server path>[?<query>]` to the data server with
+the `X-Starkeep-App-Id` / `X-Starkeep-App-Sig` / `X-Starkeep-App-Ts` headers.
+For the app's own tables the data-server path is `app-data/db/<table>`
+(authoring guide §6a), so:
+
+| Browser request | Forwarded as |
+| --- | --- |
+| `GET  ${BASE_URL}api/local-data/app-data/db/programs?where={"archived_at":{"is":null}}&order=created_at.asc` | `GET /app-data/db/programs?where=…&order=…` |
+| `POST ${BASE_URL}api/local-data/app-data/db/<table>` (JSON body) | `POST /app-data/db/<table>` |
+| other verbs under `${BASE_URL}api/local-data/app-data/db/<table>…` | same verb, same path after the mount |
+
+`BASE_URL` is `/` locally and `/apps/exercise/` in the cloud bundle. Always
+prefix it: a bare `/api/local-data` escapes the cloud mount. Every verb is
+mounted, which the manifest's `ANY /{proxy+}` route admits. The query string
+and a `content-type` header pass through; other request headers do not.
+
+**Auth.** `sessionAuth()` is the platform's cookie-session verifier.
+
+- Cloud (`STARKEEP_APP_CLIENT_MODE=cloud`): a request with no valid session
+  returns **`401 {"error":"Not authenticated"}`** before the HMAC credential
+  is loaded. `/api/local-data/*` is deliberately not in `publicPaths`, so the
+  gateway's session authorizer also sits in front of it.
+- Local: open, the `sessionAuth()` default (`allowAnonymousLocal: true`). On
+  loopback the browser, the data and the person are on one machine.
+- Not installed (no credential): `503` with a pointer to admin-web's install
+  flow.
+
+`starkeep/dataProxy.test.ts` covers the cloud 401 (real verifier), a
+stubbed session (accepted → forwarded with every verb; rejected → 401), and
+the local default.
+
 ## Public route: `POST /mcp`
 
 The manifest's `static` handler is `auth: "session"`: the gateway's session
@@ -194,25 +246,46 @@ for Node `req`/`res`. Hono hands the app a web `Request`.
 ## Table mapping (contract for the DataLayer issue)
 
 Every application table from `supabase/migrations/` is declared under
-`infraRequirements.appSpecificSyncable.tables`. Locally each one becomes
-`exercise_syncable_<name>`. Table and column names are unchanged.
+`infraRequirements.appSpecificSyncable.tables`, plus the Starkeep-only
+`mcp_tokens`. Locally each one becomes `exercise_syncable_<name>`. Table and
+column names are unchanged, except that soft delete's `deleted_at` becomes
+`archived_at` (below).
 
 **Dropped:**
 
 - Every `user_id` column. Starkeep data is per install, not per row.
 - Table `mcp_sessions`: Supabase MCP OAuth session store. It references
-  `auth.users`, and Starkeep uses a bearer token instead.
+  `auth.users`, and Starkeep uses bearer tokens instead (`mcp_tokens`,
+  below).
 - Table `seed_claims`: Supabase per-user seeding bookkeeping. It references
   `auth.users`.
 - RLS policies, grants, RPC functions, foreign keys, unique and partial
   indexes, and column defaults. The manifest has none of these, so the
   DataLayer must enforce or compute them itself.
 
+**Starkeep-only:**
+
+- Table `mcp_tokens`: MCP bearer tokens, stored per install like every other
+  table here (there is no user column). It replaces Supabase's `mcp_sessions`
+  and has no Supabase counterpart. `token_hash` holds a hash, never the token
+  itself. The per-user token issue builds on it. Like every declared table it
+  is reachable through `/api/local-data/app-data/db/mcp_tokens`, so the hash
+  is the only protection; nothing here reads it yet.
+
+**Soft delete: app-managed `archived_at`.** Supabase's `deleted_at` on
+`programs`, `workout_days` and `exercises` maps to a nullable `archived_at`
+`timestamp` that the app owns. The app archives a row by writing
+`archived_at` (ISO-8601 UTC) and restores it by writing `null`. Archived rows
+stay readable, which the analysis functions need (workout history keeps
+deleted days). Reads must filter `archived_at` themselves, e.g.
+`where={"archived_at":{"is":null}}` for live rows; nothing filters them for
+you.
+
 **Server-managed columns:** `updated_at` and `deleted_at` are reserved by the
-Starkeep sync runtime and must not be declared. `programs.deleted_at`,
-`workout_days.deleted_at` and `exercises.deleted_at` (soft delete in Supabase)
-are replaced by the server-managed `deleted_at`. No Supabase table has its own
-`updated_at`.
+Starkeep sync runtime and must not be declared. The app never writes
+`deleted_at`: it belongs to the sync runtime, which does not guarantee that
+rows it marks stay readable, so it cannot carry soft delete.
+No Supabase table has its own `updated_at`.
 
 **Type substitutions** (allowed types are exactly `integer, bigint, real,
 text, blob, timestamp, boolean`):
@@ -235,7 +308,7 @@ text, blob, timestamp, boolean`):
 | `programs` | `id` | uuid PK | text PK nn |
 | | `name` | text not null | text nn |
 | | `created_at` | timestamptz not null default now() | timestamp nn |
-| | ~~`deleted_at`~~ | timestamptz | server-managed |
+| | `archived_at` (Supabase `deleted_at`) | timestamptz | timestamp, nullable, app-managed |
 | `exercises` | `id` | uuid PK | text PK nn |
 | | `name` | text not null | text nn |
 | | `cue` | text not null default '' | text nn |
@@ -243,14 +316,14 @@ text, blob, timestamp, boolean`):
 | | `default_rep_low` | int not null default 10 | integer nn |
 | | `default_rep_high` | int not null default 12 | integer nn |
 | | `created_at` | timestamptz not null default now() | timestamp nn |
-| | ~~`deleted_at`~~ | timestamptz | server-managed |
+| | `archived_at` (Supabase `deleted_at`) | timestamptz | timestamp, nullable, app-managed |
 | `workout_days` | `id` | uuid PK | text PK nn |
 | | `name` | text not null | text nn |
 | | `position` | int not null default 0 | integer nn |
 | | `program_id` | uuid → programs, on delete set null | text |
 | | `program_position` | int | integer |
 | | `created_at` | timestamptz not null default now() | timestamp nn |
-| | ~~`deleted_at`~~ | timestamptz | server-managed |
+| | `archived_at` (Supabase `deleted_at`) | timestamptz | timestamp, nullable, app-managed |
 | `workout_day_exercises` | `id` | uuid PK | text PK nn |
 | | `workout_day_id` | uuid not null → workout_days, cascade | text nn |
 | | `exercise_id` | uuid not null → exercises, cascade | text nn |
@@ -271,10 +344,16 @@ text, blob, timestamp, boolean`):
 | | `set_number` | int not null | integer nn |
 | | `weight` | numeric not null | real nn |
 | | `reps` | int not null | integer nn |
+| `mcp_tokens` (Starkeep-only) | `id` | (none) | text PK nn |
+| | `token_hash` | (none) | text nn |
+| | `label` | (none) | text |
+| | `created_at` | (none) | timestamp nn |
+| | `last_used_at` | (none) | timestamp |
+| | `expires_at` | (none) | timestamp nn |
 
 Supabase rules the DataLayer has to reproduce by hand: the partial unique
 index `workout_days (program_id, program_position) where program_id is not
-null and deleted_at is null`; the append-only rule on
+null and deleted_at is null` (here: `archived_at is null`); the append-only rule on
 `workout_day_exercise_scheme_history`, which is insert only; and the RPCs
 (`get_day_templates`, `get_workout_history`, `adherence_for_day`, `progression_for_exercise`, `scheme_history_for_day_exercise`, `sets_for_exercise`, `training_gaps` and `weekly_volume`). The manifest
 declares no `indexes` yet. Add one per filter the DataLayer actually issues

@@ -33,6 +33,42 @@ describe("starkeep.manifest.json", () => {
     expect(tableNames).not.toContain("seed_claims");
   });
 
+  it("declares a nullable app-owned `archived_at` timestamp on the soft-delete tables", () => {
+    const tables = result.manifest!.infraRequirements.appSpecificSyncable.tables;
+    for (const name of ["programs", "workout_days", "exercises"]) {
+      const table = tables.find((t) => t.name === name);
+      expect(table, name).toBeDefined();
+      const col = table!.columns.find((c) => c.name === "archived_at");
+      expect(col, `${name}.archived_at`).toBeDefined();
+      expect(col!.type, `${name}.archived_at`).toBe("timestamp");
+      expect(col!.notNull ?? false, `${name}.archived_at`).toBe(false);
+      expect(col!.primaryKey ?? false, `${name}.archived_at`).toBe(false);
+      // `deleted_at` is server-managed by the sync runtime; the app never declares it.
+      expect(table!.columns.map((c) => c.name), name).not.toContain("deleted_at");
+    }
+  });
+
+  it("declares the Starkeep-only `mcp_tokens` table", () => {
+    const table = result.manifest!.infraRequirements.appSpecificSyncable.tables.find(
+      (t) => t.name === "mcp_tokens",
+    );
+    expect(table).toBeDefined();
+    const cols = table!.columns.map((c) => ({
+      name: c.name,
+      type: c.type,
+      primaryKey: c.primaryKey ?? false,
+      notNull: c.notNull ?? false,
+    }));
+    expect(cols).toEqual([
+      { name: "id", type: "text", primaryKey: true, notNull: true },
+      { name: "token_hash", type: "text", primaryKey: false, notNull: true },
+      { name: "label", type: "text", primaryKey: false, notNull: false },
+      { name: "created_at", type: "timestamp", primaryKey: false, notNull: true },
+      { name: "last_used_at", type: "timestamp", primaryKey: false, notNull: false },
+      { name: "expires_at", type: "timestamp", primaryKey: false, notNull: true },
+    ]);
+  });
+
   it("declares POST /mcp public on its own route and STARKEEP_MCP_TOKEN in env", () => {
     const shell = result.manifest!.infraRequirements.compute.handlers.find((h) => h.name === "static")!;
     expect(shell.routes).toContainEqual({ route: "POST /mcp", auth: "public" });

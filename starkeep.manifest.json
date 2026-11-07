@@ -19,7 +19,8 @@
           "columns": [
             { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
             { "name": "name", "type": "text", "notNull": true },
-            { "name": "created_at", "type": "timestamp", "notNull": true }
+            { "name": "created_at", "type": "timestamp", "notNull": true },
+            { "name": "archived_at", "type": "timestamp" }
           ]
         },
         {
@@ -31,7 +32,8 @@
             { "name": "default_sets", "type": "integer", "notNull": true },
             { "name": "default_rep_low", "type": "integer", "notNull": true },
             { "name": "default_rep_high", "type": "integer", "notNull": true },
-            { "name": "created_at", "type": "timestamp", "notNull": true }
+            { "name": "created_at", "type": "timestamp", "notNull": true },
+            { "name": "archived_at", "type": "timestamp" }
           ]
         },
         {
@@ -42,7 +44,8 @@
             { "name": "position", "type": "integer", "notNull": true },
             { "name": "program_id", "type": "text" },
             { "name": "program_position", "type": "integer" },
-            { "name": "created_at", "type": "timestamp", "notNull": true }
+            { "name": "created_at", "type": "timestamp", "notNull": true },
+            { "name": "archived_at", "type": "timestamp" }
           ]
         },
         {
@@ -83,6 +86,17 @@
             { "name": "set_number", "type": "integer", "notNull": true },
             { "name": "weight", "type": "real", "notNull": true },
             { "name": "reps", "type": "integer", "notNull": true }
+          ]
+        },
+        {
+          "name": "mcp_tokens",
+          "columns": [
+            { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+            { "name": "token_hash", "type": "text", "notNull": true },
+            { "name": "label", "type": "text" },
+            { "name": "created_at", "type": "timestamp", "notNull": true },
+            { "name": "last_used_at", "type": "timestamp" },
+            { "name": "expires_at", "type": "timestamp", "notNull": true }
           ]
         }
       ]
