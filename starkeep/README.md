@@ -31,6 +31,7 @@ come in later issues of epic AI-386.
 | `starkeep/handler.ts` | Cloud Lambda entry: `createWebAppHandler` + `honoUpstream`. |
 | `starkeep/client-routes.ts` | The SPA's client routes, used as cloud `shellPaths`. |
 | `starkeep/build-bundle.ts` | `npm run bundle` / `pnpm bundle`: writes `dist.zip`. |
+| `starkeep/spa-build.ts` | The Starkeep `vite build` both of the above use: forces `VITE_DATA_BACKEND=starkeep`, checks the main chunk, and decides when the local `dist/` needs a rebuild. |
 | `starkeep/validate-manifest.ts` | `npm run starkeep:validate`. |
 
 ## Scripts
@@ -69,8 +70,14 @@ token, is exempt. A `POST`, `PUT`, `PATCH` or `DELETE` under `/api/*` whose
 requests a hostile page can send without a CORS preflight never reach the
 signing proxy (cloud mode skips both checks).
 
-If `dist/` is missing or older than `src/`, `index.html`, `vite.config.ts` or
-`package.json`, the server runs `vite build` before it listens. `GET /` serves `dist/index.html`. Any path that is not a
+If `dist/` is missing, older than `src/`, `index.html`, `vite.config.ts` or
+`package.json`, or not a Starkeep build, the server runs `vite build` before it
+listens. That build sets `VITE_DATA_BACKEND=starkeep` (Vite bakes it in; the
+repo has no `.env`, and an unset value means the mock backend) and writes
+`dist/.starkeep-backend`. A `dist/` without that marker, such as one from a
+plain `npm run build` for Vercel, is rebuilt on the next start even when it is
+newer than the sources. Both builds fail if the main chunk bundles supabase-js
+or lacks the Starkeep DataLayer (`starkeep/spa-build.ts`). `GET /` serves `dist/index.html`. Any path that is not a
 server path and not a file in `dist/` also gets `index.html`, the same
 fallback `vercel.json` gives.
 
@@ -83,8 +90,8 @@ The cloud installer runs `pnpm bundle` in this directory with:
 | `STARKEEP_APP_BASE_PATH` | Mount prefix; becomes Vite `base` | `/apps/exercise` |
 | `STARKEEP_BUNDLE_OUT` | Absolute path to write the zip | `<repo>/dist.zip` (gitignored) |
 
-The script runs `vite build` into a staging `assets/` dir (never `dist/`). It
-passes `base` and `build.assetsDir: "_immutable"` inline, because
+The script runs `vite build` with `VITE_DATA_BACKEND=starkeep` into a staging
+`assets/` dir (never `dist/`). It passes `base` and `build.assetsDir: "_immutable"` inline, because
 `vite.config.ts` is shared with Vercel and stays untouched. It then bundles
 `starkeep/handler.ts` with esbuild to `index.mjs`, so the manifest's
 `index.handler` resolves to it, and zips the result. The zip holds
@@ -117,8 +124,10 @@ editing `src/`, which AI-600 tracks.
 5. Click **Discover apps** in the header and add the absolute path of this
    repo's **parent** directory (e.g. `~/starkeep`). Admin scans each folder
    inside a registered folder for a `starkeep.manifest.json`.
-6. On the **Exercise** card, click **Install**, review the grants (nine
-   app-private tables, no shared file types) and click **Approve & Install**.
+6. On the **Exercise** card, click **Install**. The dialog says "Exercise
+   asks for access to these files. No file-type grants requested." and lists
+   no tables: the app's nine app-private tables are not shown there
+   (starkeep-core #142 tracks the dialog). Click **Approve & Install**.
    This writes the app credential to `~/.starkeep/app-creds/exercise.json`.
 7. Click **Start Exercise**, then **Open Exercise ↗**. Open the MCP screen
    (`/mcp-login`), click to create a token, and check MCP with it:
@@ -145,6 +154,7 @@ are rows in `mcp_tokens`.
 | `STARKEEP_DIR` | local | admin-web's env | Root of Starkeep state (default `~/.starkeep`); credentials live in `app-creds/` under it. |
 | `STARKEEP_APP_BASE_PATH` | bundle + cloud | installer / Lambda env | Mount prefix `/apps/exercise`: Vite `base` at bundle time, and the web adapter's `basePath` at runtime. |
 | `STARKEEP_BUNDLE_OUT` | bundle | installer | Where `dist.zip` is written. |
+| `VITE_DATA_BACKEND` | local + bundle | `starkeep/spa-build.ts` | Always `starkeep` in both Starkeep builds, whatever the shell says; nothing to set. |
 | `STARKEEP_APP_CLIENT_MODE` | cloud | Pulumi program (`"cloud"`) | Switches `@starkeep/app-client` to cloud mode (HMAC secret from SSM, calls via the shared API Gateway). |
 | `STARKEEP_CLOUD_DATA_BASE` | cloud | Pulumi program | API Gateway base for server-to-server signed calls. |
 | `STARKEEP_APP_CREDS_PARAMETER_NAME` | cloud | Pulumi program | SSM parameter holding the app's HMAC secret: `/<stackPrefix>/app-creds/exercise`. |

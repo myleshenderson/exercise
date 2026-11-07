@@ -18,16 +18,17 @@
  * `vite.config.ts` is shared with the Vercel build and is not edited for
  * Starkeep. The two Starkeep-only settings (`base` and the `_immutable` assets
  * dir) are passed inline here; Vite merges them over the config file.
+ * `VITE_DATA_BACKEND=starkeep` comes from `spa-build.ts`.
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
-import { build as viteBuild } from "vite";
 import manifest from "../starkeep.manifest.json" with { type: "json" };
+import { buildStarkeepSpa } from "./spa-build.js";
 
 const STARKEEP_DIR = dirname(fileURLToPath(import.meta.url));
 const APP_DIR = resolve(STARKEEP_DIR, "..");
@@ -56,15 +57,13 @@ async function buildBundle(appBasePath: string, distZip: string): Promise<void> 
     // 1. The SPA, with every asset URL under the mount.
     const assets = join(staging, "assets");
     console.log(`\nBuilding the SPA with Vite (base ${appBasePath}/)…`);
-    await viteBuild({
+    //    `buildStarkeepSpa` sets VITE_DATA_BACKEND=starkeep and checks the main chunk.
+    await buildStarkeepSpa({
       root: APP_DIR,
       base: `${appBasePath}/`,
       mode: "production",
       build: { outDir: assets, emptyOutDir: true, assetsDir: "_immutable", sourcemap: false },
     });
-    if (!existsSync(join(assets, "index.html"))) {
-      throw new Error(`Vite produced no shell at ${join(assets, "index.html")}.`);
-    }
 
     // 2. The Lambda entry. ESM `.mjs` for the top-level await in handler.ts;
     //    `index.handler` in the manifest resolves it.
