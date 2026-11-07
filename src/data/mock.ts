@@ -35,6 +35,32 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
       exercises.push(ex);
       return ex;
     },
+    async updateExercise(id, patch) {
+      const ex = exercises.find((e) => e.id === id);
+      if (!ex) throw new Error(`Exercise ${id} not found`);
+      if (patch.name !== undefined) ex.name = patch.name;
+      if (patch.cue !== undefined) ex.cue = patch.cue;
+      if (patch.defaultSets !== undefined) ex.defaultSets = patch.defaultSets;
+      if (patch.defaultRepLow !== undefined) ex.defaultRepLow = patch.defaultRepLow;
+      if (patch.defaultRepHigh !== undefined) ex.defaultRepHigh = patch.defaultRepHigh;
+      return { ...ex };
+    },
+    async deleteExercise(id) {
+      // The mock has no soft-delete column; dropping the exercise is what makes
+      // it disappear from listExercises, as Supabase's deleted_at does.
+      const idx = exercises.findIndex((e) => e.id === id);
+      if (idx !== -1) exercises.splice(idx, 1);
+    },
+    async findDayByName(name) {
+      const d = days.find((day) => day.name === name);
+      return d ? { id: d.id, name: d.name, position: d.position, programId: d.programId, programPosition: d.programPosition } : null;
+    },
+    async findExerciseByName(name) {
+      return exercises.find((e) => e.name === name) ?? null;
+    },
+    async findProgramByName(name) {
+      return programs.find((p) => p.name === name) ?? null;
+    },
     async getWorkoutDays() {
       const completed = new Set(
         sessions.filter((s) => s.workoutDayId !== null && s.exercises.length > 0).map((s) => s.workoutDayId as string),

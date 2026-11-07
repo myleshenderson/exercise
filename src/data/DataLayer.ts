@@ -1,9 +1,26 @@
 import type { Exercise, WorkoutDay, Session, SetEntry, Program } from "../types.js";
 
+/** A live (not soft-deleted) workout day as the name lookups return it. */
+export type DayLookup = Pick<WorkoutDay, "id" | "name" | "position" | "programId" | "programPosition">;
+
 export interface DataLayer {
   listExercises(): Promise<Exercise[]>;
   getExercise(id: string): Promise<Exercise | null>;
   createExercise(input: Omit<Exercise, "id">): Promise<Exercise>;
+  // Only fields present (non-undefined) in `patch` change. Throws when no
+  // exercise has that id.
+  updateExercise(id: string, patch: Partial<Omit<Exercise, "id">>): Promise<Exercise>;
+  // Soft-deletes the exercise (it drops out of listExercises). The Starkeep
+  // backend refuses (ExerciseInUseError) while the exercise is attached to a
+  // day or has logged sets or scheme history; Supabase leaves that check to
+  // its MCP caller (api/mcp.ts exerciseUsage).
+  deleteExercise(id: string): Promise<void>;
+
+  // Exact, case-sensitive name lookups over live (not soft-deleted) rows. With
+  // several matches, the earliest created wins. null when nothing matches.
+  findDayByName(name: string): Promise<DayLookup | null>;
+  findExerciseByName(name: string): Promise<Exercise | null>;
+  findProgramByName(name: string): Promise<Program | null>;
 
   // Atomically claims the right to run first-login seeding for the current
   // user: returns true for exactly one caller among any concurrent callers,
