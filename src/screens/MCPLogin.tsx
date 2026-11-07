@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { getSupabase } from "../data/supabaseClient";
+import { appPath, isStarkeepBackend } from "../auth/backend";
+import { loadSupabase } from "../auth/supabase";
 
 interface McpSession {
   id: string;
@@ -52,12 +53,33 @@ const TOOLS = [
   },
 ];
 
+/**
+ * The JSON body that authenticates a call to `api/mcp-login` / `api/mcp-sessions`,
+ * or null when there is no session.
+ *
+ * Supabase: the session's access token goes in the body; supabase-js is
+ * loaded on demand (`loadSupabase`), so a Starkeep build never loads it.
+ * Starkeep: the app server reads the platform session from its HttpOnly
+ * cookie, which a same-origin fetch sends by itself; the body carries no
+ * credential.
+ */
+async function authBody(extra: Record<string, string> = {}): Promise<Record<string, string> | null> {
+  if (isStarkeepBackend()) return { ...extra };
+  const { data } = await (await loadSupabase()).auth.getSession();
+  const session = data?.session;
+  if (!session) return null;
+  return { access_token: session.access_token, ...extra };
+}
+
+const SESSION_EXPIRED = "Your session has expired — please sign in again.";
+
 function selectOnFocus(e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) {
   e.currentTarget.select();
 }
 
 export default function MCPLogin() {
   const [token, setToken] = useState<string | null>(null);
+  const [expiresAt, setExpiresAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [sessions, setSessions] = useState<McpSession[]>([]);
@@ -69,17 +91,16 @@ export default function MCPLogin() {
     let cancelled = false;
     (async () => {
       try {
-        const { data } = await getSupabase().auth.getSession();
-        const session = data?.session;
-        if (!session) return;
-        const res = await fetch("/api/mcp-sessions", {
+        const body = await authBody();
+        if (!body) return;
+        const res = await fetch(appPath("api/mcp-sessions"), {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ access_token: session.access_token }),
+          body: JSON.stringify(body),
         });
         if (!res.ok) return;
-        const body = (await res.json()) as { sessions?: McpSession[] };
-        if (!cancelled) setSessions(body.sessions ?? []);
+        const list = (await res.json()) as { sessions?: McpSession[] };
+        if (!cancelled) setSessions(list.sessions ?? []);
       } catch {
         // Best-effort: the session list is a convenience, not the critical path.
       }
@@ -93,18 +114,21 @@ export default function MCPLogin() {
     setRevokingId(id);
     setSessionsError(null);
     try {
-      const { data } = await getSupabase().auth.getSession();
-      const session = data?.session;
-      if (!session) {
-        setSessionsError("Your session has expired — please sign in again.");
+      const body = await authBody({ session_id: id });
+      if (!body) {
+        setSessionsError(SESSION_EXPIRED);
         return;
       }
-      const res = await fetch("/api/mcp-sessions", {
+      const res = await fetch(appPath("api/mcp-sessions"), {
         method: "DELETE",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ access_token: session.access_token, session_id: id }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
+        if (isStarkeepBackend() && res.status === 401) {
+          setSessionsError(SESSION_EXPIRED);
+          return;
+        }
         setSessionsError("Could not revoke that session. Please try again.");
         return;
       }
@@ -116,7 +140,11 @@ export default function MCPLogin() {
     }
   }
 
-  const endpointUrl = `${window.location.origin}/api/mcp`;
+  // Starkeep serves MCP at the app's own `mcp` route (under `/apps/exercise/`
+  // in the cloud); Vercel at `/api/mcp`.
+  const endpointUrl = isStarkeepBackend()
+    ? `${window.location.origin}${appPath("mcp")}`
+    : `${window.location.origin}/api/mcp`;
   const tokenPlaceholder = token ?? "YOUR_TOKEN";
   const cliSnippet = `claude mcp add --transport http exercise-mcp ${endpointUrl} --header "Authorization: Bearer ${tokenPlaceholder}"`;
   const jsonSnippet = JSON.stringify(
@@ -145,28 +173,34 @@ export default function MCPLogin() {
     setLoading(true);
     setError(null);
     setToken(null);
+    setExpiresAt(null);
     try {
-      const { data } = await getSupabase().auth.getSession();
-      const session = data.session;
-      if (!session) {
-        setError("Your session has expired — please sign in again.");
+      const auth = await authBody();
+      if (!auth) {
+        setError(SESSION_EXPIRED);
         return;
       }
-      const res = await fetch("/api/mcp-login", {
+      const res = await fetch(appPath("api/mcp-login"), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ access_token: session.access_token }),
+        body: JSON.stringify(auth),
       });
       if (!res.ok) {
+        // Starkeep authenticates by cookie, so an expired session shows up here.
+        if (isStarkeepBackend() && res.status === 401) {
+          setError(SESSION_EXPIRED);
+          return;
+        }
         setError("Could not create a token. Please try again.");
         return;
       }
-      const body = (await res.json()) as { token?: string };
+      const body = (await res.json()) as { token?: string; expires_at?: string };
       if (!body.token) {
         setError("Could not create a token. Please try again.");
         return;
       }
       setToken(body.token);
+      setExpiresAt(body.expires_at ?? null);
       setSessionsVersion((v) => v + 1);
     } catch {
       setError("Could not create a token. Please try again.");
@@ -202,6 +236,9 @@ export default function MCPLogin() {
             onFocus={(e) => e.currentTarget.select()}
             className="w-full rounded-lg border p-3 font-mono text-sm"
           />
+          {expiresAt && (
+            <p className="text-sm text-gray-600">Expires {new Date(expiresAt).toLocaleString()}</p>
+          )}
         </div>
       )}
 
