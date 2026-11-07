@@ -69,10 +69,11 @@ describe("starkeep.manifest.json", () => {
     ]);
   });
 
-  it("declares POST /mcp public on its own route and STARKEEP_MCP_TOKEN in env", () => {
+  it("declares POST /mcp public on its own route and no static MCP token in env", () => {
     const shell = result.manifest!.infraRequirements.compute.handlers.find((h) => h.name === "static")!;
     expect(shell.routes).toContainEqual({ route: "POST /mcp", auth: "public" });
-    expect(shell.env).toHaveProperty("STARKEEP_MCP_TOKEN");
+    expect(shell.env).not.toHaveProperty("STARKEEP_MCP_TOKEN");
+    expect(JSON.stringify(result.manifest)).not.toContain("STARKEEP_MCP_TOKEN");
   });
 
   it("serves exactly the SPA client routes and the immutable prefix from disk", () => {

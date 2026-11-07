@@ -92,7 +92,7 @@ afterEach(() => {
 
 describe("/api/local-data/* data proxy", () => {
   it("is built exactly as photos builds it: appId + sessionAuth() with default options", () => {
-    createApp({ mcpToken: undefined });
+    createApp();
     expect(state.proxyOptions).toHaveLength(1);
     const opts = state.proxyOptions[0] as appClient.DataProxyOptions;
     expect(opts.appId).toBe("exercise");
@@ -104,7 +104,7 @@ describe("/api/local-data/* data proxy", () => {
 
   it("cloud, no session → 401 from sessionAuth(), nothing forwarded", async () => {
     process.env.STARKEEP_APP_CLIENT_MODE = "cloud";
-    const app = createApp({ mcpToken: undefined });
+    const app = createApp();
     const res = await app.request(PROGRAMS);
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: "Not authenticated" });
@@ -113,7 +113,7 @@ describe("/api/local-data/* data proxy", () => {
 
   it("stubbed session rejected → 401, nothing forwarded", async () => {
     state.stubSession = false;
-    const app = createApp({ mcpToken: undefined });
+    const app = createApp();
     const res = await app.request(PROGRAMS, { method: "POST", body: "{}" });
     expect(res.status).toBe(401);
     expect(state.verifyCalls).toBe(1);
@@ -122,7 +122,7 @@ describe("/api/local-data/* data proxy", () => {
 
   it("stubbed valid session → forwarded, signed, to the data server path after the mount", async () => {
     state.stubSession = true;
-    const app = createApp({ mcpToken: undefined });
+    const app = createApp();
     const res = await app.request(`${PROGRAMS}?where=%7B%22archived_at%22%3A%7B%22is%22%3Anull%7D%7D&limit=5`);
     expect(res.status).toBe(200);
     expect(state.verifyCalls).toBe(1);
@@ -141,7 +141,7 @@ describe("/api/local-data/* data proxy", () => {
 
   it.each(["POST", "PUT", "PATCH", "DELETE"])("forwards %s with its JSON body", async (method) => {
     state.stubSession = true;
-    const app = createApp({ mcpToken: undefined });
+    const app = createApp();
     const body = JSON.stringify({ id: "p1", name: "Push", archived_at: "2026-11-07T00:00:00.000Z" });
     const res = await app.request(`${PROGRAMS}/p1`, {
       method,
@@ -158,7 +158,7 @@ describe("/api/local-data/* data proxy", () => {
   });
 
   it("local mode, no session → forwarded (local stays open, the sessionAuth() default)", async () => {
-    const app = createApp({ mcpToken: undefined });
+    const app = createApp();
     const res = await app.request(PROGRAMS);
     expect(res.status).toBe(200);
     expect(fetchStub).toHaveBeenCalledTimes(1);

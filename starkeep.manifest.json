@@ -146,8 +146,7 @@
             "STARKEEP_API_GATEWAY_URL": "",
             "STARKEEP_USER_POOL_ID": "",
             "STARKEEP_USER_POOL_CLIENT_ID": "",
-            "STARKEEP_IDENTITY_POOL_ID": "",
-            "STARKEEP_MCP_TOKEN": ""
+            "STARKEEP_IDENTITY_POOL_ID": ""
           }
         }
       ]
