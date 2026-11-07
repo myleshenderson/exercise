@@ -1,6 +1,12 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { FakeDataPlane, TEST_CREDS } from "./test-support.js";
+
+// tools/list as api/mcp.ts returned it on main, committed by AI-589.
+const MAIN_TOOLS_LIST: unknown = JSON.parse(
+  readFileSync(new URL("../src/mcp/__fixtures__/tools-list.main.json", import.meta.url), "utf8"),
+);
 
 vi.mock("@starkeep/app-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@starkeep/app-client")>();
@@ -48,9 +54,10 @@ describe("POST /mcp (stateless JSON transport)", () => {
     expect(reply.result).toMatchObject({ protocolVersion: expect.any(String), serverInfo: { name: "exercise" } });
   });
 
-  it("answers tools/list with an empty tools array", async () => {
+  it("answers tools/list with the 25 tools, equal to the AI-589 fixture of main's tools/list", async () => {
     const reply = await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
     expect(reply.error).toBeUndefined();
-    expect(reply.result).toMatchObject({ tools: [] });
+    expect((reply.result as { tools: unknown[] }).tools).toHaveLength(25);
+    expect(reply.result).toEqual(MAIN_TOOLS_LIST);
   });
 });

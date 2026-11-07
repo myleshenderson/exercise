@@ -16,7 +16,14 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { createStarkeepDataLayer } from "../src/data/starkeep.js";
+import { createRowClient } from "../src/data/starkeep/rows.js";
+import { registerTools, type McpToolHandlers } from "../src/mcp/handlers.js";
+import { toolError } from "../src/mcp/format.js";
+import { TOOL_DEFINITIONS } from "../src/mcp/tools.js";
+import { createStarkeepHandlers } from "./handlers.js";
 import type { McpRequestContext } from "./mcp-auth.js";
+import { createServerTransport } from "./serverTransport.js";
 
 /** The MCP `serverInfo.name` a client sees after `initialize`. */
 export const MCP_SERVER_NAME = "exercise";
@@ -24,29 +31,65 @@ export const MCP_SERVER_VERSION = "0.1.0";
 
 /**
  * What the server needs to answer tool calls. `context` is who the request
- * acts for, resolved by `mcp-auth.ts` from the bearer token: the tool handlers
- * (AI-604) build `createServerTransport({ userToken: context.userToken })`
- * from it per request. No tools yet: AI-604 calls
- * `registerTools(server, handlers)` from `src/mcp/` inside
- * {@link createExerciseMcpServer}.
+ * acts for, resolved by `mcp-auth.ts` from the bearer token. Without it every
+ * tool answers `unauthenticated`; there is no shared fallback client.
  */
 export interface ExerciseMcpDeps {
   context?: McpRequestContext;
 }
 
-export function createExerciseMcpServer(_deps: ExerciseMcpDeps = {}): McpServer {
+/** Every tool answering `unauthenticated`: what a request with no context gets. */
+function unauthenticatedHandlers(): McpToolHandlers {
+  const deny = async () => toolError("unauthenticated");
+  return Object.fromEntries(TOOL_DEFINITIONS.map(({ name }) => [name, deny])) as unknown as McpToolHandlers;
+}
+
+/**
+ * The tool handlers for one request: a transport carrying that request's user
+ * token, a row client and a DataLayer over it. Built per request and never
+ * cached, so two requests can never share a transport (and so a user token).
+ */
+export function createRequestHandlers(deps: ExerciseMcpDeps): McpToolHandlers {
+  const { context } = deps;
+  if (!context) return unauthenticatedHandlers();
+  // Signs each row request with the app credential and, in the cloud, sends
+  // context.userToken as X-Starkeep-User-Token; locally it is undefined.
+  const transport = createServerTransport({ userToken: context.userToken });
+  return createStarkeepHandlers(createStarkeepDataLayer(transport), createRowClient(transport));
+}
+
+export function createExerciseMcpServer(deps: ExerciseMcpDeps = {}): McpServer {
   const server = new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION });
-
-  // McpServer only installs its `tools/list` and `tools/call` handlers (and
-  // advertises the `tools` capability) when the first tool is registered. With
-  // no tools a client's `tools/list` would get "Method not found" instead of an
-  // empty list. Registering and immediately removing a placeholder installs the
-  // handlers through the SDK's own path, so a later `registerTool` call keeps
-  // working; setting the handlers by hand would make that call throw
-  // "handler for tools/list already exists".
-  server.registerTool("__init", { description: "placeholder" }, () => ({ content: [] })).remove();
-
+  registerTools(server, createRequestHandlers(deps));
   return server;
+}
+
+/**
+ * The MCP spec makes a `tools/call` request's `arguments` optional, but the
+ * SDK's schema validation rejects a missing object even when every field is
+ * optional (get_workout_history, adherence_for_day). Default it to `{}`, as
+ * `api/mcp.ts`'s `withDefaultToolArguments` does, for one message or a batch.
+ */
+function withDefaultToolArguments(body: unknown): unknown {
+  for (const message of Array.isArray(body) ? body : [body]) {
+    if (message && typeof message === "object" && (message as Record<string, unknown>).method === "tools/call") {
+      const params = (message as Record<string, unknown>).params;
+      if (params && typeof params === "object" && (params as Record<string, unknown>).arguments === undefined) {
+        (params as Record<string, unknown>).arguments = {};
+      }
+    }
+  }
+  return body;
+}
+
+/** The parsed JSON body, or undefined to let the transport read (and reject) it itself. */
+async function parsedBody(request: Request): Promise<unknown> {
+  if (!request.headers.get("content-type")?.includes("application/json")) return undefined;
+  try {
+    return withDefaultToolArguments(await request.clone().json());
+  } catch {
+    return undefined;
+  }
 }
 
 /** Answer one MCP POST with a fresh, stateless server + transport. */
@@ -60,8 +103,9 @@ export async function handleMcpRequest(
     enableJsonResponse: true,
   });
   try {
+    const body = await parsedBody(request);
     await server.connect(transport);
-    return await transport.handleRequest(request);
+    return await transport.handleRequest(request, body === undefined ? undefined : { parsedBody: body });
   } finally {
     // The JSON response body is fully built by now, so closing cannot cut it
     // short; it releases the per-request server and transport.
