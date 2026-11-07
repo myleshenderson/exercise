@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Routes, Route, Link } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
 import Home from "./screens/Home";
 import Session from "./screens/Session";
 import Summary from "./screens/Summary";
@@ -9,6 +9,7 @@ import LoggedWorkouts from "./screens/LoggedWorkouts";
 import MCPLogin from "./screens/MCPLogin";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import Login from "./auth/Login";
+import { isStarkeepBackend, routerBasename } from "./auth/backend";
 import { ensureSeeded } from "./data/ensureSeeded";
 import { db } from "./data";
 
@@ -64,8 +65,11 @@ function Gate() {
 }
 
 export default function App() {
-  if (!requireAuth) return <Shell />;
-  if (!supabaseConfigured) {
+  // Starkeep signs in with the platform's session (AuthProvider), and needs no
+  // Supabase env.
+  const starkeep = isStarkeepBackend();
+  if (!requireAuth && !starkeep) return <Shell />;
+  if (!starkeep && !supabaseConfigured) {
     return (
       <div className="p-6 max-w-sm mx-auto space-y-2">
         <h1 className="text-xl font-bold">Configuration error</h1>
@@ -82,5 +86,18 @@ export default function App() {
     <AuthProvider>
       <Gate />
     </AuthProvider>
+  );
+}
+
+/**
+ * The app under a browser router mounted at Vite's `base`: `/` on Vercel and
+ * local Starkeep, `/apps/exercise` in a Starkeep cloud install, where every
+ * route and link must stay under the mount.
+ */
+export function RoutedApp() {
+  return (
+    <BrowserRouter basename={routerBasename()}>
+      <App />
+    </BrowserRouter>
   );
 }
