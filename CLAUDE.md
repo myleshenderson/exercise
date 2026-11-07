@@ -2,6 +2,14 @@
 
 This file provides instructions and context for AI coding agents working on this project.
 
+## Lead sessions
+
+If you are acting as the project lead (Myles says so, or you are continuing a lead
+session), invoke the `lead` skill first. The skill is project-agnostic; this project's
+specifics (tracker, automation, merge path, validation commands, limits) are in
+`docs/agents/lead-project.md`, and the state is in `docs/agents/handoff.md` and
+`docs/agents/decision-log.md`. Every PR body follows `docs/agents/pr-body-template.md`.
+
 ## Linear Issue Tracker
 
 Issues live in Linear: workspace **CommsCenter**, team **AI Batteries
