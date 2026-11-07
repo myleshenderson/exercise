@@ -1,0 +1,582 @@
+{
+  "tools": [
+    {
+      "name": "progression_for_exercise",
+      "title": "Progression for exercise",
+      "description": "Per-session set count, top weight, and volume for an exercise (matched by partial name), for the authenticated user.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "exercise_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "exercise_name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "sets_for_exercise",
+      "title": "Sets for exercise",
+      "description": "Every individual logged set for an exercise (matched by partial name), ungrouped — performed_on, set_number, weight, and reps — for the authenticated user.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "exercise_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "exercise_name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "weekly_volume",
+      "title": "Weekly volume",
+      "description": "Sessions and total volume per week for the authenticated user.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "training_gaps",
+      "title": "Training gaps",
+      "description": "Days elapsed between consecutive training sessions for the authenticated user.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "get_day_templates",
+      "title": "Day templates",
+      "description": "The authenticated user's day templates with their ordered exercises and each exercise's day-specific progressive scheme, or its uniform defaults when none is set.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "get_workout_history",
+      "title": "Workout history",
+      "description": "The authenticated user's full raw session history: every session with its date, associated day, and every logged set, unaggregated. Optionally filter by date range (start_date/end_date) and/or a partial exercise-name match; omit all filters for the full history.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "start_date": {
+            "description": "Only include sessions performed on or after this date (YYYY-MM-DD).",
+            "type": "string"
+          },
+          "end_date": {
+            "description": "Only include sessions performed on or before this date (YYYY-MM-DD).",
+            "type": "string"
+          },
+          "exercise_name": {
+            "description": "Only include sets for exercises whose name partially matches this (case-insensitive).",
+            "type": "string"
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "scheme_history_for_day_exercise",
+      "title": "Scheme history for day/exercise",
+      "description": "Every recorded progressive-scheme version for a (workout_day_id, exercise_id) pair, ordered by recorded_at, for the authenticated user — use a <= filter on recorded_at and take the latest row to find which scheme was in effect at or before a given date.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workout_day_id": {
+            "type": "string"
+          },
+          "exercise_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workout_day_id",
+          "exercise_id"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "adherence_for_day",
+      "title": "Adherence for day",
+      "description": "Compares the authenticated user's actual logged sets against the prescribed target for the same (day, exercise) pairing and session date - the scheme actually in effect on that date (via point-in-time history), falling back to the exercise's uniform defaults when no scheme was ever defined. Flags under-/over-shooting on sets, reps, and weight. Optionally filter by workout_day_id and/or a date range (start_date/end_date); omit all filters for every day and date.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workout_day_id": {
+            "description": "Only include sessions for this workout day.",
+            "type": "string"
+          },
+          "start_date": {
+            "description": "Only include sessions performed on or after this date (YYYY-MM-DD).",
+            "type": "string"
+          },
+          "end_date": {
+            "description": "Only include sessions performed on or before this date (YYYY-MM-DD).",
+            "type": "string"
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "create_day_template",
+      "title": "Create day template",
+      "description": "Creates a new, empty day template for the authenticated user. Returns the new day, including its id. If program_id is given, appends the day to the end of that program.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "program_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "rename_day_template",
+      "title": "Rename day template",
+      "description": "Renames an existing day template belonging to the authenticated user, targeted by id.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "day_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "day_id",
+          "name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "delete_day_template",
+      "title": "Delete day template",
+      "description": "Soft-deletes a day template belonging to the authenticated user, targeted by id: marks it deleted so it no longer appears in get_day_templates or accepts further edits, but its exercise attachments, scheme history, and any sessions that referenced it are left untouched — historical scheme_history_for_day_exercise/adherence_for_day lookups keep working.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "day_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "day_id"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "create_exercise",
+      "title": "Create exercise",
+      "description": "Creates a catalog exercise not yet attached to any day, for the authenticated user. Omitted optionals fall back to the same defaults as the exercises table's own column defaults.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "cue": {
+            "type": "string"
+          },
+          "default_sets": {
+            "type": "number"
+          },
+          "default_rep_low": {
+            "type": "number"
+          },
+          "default_rep_high": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "update_exercise",
+      "title": "Update exercise",
+      "description": "Partially updates a catalog exercise belonging to the authenticated user, targeted by id. Only the fields supplied are changed; any field left out keeps its current value.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "cue": {
+            "type": "string"
+          },
+          "default_sets": {
+            "type": "number"
+          },
+          "default_rep_low": {
+            "type": "number"
+          },
+          "default_rep_high": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "list_exercises",
+      "title": "List exercises",
+      "description": "Every catalog exercise for the authenticated user, including ones not attached to any day. Excludes soft-deleted exercises.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "delete_exercise",
+      "title": "Delete exercise",
+      "description": "Soft-deletes a catalog exercise belonging to the authenticated user, targeted by id: marks it deleted so it no longer appears in list_exercises. Rejected outright if the exercise is still attached to any day or referenced by logged sets/scheme history — detach it from days first via remove_exercise_from_day.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "exercise_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "exercise_id"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "add_exercise_to_day",
+      "title": "Add exercise to day",
+      "description": "Appends an existing catalog exercise to the end of a day template's exercise list, for the authenticated user.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "day_id": {
+            "type": "string"
+          },
+          "exercise_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "day_id",
+          "exercise_id"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "remove_exercise_from_day",
+      "title": "Remove exercise from day",
+      "description": "Removes one exercise from a day template, for the authenticated user. Touches only that one attachment.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "day_id": {
+            "type": "string"
+          },
+          "exercise_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "day_id",
+          "exercise_id"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "reorder_day_exercises",
+      "title": "Reorder day exercises",
+      "description": "Rewrites a day template's exercise order for the authenticated user. exercise_ids must be exactly the day's current exercise-id set (same members, any order); membership changes must go through add_exercise_to_day/remove_exercise_from_day instead.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "day_id": {
+            "type": "string"
+          },
+          "exercise_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "day_id",
+          "exercise_ids"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "set_day_exercise_scheme",
+      "title": "Set day exercise scheme",
+      "description": "Sets the day-specific rep/weight scheme for one exercise on one day, for the authenticated user. null (or an empty array) clears it, reverting that exercise to its own uniform defaults on that day.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "day_id": {
+            "type": "string"
+          },
+          "exercise_id": {
+            "type": "string"
+          },
+          "sets": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "weight": {
+                      "type": "number"
+                    },
+                    "reps": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "weight",
+                    "reps"
+                  ]
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "day_id",
+          "exercise_id",
+          "sets"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "create_program",
+      "title": "Create program",
+      "description": "Creates a new, empty program for the authenticated user. Returns it, including its id.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "rename_program",
+      "title": "Rename program",
+      "description": "Renames an existing program belonging to the authenticated user, targeted by id.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "program_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "program_id",
+          "name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "delete_program",
+      "title": "Delete program",
+      "description": "Soft-deletes a program belonging to the authenticated user, targeted by id: it's no longer a valid target for other program tools, but member days keep their program_id/program_position (not unassigned), so the program's structure and completion history survive and get_day_templates treats its former days as untracked (always available) in the meantime.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "program_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "program_id"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "add_day_to_program",
+      "title": "Add day to program",
+      "description": "Assigns an existing day template to a program, appended at the end. Errors if the day already belongs to a program; use remove_day_from_program first to reassign it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "day_id": {
+            "type": "string"
+          },
+          "program_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "day_id",
+          "program_id"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "remove_day_from_program",
+      "title": "Remove day from program",
+      "description": "Clears a day template's program assignment, reverting it to untracked (always available).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "day_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "day_id"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "reorder_program_days",
+      "title": "Reorder program days",
+      "description": "Rewrites a program's day order for the authenticated user. day_ids must be exactly the program's current membership (same members, any order); membership changes must go through add_day_to_program/remove_day_from_program instead.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "program_id": {
+            "type": "string"
+          },
+          "day_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "program_id",
+          "day_ids"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    }
+  ]
+}
