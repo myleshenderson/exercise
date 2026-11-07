@@ -7,8 +7,12 @@
  * `honoUpstream` strips the `/apps/exercise` mount before Hono routes.
  *
  * What lives here:
- *   - `POST /mcp`: the MCP endpoint, gated by a bearer token (`mcp-auth.ts`).
- *     Any other method answers 405, as `api/mcp.ts` does for GET.
+ *   - `POST /mcp`: the MCP endpoint, gated by a per-user sealed bearer token
+ *     (`mcp-auth.ts`). Any other method answers 405, as `api/mcp.ts` does for GET.
+ *   - `POST /api/mcp-login` and `GET`/`POST`/`DELETE /api/mcp-sessions`: mint,
+ *     list and revoke those tokens from the browser session (`mcp-login.ts`,
+ *     `mcp-sessions.ts`), with the JSON contract of `api/mcp-login.ts` and
+ *     `api/mcp-sessions.ts`.
  *   - `GET /starkeep-runtime-config`: the runtime config every Starkeep
  *     browser app reads (authoring guide §3).
  *   - `/api/session` and `/api/session/*`: the platform session routes,
@@ -32,13 +36,17 @@ import {
 } from "@starkeep/app-client";
 import { createSessionRoutes } from "@starkeep/app-client/auth";
 import manifest from "../starkeep.manifest.json" with { type: "json" };
-import { checkMcpAuth, MCP_TOKEN_ENV } from "./mcp-auth.js";
+import { authenticateMcpRequest } from "./mcp-auth.js";
+import { handleMcpLogin } from "./mcp-login.js";
+import { handleMcpSessions } from "./mcp-sessions.js";
 import { handleMcpRequest, type ExerciseMcpDeps } from "./mcp.js";
 
 export interface ExerciseAppOptions {
-  /** The per-install MCP bearer token. Unset or empty: `/mcp` answers 503. */
-  mcpToken: string | undefined;
-  mcpDeps?: ExerciseMcpDeps;
+  /**
+   * Answers an authenticated MCP request. Defaults to {@link handleMcpRequest};
+   * tests pass a spy to see the context the auth layer resolved.
+   */
+  mcpHandler?: (request: Request, deps: ExerciseMcpDeps) => Promise<Response>;
 }
 
 /**
@@ -54,10 +62,9 @@ export function isServerPath(pathname: string): boolean {
   );
 }
 
-export function createApp(opts: ExerciseAppOptions): Hono {
+export function createApp(opts: ExerciseAppOptions = {}): Hono {
   const app = new Hono();
-  const mcpToken = opts.mcpToken;
-  const mcpDeps = opts.mcpDeps ?? {};
+  const mcpHandler = opts.mcpHandler ?? handleMcpRequest;
 
   // Stateless JSON-only transport: no standalone GET stream (a buffered
   // Lambda response cannot carry one) and no session to DELETE. Answered
@@ -67,10 +74,15 @@ export function createApp(opts: ExerciseAppOptions): Hono {
   );
 
   app.post("/mcp", async (c) => {
-    const denied = checkMcpAuth(c.req.header("authorization"), mcpToken);
-    if (denied) return denied;
-    return handleMcpRequest(c.req.raw, mcpDeps);
+    const auth = await authenticateMcpRequest(c.req.raw);
+    if (!auth.ok) return auth.response;
+    return mcpHandler(c.req.raw, { context: auth.context });
   });
+
+  // Same paths the Vercel functions use, so the MCP screen is unchanged
+  // apart from its BASE_URL-relative path.
+  app.all("/api/mcp-login", (c) => handleMcpLogin(c.req.raw));
+  app.all("/api/mcp-sessions", (c) => handleMcpSessions(c.req.raw));
 
   const runtimeConfig = createRuntimeConfigHandler();
   app.get("/starkeep-runtime-config", () => runtimeConfig());
@@ -110,8 +122,5 @@ export function createApp(opts: ExerciseAppOptions): Hono {
   return app;
 }
 
-/**
- * The app both entries serve. The token is read once, at startup; a token
- * set later needs a restart (locally) or a redeploy (cloud).
- */
-export const app = createApp({ mcpToken: process.env[MCP_TOKEN_ENV] });
+/** The app both entries serve. */
+export const app = createApp();
