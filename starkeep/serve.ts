@@ -11,39 +11,24 @@
  *
  * Shape copied from photos' `src/serve.ts`: loopback-only bind plus a `Host`
  * check against DNS rebinding, and a self-healing `vite build` when `dist/` is
- * missing or older than its sources. The client half answers a real file from
+ * missing, older than its sources, or not a Starkeep-backend build (a plain
+ * `npm run build` makes a mock one; see `spa-build.ts`). The client half answers a real file from
  * `dist/` when one exists and `index.html` for every other path, which is
  * the same fallback `vercel.json`'s rewrite gives.
  */
 
 import { createServer } from "node:http";
-import { readdirSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getRequestListener } from "@hono/node-server";
 import { app, isServerPath } from "./server.js";
+import { buildStarkeepSpa, distRebuildReason } from "./spa-build.js";
 
 const PKG_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DIST_DIR = join(PKG_DIR, "dist");
 const SHELL = join(DIST_DIR, "index.html");
-
-/** What the client build reads, as paths under the package. */
-const CLIENT_INPUTS = [
-  "src",
-  "public",
-  "index.html",
-  "vite.config.ts",
-  "tailwind.config.js",
-  "postcss.config.js",
-  "tsconfig.json",
-  "tsconfig.app.json",
-  "package.json",
-  ".env",
-  ".env.local",
-  ".env.production",
-  ".env.production.local",
-];
 
 const MIME: Record<string, string> = {
   ".js": "application/javascript; charset=utf-8",
@@ -67,21 +52,6 @@ function isFile(path: string): boolean {
     // e.g. a NUL byte from `%00` in the URL: not a file, so the shell answers.
     return false;
   }
-}
-
-/** The newest mtime under a path, directory or file, or 0 when absent. */
-function newestMtime(path: string): number {
-  const stat = statSync(path, { throwIfNoEntry: false });
-  if (!stat) return 0;
-  if (!stat.isDirectory()) return stat.mtimeMs;
-  let newest = 0;
-  for (const entry of readdirSync(path)) newest = Math.max(newest, newestMtime(join(path, entry)));
-  return newest;
-}
-
-function distIsStale(): boolean {
-  const built = newestMtime(SHELL);
-  return built > 0 && CLIENT_INPUTS.some((p) => newestMtime(join(PKG_DIR, p)) > built);
 }
 
 /** A file under `dist/` for this path, or the shell. Never escapes `dist/`. */
@@ -119,11 +89,10 @@ function portFromArgv(argv: string[]): number {
 async function main(): Promise<void> {
   const port = portFromArgv(process.argv.slice(2));
 
-  const missing = !isFile(SHELL);
-  if (missing || distIsStale()) {
-    console.log(`exercise: dist/ is ${missing ? "missing" : "older than its sources"}, running \`vite build\`…`);
-    const { build } = await import("vite");
-    await build({ root: PKG_DIR });
+  const rebuild = distRebuildReason(PKG_DIR, DIST_DIR);
+  if (rebuild) {
+    console.log(`exercise: dist/ is ${rebuild}, running \`vite build\` for the Starkeep backend…`);
+    await buildStarkeepSpa({ root: PKG_DIR }, { marker: true });
   }
 
   const api = getRequestListener(app.fetch);
