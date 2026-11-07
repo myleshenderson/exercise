@@ -13,13 +13,23 @@
  *     browser app reads (authoring guide §3).
  *   - `/api/session` and `/api/session/*`: the platform session routes,
  *     mounted exactly as photos mounts them.
+ *   - `/api/local-data/*`: the browser's signing proxy to the data plane,
+ *     mounted exactly as photos mounts it. The browser calls
+ *     `${BASE_URL}api/local-data/<data-server path>`, e.g.
+ *     `api/local-data/app-data/db/programs?where=...`; the segments after
+ *     `/api/local-data/` (plus the query string) are forwarded with the
+ *     app's HMAC signature.
  *
  * The SPA itself is not here: `index.html` and the built assets are files,
  * answered from disk by `serve.ts` locally and by the web adapter in the cloud.
  */
 
 import { Hono } from "hono";
-import { createRuntimeConfigHandler } from "@starkeep/app-client";
+import {
+  createDataProxyHandler,
+  createRuntimeConfigHandler,
+  sessionAuth,
+} from "@starkeep/app-client";
 import { createSessionRoutes } from "@starkeep/app-client/auth";
 import manifest from "../starkeep.manifest.json" with { type: "json" };
 import { checkMcpAuth, MCP_TOKEN_ENV } from "./mcp-auth.js";
@@ -79,6 +89,19 @@ export function createApp(opts: ExerciseAppOptions): Hono {
   };
   app.all("/api/session", session);
   app.all("/api/session/*", session);
+
+  // The signing proxy, copied from photos' `src/routes/local-data.ts` and
+  // `src/server-app.ts`. It holds the app's HMAC credential and signs whatever
+  // reaches it, so `sessionAuth()` refuses a caller with no valid session
+  // (401) before the credential is loaded. Cloud only: local mode stays open,
+  // the package default, because on loopback the browser, the data and the
+  // person are on one machine. The handler reads the mode
+  // (`STARKEEP_APP_CLIENT_MODE`) on every request.
+  const proxy = createDataProxyHandler({ appId: manifest.id, endUserAuth: sessionAuth() });
+  app.all("/api/local-data/*", (c) => {
+    const path = c.req.path.slice("/api/local-data/".length).split("/").filter(Boolean);
+    return proxy(c.req.raw, { params: Promise.resolve({ path }) });
+  });
 
   app.notFound((c) =>
     Response.json({ error: `Exercise has no route for ${c.req.path}` }, { status: 404 }),
