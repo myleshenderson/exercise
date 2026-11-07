@@ -114,7 +114,13 @@ describe("/api/local-data/* data proxy", () => {
   it("stubbed session rejected → 401, nothing forwarded", async () => {
     state.stubSession = false;
     const app = createApp();
-    const res = await app.request(PROGRAMS, { method: "POST", body: "{}" });
+    // JSON, as the browser sends: a text/plain POST is refused locally by the
+    // Content-Type gate (AI-606) before sessionAuth() runs.
+    const res = await app.request(PROGRAMS, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
     expect(res.status).toBe(401);
     expect(state.verifyCalls).toBe(1);
     expect(fetchStub).not.toHaveBeenCalled();
