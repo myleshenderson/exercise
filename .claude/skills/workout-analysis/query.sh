@@ -26,13 +26,19 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 ENV_FILE="$REPO_ROOT/.env.local"
 
 if [[ ! -f "$ENV_FILE" ]]; then
-  echo "error: $ENV_FILE not found — it must contain SUPABASE_PASSWORD (gitignored, so absent on fresh clones)" >&2
+  echo "error: $ENV_FILE not found — it must contain SUPABASE_PASSWORD and SUPABASE_DB_HOST (gitignored, so absent on fresh clones)" >&2
   exit 1
 fi
 
 SUPABASE_PASSWORD="$(grep -E '^SUPABASE_PASSWORD=' "$ENV_FILE" | head -n1 | cut -d= -f2- || true)"
 if [[ -z "$SUPABASE_PASSWORD" ]]; then
   echo "error: SUPABASE_PASSWORD not set in $ENV_FILE" >&2
+  exit 1
+fi
+
+SUPABASE_DB_HOST="$(grep -E '^SUPABASE_DB_HOST=' "$ENV_FILE" | head -n1 | cut -d= -f2- || true)"
+if [[ -z "$SUPABASE_DB_HOST" ]]; then
+  echo "error: SUPABASE_DB_HOST not set in $ENV_FILE (full hostname, e.g. db.<project-ref>.supabase.co)" >&2
   exit 1
 fi
 
@@ -43,7 +49,7 @@ fi
 
 # options=-c default_transaction_read_only=on (URI-encoded) makes the whole
 # session read-only; any INSERT/UPDATE/DELETE/DDL errors out server-side.
-CONN="postgresql://postgres@db.aeolejvpsavbbmluysnm.supabase.co:5432/postgres?options=-c%20default_transaction_read_only%3Don"
+CONN="postgresql://postgres@${SUPABASE_DB_HOST}:5432/postgres?options=-c%20default_transaction_read_only%3Don"
 
 export PGPASSWORD="$SUPABASE_PASSWORD"
 export PGCONNECT_TIMEOUT=10
