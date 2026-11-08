@@ -42,9 +42,10 @@ the session-end docs). Sections follow `.claude/skills/lead/PROFILE-TEMPLATE.md`
   the production path (next section). A PR that touches `api/**`, `src/data/supabase.ts`,
   `supabase/**` or `vercel.json` gets **no `auto-merge`**: Myles reviews and merges (#56
   AI-589, #64 AI-610). The lead posts a plain-language review brief on the PR first.
-- Whether the monitor merges a **lead-opened** PR (no runner worktree) has not been
-  observed in this repo; in dice-engine it does not. Say "needs your merge" when handing
-  one to Myles until a lead-opened PR merges on its own.
+- The monitor **does** merge a lead-opened PR (no runner worktree) when its issue carries
+  `auto-merge`: #66 (AI-620) merged four minutes after it was opened, 2026-11-07. The
+  monitor merges as soon as CI is green, with no lead read; for non-production paths the
+  lead's read is the post-merge verification subagent.
 - `needs-input` label: blocked on a decision from Myles; leave the issue in Todo or
   Backlog with the questions in a comment.
 - Runner quirks seen here: an agent may skip a decided item in the AC (PR #55 left out
@@ -94,6 +95,9 @@ into the pending issues' ACs before they dispatch.
   Live checks (local Starkeep install, cloud deploy, claude.ai connector) are Myles's
   issues, not agent work.
 - `git worktree remove` is disabled in containers; list scratch worktrees for the host.
+- The lead's GitHub token cannot read or set repository secrets (403); Myles adds them in
+  the browser. `/repo/node_modules` is stale against the lockfile (no `@starkeep/*`);
+  verifiers run `npm ci` in their worktree rather than symlinking it.
   Known stale ones from the Starkeep epic: `wt-main`, `wt-55` to `wt-61`.
 - Scratch work goes under the session scratchpad directory, never the checkout.
   Starkeep source for research is cloned there (`starkeep-core`, `starkeep-apps`).
