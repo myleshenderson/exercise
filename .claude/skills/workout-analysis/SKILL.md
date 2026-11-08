@@ -28,9 +28,11 @@ data or schema, and never connect to the database except through `query.sh`.
 
 ## Requirements
 
-- `<repo>/.env.local` must exist and contain `SUPABASE_PASSWORD` (it is
-  gitignored, so it is absent on fresh clones — if `query.sh` reports it
-  missing, tell the user rather than working around it).
+- `<repo>/.env.local` must exist and contain `SUPABASE_PASSWORD` (the
+  database password) and `SUPABASE_DB_HOST` (the full database hostname,
+  e.g. `db.<project-ref>.supabase.co`). The file is gitignored, so it is
+  absent on fresh clones — if `query.sh` reports either missing, tell the
+  user rather than working around it.
 - `psql` on PATH.
 
 ## How to query

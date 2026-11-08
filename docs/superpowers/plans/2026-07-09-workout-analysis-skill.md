@@ -12,11 +12,11 @@
 
 - Work happens on the existing branch `feat/workout-analysis-skill` (already created from main).
 - Read-only is enforced via `options=-c default_transaction_read_only=on` in the psql connection URI — session level, not per-statement.
-- Only `SUPABASE_PASSWORD` is secret; the project ref `aeolejvpsavbbmluysnm` is public (already shipped in the client bundle) and is hardcoded in `query.sh`.
+- Only `SUPABASE_PASSWORD` is secret; the project ref `<project-ref>` is public (already shipped in the client bundle) and is hardcoded in `query.sh`.
 - `.env.local` is gitignored; the skill must fail with an explicit message when it is missing.
 - Do not start or stop dev servers.
 - Run `npm run typecheck` (or the project's typecheck script per package.json) before opening a PR — even though this change is shell + markdown, the user's rule is unconditional.
-- Commit as the repo-local identity (Myles Henderson / myles.henderson@gmail.com — already configured).
+- Commit as the repo-local identity (Myles Henderson / <owner email> — already configured).
 
 ---
 
@@ -59,7 +59,7 @@ fi
 
 # options=-c default_transaction_read_only=on (URI-encoded) makes the whole
 # session read-only; any INSERT/UPDATE/DELETE/DDL errors out server-side.
-CONN="postgresql://postgres@db.aeolejvpsavbbmluysnm.supabase.co:5432/postgres?options=-c%20default_transaction_read_only%3Don"
+CONN="postgresql://postgres@db.<project-ref>.supabase.co:5432/postgres?options=-c%20default_transaction_read_only%3Don"
 
 if [[ $# -ge 1 ]]; then
   exec env PGPASSWORD="$SUPABASE_PASSWORD" PGCONNECT_TIMEOUT=10 \

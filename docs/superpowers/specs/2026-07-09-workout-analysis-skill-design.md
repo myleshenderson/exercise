@@ -42,7 +42,7 @@ A small shell script; the single audited path for all database access.
 - Locates `.env.local` relative to the script's own path (works from any cwd)
   and sources `SUPABASE_PASSWORD` from it.
 - Connects with `psql` to
-  `db.aeolejvpsavbbmluysnm.supabase.co:5432/postgres` as `postgres`, with
+  `db.<project-ref>.supabase.co:5432/postgres` as `postgres`, with
   `options=-c default_transaction_read_only=on` in the connection string so
   the whole session is read-only.
 - Uses `ON_ERROR_STOP=1` and `-P pager=off`; exits non-zero with stderr
