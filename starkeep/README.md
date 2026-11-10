@@ -20,7 +20,7 @@ tools pinned in `src/mcp/__fixtures__/tools-list.main.json`.
 | --- | --- |
 | `starkeep.manifest.json` | App id `exercise`, tier `community`, targets `local` + `cloud`, the syncable tables, the `static` compute handler. |
 | `starkeep/server.ts` | The Hono app (`app.fetch`) both surfaces run: `POST /mcp`, `POST /api/mcp-login`, `/api/mcp-sessions`, `GET /starkeep-runtime-config`, `/api/session[/*]`, `/api/local-data/*`. |
-| `starkeep/mcp.ts` | `createExerciseMcpServer(deps)` (zero tools) and the stateless JSON transport per request. `deps.context` is who the request acts for. |
+| `starkeep/mcp.ts` | `createExerciseMcpServer(deps)`, serving the 25 tools pinned in `src/mcp/__fixtures__/tools-list.main.json`, and the stateless JSON transport per request. `deps.context` is who the request acts for. |
 | `starkeep/mcp-auth.ts` | `POST /mcp` gate: unseals the bearer token, mints and caches the user's ID token (cloud), checks the `mcp_tokens` row, resolves `{ sub, userToken, tokenId }`. |
 | `starkeep/mcp-login.ts`, `starkeep/mcp-sessions.ts` | Mint, list and revoke MCP tokens from the browser session; same JSON as `api/mcp-login.ts` / `api/mcp-sessions.ts`. |
 | `starkeep/token.ts` | The `exr_` sealed token: AES-256-GCM under an HKDF key from the app's HMAC secret. |
@@ -158,7 +158,7 @@ are rows in `mcp_tokens`.
 | `STARKEEP_STACK_PREFIX` | cloud | Pulumi program | Deployment stack prefix. |
 | `STARKEEP_API_GATEWAY_URL`, `STARKEEP_USER_POOL_ID`, `STARKEEP_USER_POOL_CLIENT_ID`, `STARKEEP_IDENTITY_POOL_ID` | cloud | installer fills the empty placeholders in the manifest `env` | `GET /starkeep-runtime-config` and the session routes. |
 
-**Server-side data access** (for the DataLayer issue; not built here). Locally,
+**Server-side data access.** Locally,
 `loadAppCredentials("exercise")` from `@starkeep/app-client` reads
 `~/.starkeep/app-creds/exercise.json` = `{ appId, hmacSecret }` (written at
 install, mode 0600). `signedFetch(creds, path, init)` then calls the local data
@@ -230,7 +230,7 @@ declared as its own route with a per-route override:
 ```
 
 **Justification:** per-user sealed bearer tokens minted from the app's own
-session; see starkeep/README.md.
+session; see [MCP tokens](#mcp-tokens).
 
 A remote MCP client cannot carry the platform's session cookie or a Cognito
 JWT, so the gateway authorizer cannot gate this route. The app is the
@@ -322,7 +322,7 @@ and the row read on `/mcp` is HMAC-signed only. A token minted locally does
 not work against a cloud install (its `rt` is null), and the HMAC secrets
 differ anyway.
 
-## Table mapping (contract for the DataLayer issue)
+## Table mapping
 
 Every application table from `supabase/migrations/` is declared under
 `infraRequirements.appSpecificSyncable.tables`, plus the Starkeep-only
