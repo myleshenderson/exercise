@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Captures the README screenshots (docs/images/home.png, docs/images/mcp.png)
-// and wires them into README.md. One-time setup: npx playwright install chromium
+// Captures the README screenshots (docs/images/<name>.png, one per entry in
+// SHOTS) and wires them into README.md. One-time setup: npx playwright install chromium
 import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -9,13 +9,20 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RENDER_TIMEOUT_MS = 30_000;
+const DEFAULT_WIDTH = 320; // README display width in CSS px; the PNGs are 780 wide
+const GALLERY_WIDTH = 180;
 
 const USAGE = `Usage: npm run screenshots -- [--base-url <url>] [--out-dir <dir>]
 
 Starts the Vite dev server on a free port with the mock backend
-(VITE_DATA_BACKEND unset), screenshots / and /mcp-login at 390x844, device
-scale factor 2 (780x1688 PNGs), writes home.png and mcp.png to the output
+(VITE_DATA_BACKEND unset), screenshots every main screen at 390x844, device
+scale factor 2 (780x1688 PNGs), writes one PNG per screen to the output
 directory, and replaces the README placeholders with the image tags.
+
+Screens: home (/), mcp (/mcp-login), session (/session/seed-upper), summary
+(/session/seed-upper/summary), days (/days), workouts (/workouts) and history
+(/history/leg-press). The ids are the mock backend's seeded data, so they are
+stable without any clicking.
 
   --base-url <url>  Screenshot this running app instead of starting a dev server.
   --out-dir <dir>   Where to write the PNGs (default: docs/images).
@@ -36,6 +43,44 @@ const SHOTS = [
     route: "/mcp-login",
     selector: "textarea#mcp-cli-snippet",
     alt: "MCP screen for creating a connector token",
+  },
+  // The rest are the "Screens" gallery in the README, shown smaller.
+  {
+    name: "session",
+    // The seeded Upper Day session: four exercises logged, two still open.
+    route: "/session/seed-upper",
+    selector: "button:has-text('Finish workout')",
+    alt: "Session screen with logged and remaining exercises",
+    width: GALLERY_WIDTH,
+  },
+  {
+    name: "summary",
+    route: "/session/seed-upper/summary",
+    selector: "h1:has-text('complete')",
+    alt: "Summary screen after finishing a workout",
+    width: GALLERY_WIDTH,
+  },
+  {
+    name: "days",
+    route: "/days",
+    // A day card has rendered, not just the heading.
+    selector: "h2:has-text('Leg Day')",
+    alt: "Manage Schedule screen with day templates and their exercises",
+    width: GALLERY_WIDTH,
+  },
+  {
+    name: "workouts",
+    route: "/workouts",
+    selector: "li",
+    alt: "Logged Workouts screen listing past sessions",
+    width: GALLERY_WIDTH,
+  },
+  {
+    name: "history",
+    route: "/history/leg-press",
+    selector: "h1:has-text('Leg Press')",
+    alt: "History screen with past sets for one exercise",
+    width: GALLERY_WIDTH,
   },
 ];
 
@@ -104,9 +149,9 @@ async function startDevServer() {
 async function updateReadme(relOutDir) {
   const readmePath = path.join(ROOT, "README.md");
   let readme = await readFile(readmePath, "utf8");
-  for (const { name, alt } of SHOTS) {
+  for (const { name, alt, width = DEFAULT_WIDTH } of SHOTS) {
     const src = path.posix.join(relOutDir.split(path.sep).join("/"), `${name}.png`);
-    const tag = `<img src="${src}" alt="${alt}" width="320">`;
+    const tag = `<img src="${src}" alt="${alt}" width="${width}">`;
     readme = readme.replace(`<!-- screenshot: ${name} -->`, tag);
   }
   await writeFile(readmePath, readme);
