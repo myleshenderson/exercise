@@ -21,14 +21,13 @@ import { createServer } from "node:http";
 import { statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join, normalize, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { getRequestListener } from "@hono/node-server";
 import { app, isServerPath } from "./server.js";
 import { buildStarkeepSpa, distRebuildReason } from "./spa-build.js";
 
 const PKG_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DIST_DIR = join(PKG_DIR, "dist");
-const SHELL = join(DIST_DIR, "index.html");
 
 const MIME: Record<string, string> = {
   ".js": "application/javascript; charset=utf-8",
@@ -54,17 +53,18 @@ function isFile(path: string): boolean {
   }
 }
 
-/** A file under `dist/` for this path, or the shell. Never escapes `dist/`. */
-function resolveClientFile(pathname: string): { file: string; asset: boolean } {
+/** A file under `distDir` for this path, or the shell. Never escapes `distDir`. */
+function resolveClientFile(distDir: string, pathname: string): { file: string; asset: boolean } {
+  const shell = join(distDir, "index.html");
   let decoded: string;
   try {
     decoded = decodeURIComponent(pathname);
   } catch {
-    return { file: SHELL, asset: false };
+    return { file: shell, asset: false };
   }
-  const candidate = join(DIST_DIR, normalize(decoded));
-  if (candidate.startsWith(DIST_DIR + sep) && isFile(candidate)) return { file: candidate, asset: true };
-  return { file: SHELL, asset: false };
+  const candidate = join(distDir, normalize(decoded));
+  if (candidate.startsWith(distDir + sep) && isFile(candidate)) return { file: candidate, asset: true };
+  return { file: shell, asset: false };
 }
 
 const LISTEN_HOST = "127.0.0.1";
@@ -77,7 +77,7 @@ function isLoopbackHost(host: string | undefined): boolean {
   return LOOPBACK_HOSTNAMES.has(end > 0 ? lower.slice(0, end) : lower);
 }
 
-function portFromArgv(argv: string[]): number {
+export function portFromArgv(argv: string[]): number {
   const at = argv.findIndex((a) => a === "--port" || a === "-p");
   const value = at >= 0 ? Number(argv[at + 1]) : Number(process.env.PORT);
   if (!Number.isInteger(value) || value <= 0) {
@@ -86,13 +86,22 @@ function portFromArgv(argv: string[]): number {
   return value;
 }
 
-async function main(): Promise<void> {
-  const port = portFromArgv(process.argv.slice(2));
+/**
+ * Start the local surface on `127.0.0.1:<port>` serving the SPA from
+ * `distDir` (rebuilt first when stale). `port: 0` picks a free port; the
+ * returned `port` is the one actually bound. `close()` resolves once the
+ * listener has closed.
+ */
+export async function startServer(opts: {
+  distDir: string;
+  port: number;
+}): Promise<{ port: number; close: () => Promise<void> }> {
+  const { distDir } = opts;
 
-  const rebuild = distRebuildReason(PKG_DIR, DIST_DIR);
+  const rebuild = distRebuildReason(PKG_DIR, distDir);
   if (rebuild) {
     console.log(`exercise: dist/ is ${rebuild}, running \`vite build\` for the Starkeep backend…`);
-    await buildStarkeepSpa({ root: PKG_DIR }, { marker: true });
+    await buildStarkeepSpa({ root: PKG_DIR, build: { outDir: distDir, emptyOutDir: true } }, { marker: true });
   }
 
   const api = getRequestListener(app.fetch);
@@ -101,7 +110,7 @@ async function main(): Promise<void> {
     if (method !== "GET" && method !== "HEAD") {
       return Response.json({ error: "method_not_allowed" }, { status: 405, headers: { Allow: "GET, HEAD" } });
     }
-    const { file, asset } = resolveClientFile(new URL(request.url).pathname);
+    const { file, asset } = resolveClientFile(distDir, new URL(request.url).pathname);
     const contentType = asset
       ? (MIME[file.slice(file.lastIndexOf(".")).toLowerCase()] ?? "application/octet-stream")
       : "text/html; charset=utf-8";
@@ -121,9 +130,31 @@ async function main(): Promise<void> {
     else void client(req, res);
   });
 
-  server.listen(port, LISTEN_HOST, () => {
-    console.log(`exercise listening on http://localhost:${port}`);
+  const port = await new Promise<number>((resolveListen, rejectListen) => {
+    server.once("error", rejectListen);
+    server.listen(opts.port, LISTEN_HOST, () => {
+      server.off("error", rejectListen);
+      const address = server.address();
+      const bound = typeof address === "object" && address ? address.port : opts.port;
+      console.log(`exercise listening on http://localhost:${bound}`);
+      resolveListen(bound);
+    });
   });
+
+  return {
+    port,
+    close: () =>
+      new Promise<void>((resolveClose, rejectClose) => {
+        server.close((err) => (err ? rejectClose(err) : resolveClose()));
+        // Keep-alive sockets would otherwise hold close() open until they time out.
+        server.closeIdleConnections();
+      }),
+  };
 }
 
-void main();
+async function main(): Promise<void> {
+  await startServer({ distDir: DIST_DIR, port: portFromArgv(process.argv.slice(2)) });
+}
+
+// Only the CLI (`tsx starkeep/serve.ts`) starts a server; importing this module does not.
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) void main();
