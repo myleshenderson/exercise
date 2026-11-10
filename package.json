@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.api.json && tsc -p tsconfig.starkeep.json",
     "starkeep:serve": "tsx starkeep/serve.ts",
     "starkeep:validate": "tsx starkeep/validate-manifest.ts",
-    "bundle": "tsx starkeep/build-bundle.ts"
+    "bundle": "tsx starkeep/build-bundle.ts",
+    "screenshots": "node scripts/screenshots.mjs"
   },
   "dependencies": {
     "@hono/node-server": "1.19.17",
@@ -40,6 +41,7 @@
     "autoprefixer": "^10.5.0",
     "esbuild": "0.28.0",
     "jsdom": "^29.1.1",
+    "playwright": "1.65.0",
     "postcss": "^8.5.15",
     "tailwindcss": "^3.4.19",
     "tsx": "4.22.4",

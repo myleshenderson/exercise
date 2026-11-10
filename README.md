@@ -112,6 +112,7 @@ npm run typecheck       # tsc for the app, api/ and starkeep/
 npm test                # vitest run
 npm run test:coverage   # vitest with v8 coverage; CI fails under 80% lines or 80% functions
 npm run build           # tsc -b && vite build
+npm run screenshots     # README screenshots with Playwright; one-time setup: npx playwright install chromium
 ```
 
 CI (`.github/workflows/ci.yml`) runs `npm run typecheck` and
