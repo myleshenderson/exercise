@@ -8,15 +8,15 @@ note if that stops being true.
 ## How it works
 
 - CI job `migrate` (needs `test`, runs only on push to `main`) runs
-  `supabase link --project-ref "$(cat supabase/.temp/project-ref)"` then
+  `supabase link --project-ref "$SUPABASE_PROJECT_REF"` then
   `supabase db push`, authenticated with the `SUPABASE_ACCESS_TOKEN` repo
   secret only.
 - No `SUPABASE_DB_PASSWORD` is needed or configured: Supabase CLI 2.x
   provisions a temporary login role from the access token. (Confirmed working
   by `myleshenderson/dice-engine`'s `ci.yml` on CLI 2.113.0, and adopted here.)
-- `supabase/.temp/project-ref` is committed (normally gitignored) so the CI
-  step doesn't need a separate project-ref secret — the ref itself isn't
-  sensitive.
+- The project ref comes from the `SUPABASE_PROJECT_REF` repo secret (it is
+  no longer committed); the job fails at its first step if that secret is
+  unset.
 - If `SUPABASE_ACCESS_TOKEN` is ever unset, the step logs a loud
   `::warning::` and exits 0 rather than failing `main`.
 

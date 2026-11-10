@@ -18,13 +18,13 @@ jobs:
 
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test
+      - run: npm run test:coverage
 
   # Applies pending SQL migrations to the linked Supabase project. Only on a
   # merge to main, and only after tests pass. No SUPABASE_DB_PASSWORD: CLI 2.x
   # provisions a temporary login role from the access token, so the PAT is the
-  # only secret needed (see myleshenderson/dice-engine's ci.yml, verified there
-  # on CLI 2.113.0).
+  # only credential needed (see myleshenderson/dice-engine's ci.yml, verified
+  # there on CLI 2.113.0). The project ref comes from SUPABASE_PROJECT_REF.
   #
   # This replaces Supabase's dashboard GitHub-branch integration, which was
   # decommissioned as part of exercise-4ly after being stuck in
@@ -36,8 +36,19 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
     steps:
       - uses: actions/checkout@v4
+
+      # The project ref comes from a repository secret rather than a tracked
+      # file, so the public tree does not name the production project. Unlike
+      # the access token below, a missing ref fails the job outright.
+      - name: Require SUPABASE_PROJECT_REF
+        run: |
+          if [ -z "$SUPABASE_PROJECT_REF" ]; then
+            echo "::error title=SUPABASE_PROJECT_REF missing::Repository secret SUPABASE_PROJECT_REF is not set. Add it (Settings > Secrets and variables > Actions) with the Supabase project ref so the migrate job can link the project."
+            exit 1
+          fi
 
       - uses: supabase/setup-cli@v1
         with:
@@ -63,5 +74,5 @@ jobs:
             echo "::warning title=Migrations skipped::SUPABASE_ACCESS_TOKEN is not set, so no migration was applied."
             exit 0
           fi
-          supabase link --project-ref "$(cat supabase/.temp/project-ref)"
+          supabase link --project-ref "$SUPABASE_PROJECT_REF"
           supabase db push

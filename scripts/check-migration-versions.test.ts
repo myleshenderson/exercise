@@ -38,7 +38,10 @@ describe("check-migration-versions.mjs CLI", () => {
   it("fails loudly, naming the colliding version and both filenames", () => {
     let error: unknown;
     try {
-      execFileSync("node", [scriptPath, dupFixture], { encoding: "utf8" });
+      execFileSync("node", [scriptPath, dupFixture], {
+        encoding: "utf8",
+        stdio: "pipe",
+      });
     } catch (e) {
       error = e;
     }
@@ -46,6 +49,7 @@ describe("check-migration-versions.mjs CLI", () => {
     expect(error).toBeDefined();
     const { status, stderr } = error as { status: number; stderr: string };
     expect(status).toBe(1);
+    expect(stderr).toContain("Duplicate migration version prefixes detected");
     expect(stderr).toContain("20260906180000");
     expect(stderr).toContain("20260906180000_day_sequencing.sql");
     expect(stderr).toContain("20260906180000_exercises_soft_delete.sql");
