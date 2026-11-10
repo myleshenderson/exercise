@@ -1,5 +1,7 @@
 # Exercise as a Starkeep app
 
+For what the app is and its other deployments, see the [root README](../README.md).
+
 This repo is also a [Starkeep](https://github.com/starkeep-org/starkeep-core)
 app. Starkeep finds it through `starkeep.manifest.json` at the repo root. The
 Vercel deployment (`api/`, `src/`, `vercel.json`) does not change: everything
@@ -9,9 +11,8 @@ Starkeep-specific lives in `starkeep/`, `starkeep.manifest.json` and
 What works today: the SPA is served on both surfaces, `POST /mcp` is an MCP
 endpoint behind per-user bearer tokens that the MCP screen mints and revokes
 (`/api/mcp-login`, `/api/mcp-sessions`; see [MCP tokens](#mcp-tokens)), and
-`/api/local-data/*` is the browser's signing proxy to the app's tables. The endpoint completes `initialize` and
-registers **no tools** yet. Tools, the Starkeep DataLayer and browser sign-in
-come in later issues of epic AI-386.
+`/api/local-data/*` is the browser's signing proxy to the app's tables. The endpoint serves the 25
+tools pinned in `src/mcp/__fixtures__/tools-list.main.json`.
 
 ## Files
 
@@ -97,10 +98,6 @@ The script runs `vite build` with `VITE_DATA_BACKEND=starkeep` into a staging
 `index.handler` resolves to it, and zips the result. The zip holds
 `index.mjs`, `assets/index.html` and `assets/_immutable/*`.
 
-Known gap: the SPA uses `BrowserRouter` with no `basename`, so client routes
-under `/apps/exercise/...` will not match in the cloud. Fixing that means
-editing `src/`, which AI-600 tracks.
-
 ## Run it locally in admin-web, step by step
 
 1. Clone `starkeep-core` and `starkeep-apps` as siblings, and put this repo
@@ -138,7 +135,7 @@ editing `src/`, which AI-600 tracks.
      -H "authorization: Bearer $TOKEN" \
      -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
-   # → {"result":{"tools":[]},"jsonrpc":"2.0","id":1}
+   # → a JSON-RPC result whose "tools" array lists the 25 tools
    ```
 
 You can also run the server without admin-web:
