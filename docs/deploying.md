@@ -70,10 +70,7 @@ If you skipped the Site URL in step 1, set it now to the Vercel URL.
 
 ## 5. Create the first MCP token
 
-Open the **MCP** screen (`/mcp-login`) and create a token. The screen shows
-the token once, the endpoint (`https://<your-domain>/api/mcp`) and a
-`claude mcp add` command with both filled in. Tokens are listed on the same
-screen and can be revoked there. The root README's
+Open the **MCP** screen (`/mcp-login`) and create a token. The root README's
 [Talk to it from Claude](../README.md#talk-to-it-from-claude) section covers
 connecting a client.
 
@@ -86,8 +83,8 @@ into `supabase/migrations/` on `main` is applied by the `migrate` job in
 The `migrate` job:
 
 - needs the `test` job to pass, and runs only on push to `main`;
-- fails at its first step if the `SUPABASE_PROJECT_REF` repository secret is
-  unset;
+- fails before anything else runs if the `SUPABASE_PROJECT_REF` repository
+  secret is unset;
 - runs `node scripts/check-migration-versions.mjs supabase/migrations`, which
   fails if two migration files share a version prefix;
 - then runs `supabase link --project-ref "$SUPABASE_PROJECT_REF"` and

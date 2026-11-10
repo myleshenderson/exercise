@@ -2,65 +2,87 @@
 
 Overwritten at the end of each lead session; history is in git.
 
-Written 2026-11-08 03:40 UTC by Claude Fable 5.1 (session 2026-11-07 23:30 to 2026-11-08, the
-open-source epic AI-612). Read `/repo/CLAUDE.md` first and invoke the `lead` skill; it reads
-`docs/agents/lead-project.md`. Decisions are rows in `docs/agents/decision-log.md`.
+Written 2026-11-10 (session 00:40 UTC onwards) by Claude Fable 5.1. Read `/repo/CLAUDE.md`
+first and invoke the `lead` skill; it reads `docs/agents/lead-project.md`. Decisions are rows
+in `docs/agents/decision-log.md`.
+
+Myles's two stated goals this session: "publishing this open source and getting this
+published to my personal star keep". Both now wait only on owner-run steps.
 
 ## 1. State
 
-**Epic AI-386 (Starkeep): engineering complete.** #65 (AI-607) merged at b6d1217 on Myles's
-instruction; post-merge verification passed every AC. The owner-run queue (AI-595 to AI-598,
-AI-602) is unchanged from the previous handoff.
+**Main** is 56f3a78 (merge of #73), `test` green. `migrate` fails only at `Apply pending
+migrations` (expired token, AI-602); the `Require SUPABASE_PROJECT_REF` step added by #69
+passes.
 
-**Epic AI-612 (exercise is open source): wave 1 is two-thirds merged.** The epic description's
-Status section is the running log; read it first.
+**Epic AI-612 (exercise is open source): engineering complete.** Merged this session, in order:
 
-- **Merged:** #67 (AI-613, MIT license + identifier scrub) and #68 (AI-614, Supabase DataLayer
-  contract tests), both auto-merged by the monitor. Independent verification at 59e0f9e passed
-  every AC on both: typecheck green, 51 files / 642 tests, `src/data/supabase.ts` at 100% lines
-  and functions, both greps for the project ref and the owner email empty outside
-  `supabase/.temp/project-ref`.
-- **Waiting on Myles's merge:** #69 (AI-615, CI coverage floor, project ref from the
-  `SUPABASE_PROJECT_REF` secret, quiet fixture). Draft, CLEAN, CI green on head 37d40cd with the
-  floor enforced. Lead brief posted on the PR. The secret was added by Myles at 00:04 UTC.
-- **Ready to dispatch after #69 merges:** AI-617 (serve.ts smoke test). Its only remaining
-  blocker is AI-615 (it needs `test:coverage`); the stale AI-607/613/614 relations were removed.
-  Before labelling, pin in its description: a CLI guard so importing `serve.ts` does not start
-  the server (compare `import.meta.url` with `process.argv[1]`), thread `distDir` through an
-  exported `startServer({ distDir, port })`, use a real `buildStarkeepSpa` build into a tmp dir
-  (the main-chunk assertion needs it), and do not exercise token issuance (AI-595 covers live).
-- **Then AI-616 (docs)**, blocked by 613/614/615. Before labelling: drop the stale AI-607
-  blocker sentence from its description; there is no `Schedule.tsx` screen; the README's
-  Development section may name `test:coverage` once #69 is in; say `docs/superpowers/` is
-  history and can describe superseded states (the July plan still says the ref is hardcoded in
-  `query.sh`). Make AC1 and AC3 concrete: the README names the three deployment shapes, that
-  `VITE_DATA_BACKEND` unset means the mock backend and no account, the 25-tool MCP server, a
-  repo layout table, and links to `LICENSE`, `docs/deploying.md`, `starkeep/README.md`.
-- **Owner-run last:** AI-618 (screenshots, gitleaks, flip to public, link from AI-597 and
-  starkeep-apps #62).
+- #69 (AI-615, CI coverage floor + project ref from a secret), merged by Myles at 00:47 UTC.
+- #71 (AI-617, `starkeep/serve.ts` smoke test: exported `startServer({ distDir, port })`,
+  CLI guard, `portFromArgv` exported, 13 new tests) and #72 (AI-616, public README,
+  `docs/deploying.md`, `docs/supabase-migrations.md` reduced to a pointer, three fixes in
+  `starkeep/README.md`), both auto-merged ~15 minutes after dispatch.
+- #73 (AI-622, the stale-text leftovers #72's agent listed plus the lockfile `license`
+  field), auto-merged.
+- Independent verification at 686ccdc passed every AC of AI-617 and AI-616: 22/22 tests
+  in the two Starkeep files, `serve.ts` at 91.5% lines, `npm run starkeep:serve -- -p 5199`
+  rebuilt `dist/` and answered 200 on `/` and 403 on a foreign Host, all 17 relative links
+  resolve, the `migrate` description matches `ci.yml`. Its two wording gaps in
+  `docs/deploying.md` are fixed in this handoff's PR.
+
+**What remains for the public flip is AI-618, owner-run.** Its description is now an
+eight-step checklist with one command and one check per step: the secret step is already
+done (confirmed by the passing `Require SUPABASE_PROJECT_REF` step), then screenshots to
+`docs/images/home.png` and `docs/images/mcp.png` replacing the two README placeholders, a
+gitleaks full-history scan, `gh repo edit --visibility public`, post-flip checks, and link
+comments on AI-597 and starkeep-apps #62. The lead closes epic AI-612 after AI-618 is Done.
+
+**Epic AI-386 (Starkeep): engineering complete; owner-run queue.** A readiness check this
+session built the bundle from main (`npm run bundle`, `starkeep:validate`, typecheck all
+pass; the main chunk is a Starkeep-mode build) and found nothing in the repo that blocks
+Myles. Owner-run issues:
+
+- AI-595 (local install + MCP smoke test): Myles ran it on 2026-11-07; only the
+  post-AI-607 "Generate token" recheck is open. Comment on the issue says what to check,
+  then set Done. The blocks relation on AI-596 is released when it closes.
+- AI-596 (own Starkeep cloud, cloud-install, connect claude.ai): description rewritten with
+  exact steps A to F (manual `npm ci && pnpm bundle` because the installer calls pnpm and
+  this repo is npm; `zip` on PATH; Cognito user in `starkeep-users`; app URL
+  `https://<cloud>/apps/exercise/`; connector fallback via the MCP screen's
+  `claude mcp add` line; second-user isolation procedure; sign out and back in before
+  minting). Three values are left for Myles to record: the starkeep-core README Part B
+  link, the three stack output names, the admin-web button labels.
+- AI-597 (starkeep-apps PR), AI-598 (maintainer question), AI-602 (rotate the token).
+
+**Backlog housekeeping:** AI-384 moved from In Progress (since 2026-10-25, no PR) back to
+Todo.
 
 ### Open PRs
-- #69 (AI-615): Myles merges. After the merge, watch the first `migrate` run on main: the new
-  `Require SUPABASE_PROJECT_REF` step must pass; a failure after it is the known AI-602 token.
-- The lead's docs PR for this handoff (issue below). `auto-merge` on the issue; #66 showed the
-  monitor does merge lead-opened PRs.
+- The lead's docs PR for this handoff (AI-623, `auto-merge` on the issue; the monitor merges
+  lead-opened PRs).
 
 ### Facts learned this session
-- The monitor merges a labelled PR as soon as CI is green, without a lead read. For
-  non-production paths that is the designed flow; the lead's read happens post-merge via the
-  verification subagent, and findings go into pending issues' ACs.
-- The lead container's GitHub token cannot read or set repo secrets (403); Myles sets them in
-  the browser.
-- `/repo/node_modules` is stale against the lockfile (no `@starkeep/*`): verifiers must
-  `npm ci` in their worktree instead of symlinking it.
-- Myles's own `.env.local` needs `SUPABASE_DB_HOST=db.<ref>.supabase.co` for the
-  `workout-analysis` skill since #67.
+- The monitor moves an auto-merged PR's issue to Done about ten minutes after the merge;
+  setting Done by hand before that is premature (done twice this session before the lag was
+  measured).
+- `linear issue update` refuses `--state` together with `--add-label`; separate calls.
+- The runner opened both PRs within ~5 minutes of labelling and CI took ~6 minutes; the
+  lead's read-and-run fits inside that window if started at the "PR opened" event.
+- `supabase/.temp/project-ref` was tracked in history from 96ed120 until 37d40cd (#69), so
+  the public history will contain the production project ref (not a credential; see Q3).
 
 ## 2. Questions for Myles
-None open. Merging #69 is the next move and is his.
+1. **AI-595:** restart Exercise once, confirm the MCP screen shows `/mcp` and "Generate
+   token" mints, set the issue Done.
+2. **AI-596:** run the checklist; record the three missing values as you go.
+3. **Project ref in git history** (AI-618): the lead's default is no history rewrite before
+   the flip, since a Supabase project ref is in every client URL and is not a secret. Say
+   so if you want it scrubbed; that adds a history-rewrite step before going public.
+4. **Grey area, flagged not changed:** the bottom nav labels the ManageDays screen
+   "Schedule" while the README calls it ManageDays. A rename either way is a copy decision.
 
 ## 3. For the host
-Scratch worktrees to remove (all under the session scratchpad; `git worktree remove` is
-disabled in containers): `wt-verify` (has its own `node_modules`), `wt-lead2`, plus the
-previous session's `wt-main`, `wt-55` to `wt-61`, `wt-lead`, and the pr65 verification
-worktree under the other session's scratchpad. `git worktree prune` clears the rest.
+Scratch worktrees to remove (under the session scratchpad; `git worktree remove` is
+disabled in containers): `wt-starkeep` (clean), `wt-verify2` (`node_modules` deleted by the
+verifier), `wt-lead3` (this PR), plus earlier sessions' `wt-main`, `wt-55` to `wt-61`,
+`wt-lead`, `wt-lead2`, `wt-verify`. `git worktree prune` clears the rest.

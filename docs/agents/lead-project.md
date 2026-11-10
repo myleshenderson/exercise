@@ -11,7 +11,9 @@ the session-end docs). Sections follow `.claude/skills/lead/PROFILE-TEMPLATE.md`
   (https://linear.app/comms-center/project/exercise-a6ac7e06809d). CLAUDE.md has the
   `linear` CLI cheat-sheet; always `--no-input --team AI --project exercise` (`issue create`
   fails without `--team` in the lead container despite `.linear.toml`), `--json`
-  when parsing.
+  when parsing. `issue update` cannot combine `--state` with `--add-label` or
+  `--remove-label` in one call (it answers "Move the issue with --team first"); send
+  them as separate updates.
 - Ready state is **Todo** (`issue create` lands in Backlog unless `--state Todo`). A
   **ready** issue for the runner is Todo + `auto-execute` + no open blocker. States:
   Backlog, Todo, In Progress, In Review, Done, Canceled, Duplicate.
@@ -45,7 +47,10 @@ the session-end docs). Sections follow `.claude/skills/lead/PROFILE-TEMPLATE.md`
 - The monitor **does** merge a lead-opened PR (no runner worktree) when its issue carries
   `auto-merge`: #66 (AI-620) merged four minutes after it was opened, 2026-11-07. The
   monitor merges as soon as CI is green, with no lead read; for non-production paths the
-  lead's read is the post-merge verification subagent.
+  lead's read is the post-merge verification subagent. The monitor moves the issue to
+  Done about ten minutes after the merge (AI-622 on 2026-11-10: merged, In Progress at
+  01:04, Done at 01:09); wait fifteen minutes before setting Done by hand, and set it by
+  hand only for a PR Myles merged himself (#69).
 - `needs-input` label: blocked on a decision from Myles; leave the issue in Todo or
   Backlog with the questions in a comment.
 - Runner quirks seen here: an agent may skip a decided item in the AC (PR #55 left out
@@ -55,7 +60,9 @@ the session-end docs). Sections follow `.claude/skills/lead/PROFILE-TEMPLATE.md`
 - **CI workflow is `ci.yml`** (name `CI`) with two jobs: `test` (`npm run typecheck`,
   `npm test`) on every push and PR, and `migrate` on pushes to main only. Pre-merge and
   gate checks are judged on `test`. `migrate` has failed since 2026-10-25 on an expired
-  `SUPABASE_ACCESS_TOKEN` secret (AI-602, Myles); a red `migrate` is not a wave failure
+  `SUPABASE_ACCESS_TOKEN` secret (AI-602, Myles); since #69 (2026-11-10) its
+  `Require SUPABASE_PROJECT_REF` and version-check steps pass and it fails only at
+  `Apply pending migrations`. A red `migrate` is not a wave failure
   until AI-602 is done.
 - `gh pr checks` and the branch-protection API return 403 with the lead's token. Use
   `gh run list --branch <branch> --limit 1 --json headSha,status,conclusion` and
@@ -98,7 +105,8 @@ into the pending issues' ACs before they dispatch.
 - The lead's GitHub token cannot read or set repository secrets (403); Myles adds them in
   the browser. `/repo/node_modules` is stale against the lockfile (no `@starkeep/*`);
   verifiers run `npm ci` in their worktree rather than symlinking it.
-  Known stale ones from the Starkeep epic: `wt-main`, `wt-55` to `wt-61`.
+  Known stale ones: `wt-main`, `wt-55` to `wt-61`, `wt-lead`, `wt-lead2`, `wt-verify`
+  (earlier sessions) and `wt-starkeep`, `wt-verify2`, `wt-lead3` (2026-11-10).
 - Scratch work goes under the session scratchpad directory, never the checkout.
   Starkeep source for research is cloned there (`starkeep-core`, `starkeep-apps`).
 
@@ -139,6 +147,9 @@ into the pending issues' ACs before they dispatch.
 ## Review depth examples
 
 - Read and run: docs, `starkeep/README.md`, manifest-only changes, test-only diffs.
+  Auto-merge lands a green PR within minutes, so the lead reads the diff while CI runs:
+  #71 (typecheck and the two Starkeep test files run in a scratch worktree), #72 (every
+  factual claim in the README checked against the branch with one batched grep), #73.
 - Independent verification subagent against the ACs (this repo's equivalent of
   `/code-review medium`): every runner PR after merge (#57 to #63), and before merge
   when it touches the production path (#64: typecheck on all three configs, full vitest,
