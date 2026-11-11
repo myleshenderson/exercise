@@ -2,6 +2,9 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { db } from "../data";
 import Home from "./Home";
+import { createMockDataLayer } from "../data/mock";
+import { RideDbProvider } from "../rides/RideDb";
+import { createRideFixtureDb } from "../rides/testing/fixtures";
 
 test("lists workout days", async () => {
   render(<MemoryRouter><Home /></MemoryRouter>);
@@ -171,4 +174,40 @@ test("the non-suggested day in an expanded program group is still tappable to st
 
   await waitFor(() => expect(spy).toHaveBeenCalledWith(d2.id, expect.any(String)));
   spy.mockRestore();
+});
+
+test("shows the This week strip above Today's Workout when the account has ride data", async () => {
+  const { container } = render(
+    <MemoryRouter>
+      <RideDbProvider db={createRideFixtureDb()}>
+        <Home />
+      </RideDbProvider>
+    </MemoryRouter>,
+  );
+  await waitFor(() => expect(container.querySelector('[data-ready="home-strip"]')).not.toBeNull());
+  const strip = container.querySelector('[data-ready="home-strip"]')!;
+  expect(strip).toHaveAttribute("href", "/activities");
+  expect(strip).toHaveTextContent("This week");
+  for (const label of ["Rides", "Hours", "TSS", "Weight"]) expect(strip).toHaveTextContent(label);
+  expect(strip).toHaveTextContent(/\d+\.\d lb/);
+  const heading = screen.getByRole("heading", { name: "Today's Workout" });
+  expect(strip.nextElementSibling).toBe(heading);
+});
+
+test("renders no strip for an account without activities or weigh-ins", async () => {
+  const rideDb = createMockDataLayer();
+  const weights = vi.spyOn(rideDb, "listBodyWeights");
+  const { container } = render(
+    <MemoryRouter>
+      <RideDbProvider db={rideDb}>
+        <Home />
+      </RideDbProvider>
+    </MemoryRouter>,
+  );
+  await waitFor(() => expect(screen.getByText("Leg Day")).toBeInTheDocument());
+  // The all-time weigh-in check is the strip's last read before it decides.
+  await waitFor(() => expect(weights).toHaveBeenCalledTimes(2));
+  await new Promise((r) => setTimeout(r, 0));
+  expect(container.querySelector('[data-ready="home-strip"]')).toBeNull();
+  expect(screen.queryByText("This week")).not.toBeInTheDocument();
 });

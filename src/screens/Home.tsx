@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { db } from "../data";
 import type { Session, WorkoutDay } from "../types";
 import { formatSessionDate } from "../lib/date";
+import ThisWeekStrip from "../rides/ThisWeekStrip";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -99,6 +100,7 @@ export default function Home() {
 
   return (
     <div className="p-4 space-y-3">
+      <ThisWeekStrip />
       <h1 className="text-2xl font-bold">Today's Workout</h1>
       <label className="block text-sm text-gray-500">
         Workout date

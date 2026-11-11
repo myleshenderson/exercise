@@ -2,6 +2,7 @@ import type { DataLayer } from "./DataLayer";
 import { createMockDataLayer } from "./mock";
 import { createStarkeepDataLayer } from "./starkeep";
 import { browserTransport } from "./starkeep/browserTransport";
+import { buildRideFixtures } from "../rides/testing/fixtures";
 
 // Every DataLayer method, so the lazy wrapper below cannot miss one: adding a
 // method to the interface without listing it here is a type error.
@@ -50,4 +51,5 @@ export const db: DataLayer =
     ? lazySupabase()
     : backend === "starkeep"
       ? createStarkeepDataLayer(browserTransport)
-      : createMockDataLayer();
+      : // VITE_MOCK_RIDES=1 (screenshots, local demos) preloads synthetic rides; default unchanged.
+        createMockDataLayer(import.meta.env.VITE_MOCK_RIDES === "1" ? { rides: buildRideFixtures() } : undefined);

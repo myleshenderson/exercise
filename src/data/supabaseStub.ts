@@ -80,6 +80,7 @@ export function createSupabaseStub(): SupabaseStub {
       lte: record("lte"),
       order: record("order"),
       limit: record("limit"),
+      range: record("range"),
       single: record("single"),
       maybeSingle: record("maybeSingle"),
       then<T1 = { data: unknown; error: StubError | null }, T2 = never>(

@@ -6,7 +6,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { DEFAULT_ATHLETE_SETTINGS } from "../data/DataLayer.js";
 import {
   EXTERNAL_ACTIVITY_COLUMNS,
+  PAGE_SIZE,
   addFtpHistoryEntry,
+  readPages,
   replaceActivityStreams,
   toExternalActivity,
   upsertBodyWeights,
@@ -103,8 +105,7 @@ export interface SyncStore {
 // because PostgREST caps a response at 1000 rows.
 // ---------------------------------------------------------------------------
 
-/** PostgREST's default max-rows. */
-export const PAGE_SIZE = 1000;
+export { PAGE_SIZE };
 
 type DbRow = Record<string, unknown>;
 type DbResult = { data: unknown; error: unknown };
@@ -195,18 +196,6 @@ const fromCredential = (c: StoredCredential): DbRow => ({
   revoked_at: c.revokedAt,
 });
 
-/** Reads every page of an ordered query: `page(from, to)` must apply `.range(from, to)`. */
-async function readAll<T>(page: (from: number, to: number) => PromiseLike<DbResult>, map: (r: DbRow) => T): Promise<T[]> {
-  const out: T[] = [];
-  for (let from = 0; ; from += PAGE_SIZE) {
-    const { data, error } = await page(from, from + PAGE_SIZE - 1);
-    if (error) throw error;
-    const rows = (data ?? []) as DbRow[];
-    for (const r of rows) out.push(map(r));
-    if (rows.length < PAGE_SIZE) return out;
-  }
-}
-
 function single<T>({ data, error }: DbResult, map: (r: DbRow) => T): T | null {
   if (error) throw error;
   return data ? map(data as DbRow) : null;
@@ -226,7 +215,7 @@ export function createSupabaseSyncStore(client: SupabaseClient, ownerUserId: str
       return single(res, toAthleteSettings) ?? { ...DEFAULT_ATHLETE_SETTINGS };
     },
     listFtpHistory() {
-      return readAll(
+      return readPages(
         (from, to) =>
           client
             .from("ftp_history")
@@ -269,7 +258,7 @@ export function createSupabaseSyncStore(client: SupabaseClient, ownerUserId: str
       return data !== null;
     },
     listActivitiesBetween(fromIso, toIso) {
-      return readAll(
+      return readPages(
         (from, to) =>
           activities()
             .gte("started_at", fromIso)
@@ -281,7 +270,7 @@ export function createSupabaseSyncStore(client: SupabaseClient, ownerUserId: str
       );
     },
     listAllActivities() {
-      return readAll((from, to) => activities().order("started_at").order("id").range(from, to), toExternalActivity);
+      return readPages((from, to) => activities().order("started_at").order("id").range(from, to), toExternalActivity);
     },
     async upsertActivity(row) {
       const [stored] = await upsertExternalActivities(client, [row], ownerUserId);
@@ -330,7 +319,7 @@ export function createSupabaseSyncStore(client: SupabaseClient, ownerUserId: str
       return upsertBodyWeights(client, rows, ownerUserId);
     },
     listStrengthSessions() {
-      return readAll(
+      return readPages(
         (from, to) =>
           client
             .from("sessions")

@@ -74,7 +74,7 @@ describe("recomputeAll", () => {
 
     store.state.settings.manualFtpW = 200;
     const result = await recomputeAll(store, { defaultTimeZone: "UTC", today: "2026-06-03" });
-    expect(result).toEqual({ activities: 1, days: 3 });
+    expect(result).toEqual({ activities: 1, days: 3, done: true, nextOffset: null });
     const [after] = await store.listAllActivities();
     expect(after.tss).toBeCloseTo(100, 9);
     expect(after.intensityFactor).toBeCloseTo(1, 9);
@@ -103,7 +103,7 @@ describe("recomputeAll seeding", () => {
       dailyLoad: [{ date: "2026-05-31", tssTotal: 80, tssBySource: { garmin: 80 }, ctl: 30, atl: 60, tsb: -30 }],
     });
     const result = await recomputeAll(store, { defaultTimeZone: "UTC", today: "2026-06-01" });
-    expect(result).toEqual({ activities: 0, days: 1 });
+    expect(result).toEqual({ activities: 0, days: 1, done: true, nextOffset: null });
     expect((await store.getDailyLoad("2026-06-01"))?.ctl).toBeCloseTo(50 * (1 - DECAY), 12);
   });
 });

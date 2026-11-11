@@ -80,6 +80,33 @@ describe("external activities", () => {
   });
 });
 
+describe("listExternalActivities limit contract (same as supabase.ts)", () => {
+  const TOTAL = 3000;
+  // Newest first: ride i starts i minutes before NOW.
+  const seeded = async () => {
+    const db = createMockDataLayer({ seed: false });
+    const base = Date.parse(NOW);
+    await db.upsertExternalActivities(Array.from({ length: TOTAL }, (_, i) => ride(`r-${i}`, new Date(base - i * 60_000).toISOString())));
+    return db;
+  };
+
+  test.each([0, 1, 50, 1000, 1001, 2500])("limit %i returns the newest %i rows", async (limit) => {
+    const db = await seeded();
+    const out = await db.listExternalActivities({ limit });
+    expect(out.map((a) => a.sourceId)).toEqual(Array.from({ length: limit }, (_, i) => `r-${i}`));
+  });
+
+  test("a limit above the rows available returns them all", async () => {
+    const db = await seeded();
+    expect(await db.listExternalActivities({ limit: TOTAL + 1 })).toHaveLength(TOTAL);
+  });
+
+  test.each([-1, 1.5, NaN, Infinity])("limit %s throws a RangeError", async (limit) => {
+    const db = createMockDataLayer({ seed: false });
+    await expect(db.listExternalActivities({ limit })).rejects.toThrow(new RangeError("limit must be a non-negative integer"));
+  });
+});
+
 test("streams: upsert per (activity, channel), ordered by channel, start offset defaults to 0", async () => {
   const db = createMockDataLayer({ seed: false });
   const [a1, a2] = await db.upsertExternalActivities([ride("g-1", NOW), ride("g-2", NOW)]);
