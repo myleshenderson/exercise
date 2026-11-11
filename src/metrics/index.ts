@@ -8,3 +8,4 @@ export * from "./elevation.js";
 export * from "./weight.js";
 export * from "./units.js";
 export * from "./dates.js";
+export * from "./display.js";

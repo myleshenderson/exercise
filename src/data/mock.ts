@@ -11,7 +11,9 @@ import type {
   AthleteSettings,
   FtpHistoryEntry,
   DailyTrainingLoad,
+  SyncState,
 } from "../types";
+import type { RideFixtures } from "../rides/testing/fixtures";
 import { seedExercises, seedDays, seedSessions } from "./seed";
 import { findLastSetsForExercise } from "../lib/lastSession";
 import { nextAvailablePositionByProgram, isDayAvailable } from "../lib/programAvailability";
@@ -19,7 +21,12 @@ import { compareText, timestampMicros } from "../analysis/sqlSemantics";
 
 type StoredDay = Omit<WorkoutDay, "programName" | "isAvailable">;
 
-export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
+/**
+ * `seed: false` starts with no strength data. `rides` preloads every ride collection (activities
+ * with their fixed ids, streams, weigh-ins, settings, FTP history, daily load and sync state);
+ * without it the ride tables start empty, as before.
+ */
+export function createMockDataLayer(opts?: { seed?: boolean; rides?: RideFixtures }): DataLayer {
   const useSeed = opts?.seed !== false;
   const exercises: Exercise[] = useSeed ? structuredClone(seedExercises) : [];
   const days: StoredDay[] = useSeed ? structuredClone(seedDays) : [];
@@ -39,6 +46,17 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
   let athleteSettings: AthleteSettings | null = null;
   const ftpHistory: FtpHistoryEntry[] = [];
   const trainingLoad = new Map<string, DailyTrainingLoad>();
+  const syncState: SyncState[] = [];
+  const rides = opts?.rides;
+  if (rides) {
+    activities.push(...structuredClone(rides.activities));
+    streams.push(...structuredClone(rides.streams));
+    bodyWeights.push(...structuredClone(rides.bodyWeights));
+    athleteSettings = structuredClone(rides.settings);
+    ftpHistory.push(...structuredClone(rides.ftpHistory));
+    for (const d of rides.dailyLoad) trainingLoad.set(d.date, structuredClone(d));
+    syncState.push(...structuredClone(rides.syncState));
+  }
   // Exact timestamptz instants (microseconds, bigint) that accept Postgres-style
   // literals such as "2026-11-01 10:00:00+00" and throw on garbage rather than
   // comparing NaN silently.
@@ -409,8 +427,12 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
       for (const d of rows) trainingLoad.set(d.date, structuredClone(d));
     },
     async listSyncState() {
-      // Only the service-role sync writes sync_state; the mock has no sync.
-      return [];
+      // Only the service-role sync writes sync_state; the mock has no sync, so only
+      // preloaded fixture rows exist.
+      return syncState
+        .slice()
+        .sort((a, b) => compareText(a.source, b.source))
+        .map((s) => structuredClone(s));
     },
   };
 }

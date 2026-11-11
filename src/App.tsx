@@ -7,6 +7,13 @@ import ManageDays from "./screens/ManageDays";
 import History from "./screens/History";
 import LoggedWorkouts from "./screens/LoggedWorkouts";
 import MCPLogin from "./screens/MCPLogin";
+import ActivitiesFeed from "./rides/screens/ActivitiesFeed";
+import ActivityDetail from "./rides/screens/ActivityDetail";
+import MyStats from "./rides/screens/MyStats";
+import Training from "./rides/screens/Training";
+import PowerCurve from "./rides/screens/PowerCurve";
+import Weight from "./rides/screens/Weight";
+import Settings from "./rides/screens/Settings";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import Login from "./auth/Login";
 import { isStarkeepBackend, routerBasename } from "./auth/backend";
@@ -28,15 +35,25 @@ function Shell() {
         <Route path="/history/:exerciseId" element={<History />} />
         <Route path="/workouts" element={<LoggedWorkouts />} />
         <Route path="/mcp-login" element={<MCPLogin />} />
+        {/* Ride analytics (AI-627 wave 3). */}
+        <Route path="/activities" element={<ActivitiesFeed />} />
+        <Route path="/activities/:id" element={<ActivityDetail />} />
+        <Route path="/stats" element={<MyStats />} />
+        <Route path="/training" element={<Training />} />
+        <Route path="/power" element={<PowerCurve />} />
+        <Route path="/weight" element={<Weight />} />
+        <Route path="/settings" element={<Settings />} />
         {/* The cloud redirects a signed-out browser here (Gate shows Login for
             any path then); with a session, or a backend that needs none, go home. */}
         <Route path="/sign-in" element={<Navigate to="/" replace />} />
       </Routes>
       <nav className="fixed bottom-0 inset-x-0 max-w-md mx-auto flex justify-around bg-white border-t py-2">
-        <Link to="/" className="p-2">Home</Link>
-        <Link to="/days" className="p-2">Schedule</Link>
-        <Link to="/workouts" className="p-2">Workouts</Link>
-        <Link to="/mcp-login" className="p-2">MCP</Link>
+        <Link to="/" className="px-1 py-2 text-sm">Home</Link>
+        <Link to="/days" className="px-1 py-2 text-sm">Schedule</Link>
+        <Link to="/workouts" className="px-1 py-2 text-sm">Workouts</Link>
+        <Link to="/activities" className="px-1 py-2 text-sm">Activities</Link>
+        <Link to="/stats" className="px-1 py-2 text-sm">Stats</Link>
+        <Link to="/mcp-login" className="px-1 py-2 text-sm">MCP</Link>
       </nav>
     </div>
   );
