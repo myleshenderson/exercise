@@ -13,3 +13,7 @@ supabase/.temp/
 
 # Starkeep cloud bundle written by `npm run bundle` (starkeep/build-bundle.ts)
 /dist.zip
+
+# API probe outputs (personal data)
+garmin-probe-out/
+peloton-probe-out/
