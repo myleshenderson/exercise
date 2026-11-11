@@ -1,5 +1,5 @@
 /** Garmin rides: resumable newest-first backfill, then a daily incremental sync (AI-638). */
-import { channelsFromFitWithStart } from "../fitChannels.js";
+import { MAX_FIT_START_OFFSET_S, channelsFromFitWithStart, fitStartOffsetS } from "../fitChannels.js";
 import { SyncDeadlineError } from "../http.js";
 import { ingestActivity } from "../ingest.js";
 import { persistActivity } from "../persist.js";
@@ -19,20 +19,6 @@ export interface GarminRunOptions {
 }
 
 const SOURCE = "garmin_activities" as const;
-
-/** A FIT whose first record is further than this from beginTimestamp has a corrupt header (AI-645). */
-export const MAX_FIT_START_OFFSET_S = 3600;
-
-/**
- * Seconds from the activity's start to the FIT's first record, floored; 0 without a FIT start.
- * `ok` is false when the gap exceeds MAX_FIT_START_OFFSET_S (the offset is then 0).
- */
-export function fitStartOffsetS(startedAt: string, fitStartTime: string | null): { offsetS: number; ok: boolean } {
-  if (fitStartTime === null) return { offsetS: 0, ok: true };
-  const offsetS = Math.floor((Date.parse(fitStartTime) - Date.parse(startedAt)) / 1000);
-  if (!Number.isFinite(offsetS) || Math.abs(offsetS) > MAX_FIT_START_OFFSET_S) return { offsetS: 0, ok: false };
-  return { offsetS, ok: true };
-}
 
 function readCursor(raw: unknown): GarminActivitiesCursor | null {
   if (!raw || typeof raw !== "object") return null;

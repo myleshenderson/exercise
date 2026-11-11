@@ -1,7 +1,10 @@
 /**
- * Strava archive `activities.csv` (AI-640): an RFC 4180 parser plus the typed columns the
- * importer reads. Pure: no I/O.
+ * Strava archive `activities.csv` (AI-640): the typed columns the importer reads, over the shared
+ * RFC 4180 parser in ../csv.ts. Pure: no I/O.
  */
+import { parseCsvRecords } from "../csv.js";
+
+export { parseCsvRecords };
 
 /** One CSV row: the typed fields the importer uses, and every column as a string in `raw`. */
 export interface StravaRow {
@@ -28,44 +31,6 @@ export interface StravaRow {
 }
 
 export const REQUIRED_COLUMNS = ["Activity ID", "Activity Date", "Activity Type", "Filename"] as const;
-
-/** RFC 4180 records: quoted fields may hold commas, doubled quotes and newlines; CRLF or LF ends a record. */
-export function parseCsvRecords(text: string): string[][] {
-  const records: string[][] = [];
-  let record: string[] = [];
-  let field = "";
-  let quoted = false;
-  let i = text.charCodeAt(0) === 0xfeff ? 1 : 0;
-  const endField = () => {
-    record.push(field);
-    field = "";
-  };
-  const endRecord = () => {
-    endField();
-    // A blank line is not a record.
-    if (!(record.length === 1 && record[0] === "")) records.push(record);
-    record = [];
-  };
-  for (; i < text.length; i++) {
-    const c = text[i];
-    if (quoted) {
-      if (c === '"') {
-        if (text[i + 1] === '"') {
-          field += '"';
-          i++;
-        } else quoted = false;
-      } else field += c;
-    } else if (c === '"') quoted = true;
-    else if (c === ",") endField();
-    else if (c === "\r" && text[i + 1] === "\n") {
-      endRecord();
-      i++;
-    } else if (c === "\n" || c === "\r") endRecord();
-    else field += c;
-  }
-  if (field !== "" || record.length > 0) endRecord();
-  return records;
-}
 
 /** Header names with repeats renamed `"<name> (2)"`, `"<name> (3)"`, ... */
 export function dedupeHeader(header: readonly string[]): string[] {
