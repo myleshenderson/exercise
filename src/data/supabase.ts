@@ -925,17 +925,24 @@ export function createSupabaseDataLayer(): DataLayer {
       });
     },
     async getLastSetsForExercise(exerciseId, beforeDate) {
-      const { data: s } = await supabase
-        .from("sessions")
-        .select("id, performed_on")
-        .lt("performed_on", beforeDate)
-        .order("performed_on", { ascending: false })
-        .order("created_at", { ascending: false });
-      for (const sess of s ?? []) {
+      // id breaks performed_on/created_at ties so consecutive pages neither skip nor repeat a row.
+      const ids = await readPages(
+        (from, to) =>
+          supabase
+            .from("sessions")
+            .select("id, performed_on")
+            .lt("performed_on", beforeDate)
+            .order("performed_on", { ascending: false })
+            .order("created_at", { ascending: false })
+            .order("id")
+            .range(from, to),
+        (r) => r.id as string,
+      );
+      for (const id of ids) {
         const { data: sets } = await supabase
           .from("session_sets")
           .select("*")
-          .eq("session_id", sess.id)
+          .eq("session_id", id)
           .eq("exercise_id", exerciseId)
           .order("set_number");
         if (sets && sets.length) {
@@ -981,11 +988,13 @@ export function createSupabaseDataLayer(): DataLayer {
     },
     logExercise: (sessionId, exerciseId, sets) => logExercise(supabase, sessionId, exerciseId, sets),
     async getExerciseHistory(exerciseId) {
-      const { data: setRows } = await supabase
-        .from("session_sets")
-        .select("session_id")
-        .eq("exercise_id", exerciseId);
-      const ids = [...new Set((setRows ?? []).map((r) => r.session_id))];
+      // The result is sorted below; ordering by id only makes the pages deterministic.
+      const sessionIds = await readPages(
+        (from, to) =>
+          supabase.from("session_sets").select("session_id").eq("exercise_id", exerciseId).order("id").range(from, to),
+        (r) => r.session_id as string,
+      );
+      const ids = [...new Set(sessionIds)];
       const sessions: Session[] = [];
       for (const id of ids) {
         const sess = await loadSession(id);
@@ -994,14 +1003,21 @@ export function createSupabaseDataLayer(): DataLayer {
       return sessions.sort((a, b) => (a.performedOn < b.performedOn ? 1 : -1));
     },
     async listSessions() {
-      const { data: s } = await supabase
-        .from("sessions")
-        .select("id")
-        .order("performed_on", { ascending: false })
-        .order("created_at", { ascending: false });
+      // id breaks performed_on/created_at ties so consecutive pages neither skip nor repeat a row.
+      const ids = await readPages(
+        (from, to) =>
+          supabase
+            .from("sessions")
+            .select("id")
+            .order("performed_on", { ascending: false })
+            .order("created_at", { ascending: false })
+            .order("id")
+            .range(from, to),
+        (r) => r.id as string,
+      );
       const sessions: Session[] = [];
-      for (const row of s ?? []) {
-        const sess = await loadSession(row.id);
+      for (const id of ids) {
+        const sess = await loadSession(id);
         if (sess) sessions.push(sess);
       }
       return sessions;
