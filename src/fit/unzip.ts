@@ -1,5 +1,5 @@
 import { unzipSync } from "fflate";
-import { FitError } from "./errors";
+import { FitError } from "./errors.js";
 
 /** Largest .fit entry inflated (64 MiB); a long 1 Hz ride is a few MiB. */
 export const MAX_FIT_BYTES = 64 * 1024 * 1024;

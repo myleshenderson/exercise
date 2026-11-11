@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { decodeFit, FitError, toStreams } from "./index";
-import { MAX_SPAN_SECONDS } from "./streams";
-import type { FitMessages, FitRecord } from "./types";
-import { BT, data, def, encodeFit } from "./testing/encodeFit";
+import { decodeFit, FitError, toStreams } from "./index.js";
+import { MAX_SPAN_SECONDS } from "./streams.js";
+import type { FitMessages, FitRecord } from "./types.js";
+import { BT, data, def, encodeFit } from "./testing/encodeFit.js";
 
 const T0 = 1_000_000_000; // FIT seconds
 const U0 = 1_631_065_600; // the same instant in Unix seconds

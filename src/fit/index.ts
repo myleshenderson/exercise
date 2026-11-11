@@ -1,7 +1,7 @@
-export { decodeFit } from "./decode";
-export { FitError } from "./errors";
-export { toStreams } from "./streams";
-export { fitFromZip } from "./unzip";
+export { decodeFit } from "./decode.js";
+export { FitError } from "./errors.js";
+export { toStreams } from "./streams.js";
+export { fitFromZip } from "./unzip.js";
 export type {
   ChannelName,
   FitActivity,
@@ -11,4 +11,4 @@ export type {
   FitRecord,
   FitSession,
   FitSet,
-} from "./types";
+} from "./types.js";
