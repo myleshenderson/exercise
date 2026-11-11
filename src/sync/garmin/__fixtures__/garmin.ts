@@ -145,10 +145,23 @@ export const WEIGHT_RANGE: GarminWeightRange = {
 
 export const EMPTY_WEIGHT_RANGE: GarminWeightRange = { dailyWeightSummaries: [] };
 
-/** A zipped FIT with 1 Hz timestamp + distance (cm) records, built in memory. */
-export function fitZip(seconds = 5): Uint8Array {
-  const T0 = 1_000_000_000;
+/** Seconds from the Unix epoch to the FIT epoch (1989-12-31T00:00Z). */
+const FIT_EPOCH_S = 631_065_600;
+
+/**
+ * A zipped FIT with 1 Hz timestamp + distance (cm) records, built in memory. The first record is
+ * at `startMs` (epoch ms, whole seconds); the default is 2021-09-08T01:46:40Z.
+ */
+export function fitZip(seconds = 5, startMs = (1_000_000_000 + FIT_EPOCH_S) * 1000): Uint8Array {
+  const T0 = Math.floor(startMs / 1000) - FIT_EPOCH_S;
   const items: FitItem[] = [def(0, 20, [{ num: 253, baseType: BT.uint32 }, { num: 5, baseType: BT.uint32 }])];
   for (let i = 0; i < seconds; i++) items.push(data(0, [T0 + i, i * 500]));
   return zipSync({ "900000003_ACTIVITY.fit": encodeFit(items) });
+}
+
+/** fitZip for a LIST_PAGE ride: its first record at the ride's beginTimestamp + `offsetS`. */
+export function fitZipFor(id: string, offsetS = 0, seconds = 5): Uint8Array {
+  const item = LIST_PAGE.find((i) => String(i.activityId) === id);
+  if (!item?.beginTimestamp) return fitZip(seconds);
+  return fitZip(seconds, item.beginTimestamp + offsetS * 1000);
 }

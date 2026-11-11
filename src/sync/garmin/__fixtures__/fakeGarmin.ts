@@ -1,7 +1,7 @@
 /** A fake Garmin Personal API behind an injected fetch, for the adapter tests. */
 import { TOKEN_PATH } from "../client.js";
 import type { GarminDetail, GarminListItem, GarminWeightRange } from "../types.js";
-import { DETAIL, SYNTHETIC_JWT, fitZip } from "./garmin.js";
+import { DETAIL, SYNTHETIC_JWT, fitZipFor } from "./garmin.js";
 
 export interface FakeCall {
   method: string;
@@ -15,6 +15,7 @@ export interface FakeGarminOptions {
   /** Search response for a request (all list items when the function is absent). */
   search?: (q: URLSearchParams) => GarminListItem[] | Response;
   detail?: (id: string) => GarminDetail | Response;
+  /** Default: fitZipFor(id), a FIT starting at the ride's beginTimestamp. */
   fit?: (id: string) => Uint8Array | Response;
   weight?: (start: string, end: string) => GarminWeightRange | Response;
 }
@@ -47,7 +48,7 @@ export function fakeGarmin(o: FakeGarminOptions = {}) {
     }
     m = /^\/download-service\/files\/activity\/(\d+)$/.exec(path);
     if (m) {
-      const r = o.fit ? o.fit(m[1]!) : fitZip();
+      const r = o.fit ? o.fit(m[1]!) : fitZipFor(m[1]!);
       return r instanceof Response ? r : new Response(r as BodyInit, { status: 200 });
     }
     m = /^\/weight-service\/weight\/range\/([\d-]+)\/([\d-]+)$/.exec(path);

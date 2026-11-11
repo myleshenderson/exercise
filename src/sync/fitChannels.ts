@@ -4,6 +4,17 @@ import type { StreamChannel } from "../types.js";
 import type { Channels } from "./types.js";
 
 export function channelsFromFit(bytes: Uint8Array, container: "zip" | "fit"): Channels {
+  return channelsFromFitWithStart(bytes, container).channels;
+}
+
+/**
+ * The channels plus the instant of slot 0 (ISO, the first timed record), or null when the FIT
+ * holds no timed record (AI-645).
+ */
+export function channelsFromFitWithStart(
+  bytes: Uint8Array,
+  container: "zip" | "fit",
+): { channels: Channels; startTime: string | null } {
   const fit = container === "zip" ? fitFromZip(bytes) : bytes;
   const streams = toStreams(decodeFit(fit));
   const channels: Channels = {};
@@ -11,5 +22,5 @@ export function channelsFromFit(bytes: Uint8Array, container: "zip" | "fit"): Ch
     if (name === "timestamp" || values === undefined) continue;
     channels[name as StreamChannel] = values;
   }
-  return channels;
+  return { channels, startTime: streams.startTime };
 }

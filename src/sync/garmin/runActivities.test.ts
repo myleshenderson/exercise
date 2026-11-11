@@ -5,7 +5,7 @@ import type { SyncState } from "../../types.js";
 import { createGarminClient } from "./client.js";
 import { runGarminActivities } from "./runActivities.js";
 import { fakeGarmin, pagedSearch, type FakeGarminOptions } from "./__fixtures__/fakeGarmin.js";
-import { JWT_IAT, LIST_PAGE, fitZip } from "./__fixtures__/garmin.js";
+import { JWT_IAT, LIST_PAGE, fitZipFor } from "./__fixtures__/garmin.js";
 
 const baseState: SyncState = {
   source: "garmin_activities",
@@ -63,9 +63,9 @@ describe("runGarminActivities", () => {
   it("(e) saves the cursor at the page start when the deadline hits mid-page, and resumes without duplicates", async () => {
     const s = setup({
       search: pagedSearch(LIST_PAGE),
-      fit: () => {
+      fit: (id) => {
         s.clock.t = Math.max(s.clock.t, NOW + 60_000); // the deadline passes while item 1 is downloading
-        return fitZip();
+        return fitZipFor(id);
       },
     });
     const first = await runGarminActivities(s.client, s.store, s.opts);
@@ -154,7 +154,7 @@ describe("runGarminActivities", () => {
   it("(i) a corrupt FIT gives a summary-only row with flat TSS and the run continues", async () => {
     const s = setup({
       search: pagedSearch(LIST_PAGE),
-      fit: (id) => (id === "900000003" ? new Uint8Array([1, 2, 3, 4]) : fitZip()),
+      fit: (id) => (id === "900000003" ? new Uint8Array([1, 2, 3, 4]) : fitZipFor(id)),
     });
     const r = await runGarminActivities(s.client, s.store, s.opts);
     expect(r).toMatchObject({ upserted: 3, skipped: 1, done: true, error: null });
@@ -185,6 +185,78 @@ describe("runGarminActivities", () => {
       authStatus: "ok",
       cursor: { mode: "backfill", start: 3 },
       lastSuccessAt: null,
+    });
+  });
+
+  describe("FIT start alignment (AI-645)", () => {
+    const streamsOf = (store: ReturnType<typeof setup>["store"], sourceId: string) => {
+      const a = [...store.state.activities.values()].find((x) => x.sourceId === sourceId)!;
+      return { activity: a, streams: store.state.streams.get(a.id)! };
+    };
+
+    it("stores startOffsetS = 0 on every stream when the FIT starts at beginTimestamp", async () => {
+      const s = setup({ search: pagedSearch(LIST_PAGE) });
+      const r = await runGarminActivities(s.client, s.store, s.opts);
+      expect(r).toMatchObject({ upserted: 3, skipped: 0, error: null });
+      expect(r.notes).toBeUndefined();
+      for (const item of LIST_PAGE) {
+        const { streams } = streamsOf(s.store, String(item.activityId));
+        expect(streams.length).toBeGreaterThan(0);
+        for (const st of streams) expect(st.startOffsetS).toBe(0);
+      }
+      expect(s.store.state.syncState.get("garmin_activities")!.lastError).toBeNull();
+    });
+
+    it("stores startOffsetS = 7 on every stream when the first record is 7 s after beginTimestamp", async () => {
+      const s = setup({ search: pagedSearch(LIST_PAGE), fit: (id) => fitZipFor(id, 7) });
+      const r = await runGarminActivities(s.client, s.store, s.opts);
+      expect(r).toMatchObject({ upserted: 3, skipped: 0, done: true, error: null });
+      const { activity, streams } = streamsOf(s.store, "900000003");
+      expect(activity.startedAt).toBe("2026-06-03T12:00:00.000Z"); // startedAt is unchanged
+      expect(streams.map((x) => x.channel)).toEqual(["distance"]);
+      for (const st of streams) {
+        expect(st.startOffsetS).toBe(7);
+        expect(st.values).toHaveLength(5); // not padded or trimmed
+      }
+    });
+
+    it("floors a sub-second gap and allows a FIT that starts before beginTimestamp", async () => {
+      const items = [
+        { ...LIST_PAGE[0]!, beginTimestamp: LIST_PAGE[0]!.beginTimestamp! - 500 }, // FIT 0.5 s later → 0
+        { ...LIST_PAGE[1]!, beginTimestamp: LIST_PAGE[1]!.beginTimestamp! + 3000 }, // FIT 3 s earlier → -3
+      ];
+      const s = setup({ search: pagedSearch(items) });
+      const r = await runGarminActivities(s.client, s.store, s.opts);
+      expect(r).toMatchObject({ upserted: 2, skipped: 0, error: null });
+      expect(streamsOf(s.store, "900000003").streams.map((x) => x.startOffsetS)).toEqual([0]);
+      expect(streamsOf(s.store, "900000002").streams.map((x) => x.startOffsetS)).toEqual([-3]);
+    });
+
+    it("ignores FIT timing more than 3600 s off, stores offset 0, counts it skipped and notes last_error", async () => {
+      const s = setup({
+        search: pagedSearch(LIST_PAGE),
+        fit: (id) => (id === "900000003" ? fitZipFor(id, 3601) : id === "900000002" ? fitZipFor(id, 3600) : fitZipFor(id)),
+      });
+      const r = await runGarminActivities(s.client, s.store, s.opts);
+      expect(r).toMatchObject({ upserted: 3, skipped: 1, done: true, error: null });
+      expect(r.notes).toHaveLength(1);
+      expect(r.notes![0]).toContain("activity 900000003");
+      const road = streamsOf(s.store, "900000003");
+      expect(road.streams.length).toBeGreaterThan(0);
+      for (const st of road.streams) expect(st.startOffsetS).toBe(0);
+      expect(road.activity.startedAt).toBe("2026-06-03T12:00:00.000Z");
+      // Exactly 3600 s is within the guard.
+      expect(streamsOf(s.store, "900000002").streams.map((x) => x.startOffsetS)).toEqual([3600]);
+      const state = s.store.state.syncState.get("garmin_activities")!;
+      expect(state.lastError).toContain("activity 900000003");
+      expect(state.lastSuccessAt).toBe(new Date(NOW).toISOString()); // a note does not fail the run
+    });
+
+    it("applies the guard to a FIT that starts long before beginTimestamp", async () => {
+      const s = setup({ search: pagedSearch(LIST_PAGE.slice(0, 1)), fit: (id) => fitZipFor(id, -7200) });
+      const r = await runGarminActivities(s.client, s.store, s.opts);
+      expect(r).toMatchObject({ upserted: 1, skipped: 1, error: null });
+      expect(streamsOf(s.store, "900000003").streams.map((x) => x.startOffsetS)).toEqual([0]);
     });
   });
 });
