@@ -59,11 +59,9 @@ the session-end docs). Sections follow `.claude/skills/lead/PROFILE-TEMPLATE.md`
   remove `auto-merge` itself (PR #61); verify, then re-add or cut a reversal issue.
 - **CI workflow is `ci.yml`** (name `CI`) with two jobs: `test` (`npm run typecheck`,
   `npm test`) on every push and PR, and `migrate` on pushes to main only. Pre-merge and
-  gate checks are judged on `test`. `migrate` has failed since 2026-10-25 on an expired
-  `SUPABASE_ACCESS_TOKEN` secret (AI-602, Myles); since #69 (2026-11-10) its
-  `Require SUPABASE_PROJECT_REF` and version-check steps pass and it fails only at
-  `Apply pending migrations`. A red `migrate` is not a wave failure
-  until AI-602 is done.
+  gate checks are judged on `test`. `migrate` failed from 2026-10-25 to 2026-11-11 on an
+  expired `SUPABASE_ACCESS_TOKEN`; #78 (AI-602, merged 2026-11-11) pinned Supabase CLI 3.1.0
+  and pushes with `--remote`, and both jobs are green on main 682b500.
 - `gh pr checks` and the branch-protection API return 403 with the lead's token. Use
   `gh run list --branch <branch> --limit 1 --json headSha,status,conclusion` and
   `gh run view <id> --json jobs --jq '.jobs[]|"\(.name) \(.conclusion)"'`. Repo setting
@@ -98,7 +96,9 @@ into the pending issues' ACs before they dispatch.
 ## Environment limits
 
 - The agent container has no `SUPABASE_ACCESS_TOKEN`, no Supabase project access and no
-  AWS or Starkeep cloud credentials: nothing can hit production or a Starkeep cloud.
+  AWS or Starkeep cloud credentials: nothing can hit production or a Starkeep cloud. Its
+  egress reaches GitHub and registry.npmjs.org only: no Garmin or Peloton host (2026-11-11),
+  so API probes are owner-run (`scripts/probes/`).
   Live checks (local Starkeep install, cloud deploy, claude.ai connector) are Myles's
   issues, not agent work.
 - `git worktree remove` is disabled in containers; list scratch worktrees for the host.
@@ -106,7 +106,8 @@ into the pending issues' ACs before they dispatch.
   the browser. `/repo/node_modules` is stale against the lockfile (no `@starkeep/*`);
   verifiers run `npm ci` in their worktree rather than symlinking it.
   Known stale ones: `wt-main`, `wt-55` to `wt-61`, `wt-lead`, `wt-lead2`, `wt-verify`
-  (earlier sessions) and `wt-starkeep`, `wt-verify2`, `wt-lead3` (2026-11-10).
+  (earlier sessions), `wt-starkeep`, `wt-verify2`, `wt-lead3` (2026-11-10) and `wt-lead4`
+  (2026-11-11).
 - Scratch work goes under the session scratchpad directory, never the checkout.
   Starkeep source for research is cloned there (`starkeep-core`, `starkeep-apps`).
 
