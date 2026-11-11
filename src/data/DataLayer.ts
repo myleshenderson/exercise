@@ -35,6 +35,12 @@ export interface ExternalActivityFilter {
   to?: string; // inclusive upper bound on startedAt (ISO instant)
   source?: ActivitySource;
   environment?: ActivityEnvironment;
+  /**
+   * Caps the number of rows returned (newest first). Must be a non-negative
+   * safe integer: 0 returns `[]` without a query; a negative, fractional, NaN or
+   * non-finite value throws `RangeError("limit must be a non-negative integer")`
+   * (see `assertListLimit`). Same contract in every backend.
+   */
   limit?: number;
 }
 
@@ -116,6 +122,13 @@ export interface DataLayer {
   listDailyTrainingLoad(from: string, to: string): Promise<DailyTrainingLoad[]>; // date in [from, to], oldest first
   upsertDailyTrainingLoad(rows: DailyTrainingLoad[]): Promise<void>; // on (user, date)
   listSyncState(): Promise<SyncState[]>; // ordered by source
+}
+
+/** Validates `ExternalActivityFilter.limit`; `undefined` means no cap. Shared by the Supabase and mock backends. */
+export function assertListLimit(limit: number | undefined): void {
+  if (limit !== undefined && !(Number.isSafeInteger(limit) && limit >= 0)) {
+    throw new RangeError("limit must be a non-negative integer");
+  }
 }
 
 /**

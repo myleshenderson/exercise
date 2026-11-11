@@ -52,7 +52,7 @@ describe("createSupabaseSyncStore (h)", () => {
       const range = q.calls.find(([m]) => m === "range");
       if (q.table === "external_activities" && range && !q.calls.some(([m]) => m === "gte")) {
         const from = range[1] as number;
-        const n = from === 0 ? PAGE_SIZE : 3;
+        const n = from === 0 ? PAGE_SIZE : from === PAGE_SIZE ? 3 : 0;
         return ok(Array.from({ length: n }, (_, i) => activityRow(from + i)));
       }
       if (range) return ok([]);
@@ -63,9 +63,10 @@ describe("createSupabaseSyncStore (h)", () => {
     expect(all).toHaveLength(PAGE_SIZE + 3);
     expect(all[PAGE_SIZE].id).toBe(`id-${PAGE_SIZE}`);
     const pages = queries.filter((q) => q.table === "external_activities");
-    expect(pages).toHaveLength(2);
+    expect(pages).toHaveLength(3);
     expect(has(pages[0], "range", 0, 999)).toBe(true);
     expect(has(pages[1], "range", 1000, 1999)).toBe(true);
+    expect(has(pages[2], "range", 1003, 2002)).toBe(true);
     expect(has(pages[0], "order", "started_at")).toBe(true);
 
     queries.length = 0;
@@ -123,8 +124,9 @@ describe("createSupabaseSyncStore (h)", () => {
 
   it("skips FTP history entries already stored with the same (effectiveFrom, source)", async () => {
     const { client, queries } = recordingClient((q) => {
-      if (q.calls.some(([m]) => m === "range")) {
-        return ok([{ id: "h1", effective_from: "2026-01-01T00:00:00+00:00", ftp_w: 240, source: "peloton_test", source_ref: null }]);
+      const range = q.calls.find(([m]) => m === "range");
+      if (range) {
+        return ok(range[1] === 0 ? [{ id: "h1", effective_from: "2026-01-01T00:00:00+00:00", ftp_w: 240, source: "peloton_test", source_ref: null }] : []);
       }
       const insert = q.calls.find(([m]) => m === "insert");
       return ok({ id: "h2", ...(insert?.[1] as object) });

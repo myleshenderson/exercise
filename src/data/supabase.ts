@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { DEFAULT_ATHLETE_SETTINGS, assertProviderPayloads, type DataLayer, type DayLookup, type ExternalActivityFilter } from "./DataLayer.js";
+import { DEFAULT_ATHLETE_SETTINGS, assertListLimit, assertProviderPayloads, type DataLayer, type DayLookup, type ExternalActivityFilter } from "./DataLayer.js";
 import type {
   Exercise,
   WorkoutDay,
@@ -457,31 +457,36 @@ function fromExternalActivityInput(a: ExternalActivityInput, now: string): DbRow
 }
 
 /** PostgREST's default response cap (`max-rows`); list reads page in steps of this size. */
-const PAGE_SIZE = 1000;
+export const PAGE_SIZE = 1000;
 
 /**
  * Reads every page of an ordered query, `PAGE_SIZE` rows at a time, until a
- * short page. `page(from, to)` must build a fresh query ending in
+ * page comes back empty or `limit` rows have been collected. The end is never
+ * inferred from a short page, so a server whose `max-rows` is below
+ * `PAGE_SIZE` still reads everything (a full read costs one extra, empty
+ * request). `page(from, to)` must build a fresh query ending in
  * `.range(from, to)` (inclusive bounds) on each call: a supabase-js builder
- * mutates on `.range()`, so one is not reused across pages. `limit`, when
- * given, caps the total: the last page asks for only the rows still wanted
- * and paging stops once they arrive. A `limit` of 0 or less issues no query.
+ * mutates on `.range()`, so one is not reused across pages. `limit` follows
+ * `assertListLimit` (DataLayer.ts); 0 returns `[]` with no query.
  */
-async function readPages<T>(
+export async function readPages<T>(
   page: (from: number, to: number) => PromiseLike<{ data: unknown; error: unknown }>,
   map: (r: DbRow) => T,
   limit?: number,
 ): Promise<T[]> {
+  assertListLimit(limit);
   const out: T[] = [];
-  for (let from = 0; ; from += PAGE_SIZE) {
-    const want = limit === undefined ? PAGE_SIZE : Math.min(PAGE_SIZE, limit - from);
-    if (want <= 0) return out;
+  let from = 0;
+  while (limit === undefined || out.length < limit) {
+    const want = limit === undefined ? PAGE_SIZE : Math.min(PAGE_SIZE, limit - out.length);
     const { data, error } = await page(from, from + want - 1);
     if (error) throw error;
     const rows = (data ?? []) as DbRow[];
+    if (rows.length === 0) break;
     for (const r of rows) out.push(map(r));
-    if (rows.length < want || (limit !== undefined && from + want >= limit)) return out;
+    from += rows.length;
   }
+  return limit === undefined ? out : out.slice(0, limit);
 }
 
 export async function listExternalActivities(client: SupabaseClient, f: ExternalActivityFilter): Promise<ExternalActivity[]> {
