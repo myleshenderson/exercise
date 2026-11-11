@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Link, Navigate } from "react-router-dom";
 import Home from "./screens/Home";
 import Session from "./screens/Session";
 import Summary from "./screens/Summary";
@@ -28,6 +28,9 @@ function Shell() {
         <Route path="/history/:exerciseId" element={<History />} />
         <Route path="/workouts" element={<LoggedWorkouts />} />
         <Route path="/mcp-login" element={<MCPLogin />} />
+        {/* The cloud redirects a signed-out browser here (Gate shows Login for
+            any path then); with a session, or a backend that needs none, go home. */}
+        <Route path="/sign-in" element={<Navigate to="/" replace />} />
       </Routes>
       <nav className="fixed bottom-0 inset-x-0 max-w-md mx-auto flex justify-around bg-white border-t py-2">
         <Link to="/" className="p-2">Home</Link>
