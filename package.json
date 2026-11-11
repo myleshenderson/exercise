@@ -11,7 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.api.json && tsc -p tsconfig.starkeep.json",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.api.json && tsc -p tsconfig.starkeep.json && tsc -p tsconfig.scripts.json --noEmit",
     "starkeep:serve": "tsx starkeep/serve.ts",
     "starkeep:validate": "tsx starkeep/validate-manifest.ts",
     "bundle": "tsx starkeep/build-bundle.ts",
