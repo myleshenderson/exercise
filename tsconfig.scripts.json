@@ -1,13 +1,8 @@
 {
-  // Typechecks the tsx-run CLIs under scripts/ (AI-648). tsx strips types
-  // without checking them, so this config is the only signal that a change
-  // in src/** broke a script. module stays nodenext (from tsconfig.api.json):
-  // scripts import src/** with .js extensions.
+  // Typechecks the tsx-run CLIs under scripts/ (AI-648) and their tests
+  // (AI-662). tsx strips types without checking them, so this config is the
+  // only signal that a change in src/** broke a script. module stays nodenext
+  // (from tsconfig.api.json): scripts import src/** with .js extensions.
   "extends": "./tsconfig.api.json",
-  "include": ["scripts/**/*.ts", "src/vite-env.d.ts"],
-  // Test files are excluded, as tsconfig.api.json excludes api tests.
-  // scripts/check-migration-versions.test.ts would fail with TS7016: it
-  // imports the untyped check-migration-versions.mjs, and the fix is a
-  // declaration file, not a type annotation (follow-up: AI-662).
-  "exclude": ["scripts/**/*.test.ts"]
+  "include": ["scripts/**/*.ts", "src/vite-env.d.ts"]
 }
