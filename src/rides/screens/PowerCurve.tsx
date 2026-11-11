@@ -100,11 +100,11 @@ function PowerView({ data, mode: requested, setMode }: { data: PowerData; mode: 
 
   const referenceLines: ReferenceLine[] = [];
   if (data.eftpW !== null) {
-    referenceLines.push({ y: scale(data.eftpW), label: `eFTP ${valueText(data.eftpW)}`, dashed: true, color: INK.secondary });
+    referenceLines.push({ y: scale(data.eftpW), label: `eFTP ${valueText(data.eftpW)}`, dashed: true, color: INK.secondary, labelPosition: "below" });
   }
   const manual = data.settings.manualFtpW;
   if (typeof manual === "number" && manual > 0) {
-    referenceLines.push({ y: scale(manual), label: `FTP ${valueText(manual)} (manual)`, color: INK.primary });
+    referenceLines.push({ y: scale(manual), label: `FTP ${valueText(manual)} (manual)`, color: INK.primary, labelPosition: "above" });
   }
 
   const byId = new Map(data.rides.map((r) => [r.id, r]));

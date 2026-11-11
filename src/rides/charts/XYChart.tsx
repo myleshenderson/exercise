@@ -24,6 +24,8 @@ export interface ReferenceLine {
   label: string;
   dashed?: boolean;
   color?: string;
+  /** Label above (default) or below the line. */
+  labelPosition?: "above" | "below";
 }
 
 export interface Band {
@@ -156,7 +158,13 @@ export function XYChart({
               strokeWidth={1.5}
               strokeDasharray={r.dashed ? "4 3" : undefined}
             />
-            <text x={frame.left + 3} y={y(r.y) - 3} fontSize={9} fill={INK.secondary}>
+            <text
+              x={frame.left + 3}
+              y={r.labelPosition === "below" ? y(r.y) + 3 : y(r.y) - 3}
+              dy={r.labelPosition === "below" ? "0.71em" : undefined}
+              fontSize={9}
+              fill={INK.secondary}
+            >
               {r.label}
             </text>
           </g>

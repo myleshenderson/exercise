@@ -86,6 +86,10 @@ test("indoor ride: power, cadence and HR charts, class stats with average resist
   await ready("activity-indoor");
   const charts = [...document.querySelectorAll("[data-channel]")].map((c) => c.getAttribute("data-channel"));
   expect(charts).toEqual(["power", "cadence", "heart_rate"]);
+  // AI-672: the Distance tile's value is just the distance; "indoor" is the tile's sub-line.
+  const distanceTile = within(screen.getByRole("region", { name: "Stats" })).getByText("Distance").parentElement!;
+  expect(distanceTile.children[1]).toHaveTextContent(/^\d+\.\d mi$/);
+  expect(distanceTile.children[2]).toHaveTextContent(/^indoor$/);
 
   const resistance = fx.streams.find((s) => s.activityId === RIDE_FIXTURE_IDS.indoor && s.channel === "resistance")!.values as number[];
   const mean = Math.round(resistance.reduce((a, b) => a + b, 0) / resistance.length);

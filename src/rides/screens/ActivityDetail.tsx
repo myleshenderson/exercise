@@ -143,8 +143,8 @@ export default function ActivityDetail() {
 }
 
 function StatsGrid({ a, units }: { a: ExternalActivity; units: UnitFormatters }) {
-  const tiles: [string, ReactNode][] = [
-    ["Distance", a.environment === "indoor" && finite(a.distanceM) ? `${units.distance(a.distanceM)} indoor` : units.distance(a.distanceM)],
+  const tiles: [string, ReactNode, ReactNode?][] = [
+    ["Distance", units.distance(a.distanceM), a.environment === "indoor" && finite(a.distanceM) ? "indoor" : undefined],
     ["Moving time", units.duration(a.movingS ?? a.elapsedS, "clock")],
     ["Elevation", units.elevation(a.elevationGainM)],
     ["Avg HR", withUnit(a.avgHrBpm, "bpm")],
@@ -159,8 +159,8 @@ function StatsGrid({ a, units }: { a: ExternalActivity; units: UnitFormatters })
   ];
   return (
     <section aria-label="Stats" className="grid grid-cols-3 gap-3 rounded-xl border p-3">
-      {tiles.map(([label, value]) => (
-        <StatTile key={label} label={label} value={value} />
+      {tiles.map(([label, value, sub]) => (
+        <StatTile key={label} label={label} value={value} sub={sub} />
       ))}
     </section>
   );

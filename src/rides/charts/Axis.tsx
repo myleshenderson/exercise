@@ -1,5 +1,5 @@
 import { INK } from "./palette";
-import type { Scale } from "./scale";
+import { noNegZero, type Scale } from "./scale";
 
 /** Chart frame shared by every chart: the viewBox and plot margins, in viewBox units. */
 export interface Frame {
@@ -49,7 +49,7 @@ export function Axis({
             <g key={t}>
               {grid && <line x1={x0} x2={x1} y1={y} y2={y} stroke={INK.grid} strokeWidth={1} />}
               <text x={x0 - 4} y={y} dy="0.32em" textAnchor="end" style={{ fontVariantNumeric: "tabular-nums" }}>
-                {format(t)}
+                {format(noNegZero(t))}
               </text>
             </g>
           );
@@ -66,7 +66,7 @@ export function Axis({
           <g key={t}>
             {grid && <line x1={x} x2={x} y1={y0} y2={y1} stroke={INK.grid} strokeWidth={1} />}
             <text x={x} y={y1 + 12} textAnchor="middle">
-              {format(t)}
+              {format(noNegZero(t))}
             </text>
           </g>
         );

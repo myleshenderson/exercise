@@ -119,7 +119,9 @@ export function weekTotalsText(rows: readonly FeedRow[]): string {
   const parts: string[] = [];
   if (t.count > 0) parts.push(plural(t.count, "ride", "rides"), formatDuration(t.movingS));
   parts.push(`${Math.round(tss).toLocaleString("en-US")} TSS`);
-  if (t.count > 0) parts.push(`${Math.round(t.workKj).toLocaleString("en-US")} kJ`);
+  // No ride in the week has power: omit the segment rather than print "0 kJ".
+  const kj = Math.round(t.workKj);
+  if (t.count > 0 && Number.isFinite(kj) && kj > 0) parts.push(`${kj.toLocaleString("en-US")} kJ`);
   if (strength.length > 0) parts.push(`${strength.length.toLocaleString("en-US")} strength`);
   return parts.join(" · ");
 }
