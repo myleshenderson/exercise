@@ -137,7 +137,11 @@ into the pending issues' ACs before they dispatch.
   `wt-fix102`, `wt-verify100`, `wt-verify103`, `wt-verify104`, `wt-verify105`, `wt-fix106`,
   `wt-verify106`, `wt-rebase105` and `wt-lead7` (2026-11-11), `wt-stills`, `wt-stills112`,
   `wt-verify108`, `wt-verify110`, `wt-verify112`, `wt-verify114`, `wt-fix114`, `wt-fix115`,
-  `wt-docs675` (2026-11-11 late).
+  `wt-docs675`, `wt-docs676`, `wt-verify115` (2026-11-11 late).
+- Vercel Preview deployments build without `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY`
+  (the Preview environment lacks them, 2026-11-11), so a branch preview shows the app's
+  configuration error and cannot be used for a smoke test until Myles adds the two public
+  variables to the Preview environment; production is unaffected.
 - The container user (uid 1000) cannot `apt-get`; the agent image has Chromium's system
   libraries since AI-666 (2026-11-11 evening). Playwright's headless-shell download
   (cdn.playwright.dev) is blocked, so run `npx playwright install chromium` (works, via the
