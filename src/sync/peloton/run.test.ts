@@ -10,10 +10,15 @@ import {
   STRETCH_ID,
   SYNTHETIC_FTP,
   USER_ID,
+  classDetail,
   classWorkout,
+  freestyleDetail,
+  freestyleWorkout,
   fakeFetch,
   jsonResponse,
+  graph120,
   listPage0,
+  listPage1,
   pelotonApi,
 } from "./__fixtures__/peloton.js";
 import { createPelotonClient } from "./client.js";
@@ -21,6 +26,8 @@ import { PelotonReconnectRequired } from "./errors.js";
 import { readPelotonCursor, runPeloton } from "./run.js";
 import type { PelotonCursor } from "./types.js";
 
+/** The freestyle ride's start_time (epoch s), 2026-01-01T15:30:00Z. */
+const FREESTYLE_START_ISO_SECONDS = 1767281400;
 const NOW = Date.parse("2026-11-11T12:00:00.000Z");
 const noSleep = async () => {};
 
@@ -152,6 +159,88 @@ describe("runPeloton", () => {
     expect(store.state.ftpHistory).toEqual([existing]);
     expect(ctx.ftpHistory).toEqual([existing]);
     expect(rowOf(store, CLASS_ID)!.ftpUsedW).toBe(SYNTHETIC_FTP);
+  });
+
+  it("dates a test-sourced FTP at its test workout when the test sits on a later page", async () => {
+    const TEST_ID = "w0000000000000000000000000000010";
+    const TEST_START = FREESTYLE_START_ISO_SECONDS - 86_400; // a day before the freestyle ride
+    const testWorkout = { ...freestyleWorkout, id: TEST_ID, start_time: TEST_START, end_time: TEST_START + 1200, ride: { id: "r10", title: null } };
+    const store = createMemorySyncStore("owner");
+    const { client, paths } = setup((path) => {
+      if (path === `/api/workout/${CLASS_ID}`)
+        return jsonResponse({ ...classDetail, ftp_info: { ftp: 200, ftp_source: "ftp_workout_source", ftp_workout_id: TEST_ID } });
+      if (path === `/api/user/${USER_ID}/workouts?joins=ride,ride.instructor&limit=20&page=1&sort_by=-created`)
+        return jsonResponse({ ...listPage1, data: [freestyleWorkout, testWorkout] });
+      if (path === `/api/workout/${TEST_ID}`) return jsonResponse({ ...testWorkout, ftp_info: { ftp: 180, ftp_source: "ftp_manual_source", ftp_workout_id: null } });
+      if (path === `/api/workout/${TEST_ID}/performance_graph`) return jsonResponse(graph120);
+      if (path === `/api/workout/${FREESTYLE_ID}`)
+        return jsonResponse({ ...freestyleDetail, ftp_info: { ftp: 200, ftp_source: "ftp_workout_source", ftp_workout_id: TEST_ID } });
+      return undefined;
+    });
+    const result = await runPeloton(client, store, opts());
+
+    expect(result).toMatchObject({ upserted: 3, done: true, error: null });
+    const testIso = new Date(TEST_START * 1000).toISOString();
+    expect(store.state.ftpHistory.filter((h) => h.source === "peloton_test").map((h) => [h.effectiveFrom, h.ftpW, h.sourceRef])).toEqual([
+      [testIso, 200, TEST_ID],
+    ]);
+    // Fetched once (page 0's class), not again for the freestyle ride, then ingested from page 1.
+    expect(paths().filter((p) => p === `/api/workout/${TEST_ID}`)).toHaveLength(2);
+    // Backfill pages 0 and 1 (2 + 2 items), the one test fetch, then the incremental page 0 (2 items).
+    expect(result.fetched).toBe(2 + 2 + 1 + 2);
+    expect(rowOf(store, CLASS_ID)!.ftpUsedW).toBe(200);
+  });
+
+  it("collapses repeated manual FTP entries to one when the backfill completes", async () => {
+    const day = 86_400;
+    const rides = [0, 1, 2].map((i) => ({
+      ...freestyleWorkout,
+      id: `w00000000000000000000000000001${i}`,
+      start_time: FREESTYLE_START_ISO_SECONDS - (i + 1) * day,
+      end_time: FREESTYLE_START_ISO_SECONDS - (i + 1) * day + 600,
+    }));
+    const store = createMemorySyncStore("owner");
+    const ctx = context();
+    const { client } = setup((path) => {
+      if (path === `/api/user/${USER_ID}/workouts?joins=ride,ride.instructor&limit=20&page=0&sort_by=-created`)
+        return jsonResponse({ ...listPage0, data: rides, page_count: 1 });
+      const ride = rides.find((r) => path === `/api/workout/${r.id}`);
+      if (ride) return jsonResponse({ ...ride, ftp_info: { ftp: 150, ftp_source: "ftp_manual_source", ftp_workout_id: null } });
+      if (rides.some((r) => path === `/api/workout/${r.id}/performance_graph`)) return jsonResponse(graph120);
+      return undefined;
+    });
+    const result = await runPeloton(client, store, opts(ctx));
+
+    expect(result).toMatchObject({ upserted: 3, done: true, error: null, notes: ["ftp_history collapsed: 2"] });
+    const oldest = new Date(rides[2].start_time * 1000).toISOString();
+    expect(store.state.ftpHistory.map((h) => [h.source, h.effectiveFrom, h.ftpW])).toEqual([["peloton_manual", oldest, 150]]);
+    expect(ctx.ftpHistory.map((h) => h.effectiveFrom)).toEqual([oldest]);
+    // Every ride kept its own FTP.
+    expect(pelotonRows(store).map((a) => a.ftpUsedW)).toEqual([150, 150, 150]);
+
+    // A later incremental run does not collapse again.
+    const again = await runPeloton(client, store, opts(ctx, { mode: "incremental" }));
+    expect(again.notes).toBeUndefined();
+  });
+
+  it("collapse only drops a Peloton entry that repeats the previous kept entry of any source", async () => {
+    const manual = { id: "m1", effectiveFrom: "2026-01-02T00:00:00.000Z", ftpW: 999, source: "manual" as const, sourceRef: null };
+    const seeded = [
+      { id: "p1", effectiveFrom: "2026-01-01T00:00:00.000Z", ftpW: SYNTHETIC_FTP, source: "peloton_manual" as const, sourceRef: null },
+      manual,
+      { id: "p2", effectiveFrom: "2026-01-01T15:00:00.000Z", ftpW: SYNTHETIC_FTP, source: "peloton_manual" as const, sourceRef: null },
+      { id: "p3", effectiveFrom: "2026-01-03T00:00:00.000Z", ftpW: SYNTHETIC_FTP, source: "peloton_manual" as const, sourceRef: null },
+    ];
+    const store = createMemorySyncStore("owner", { ftpHistory: seeded });
+    const result = await runPeloton(setup().client, store, opts(context({}, { ftpHistory: seeded })));
+    expect(result.notes).toEqual(["ftp_history collapsed: 1"]);
+    // p2 repeats p1 and goes; p3 follows the class's peloton_test entry (after m1), so it stays.
+    expect((await store.listFtpHistory()).map((h) => [h.id.startsWith("ftp-") ? "new" : h.id, h.source])).toEqual([
+      ["p1", "peloton_manual"],
+      ["m1", "manual"],
+      ["new", "peloton_test"],
+      ["p3", "peloton_manual"],
+    ]);
   });
 
   it("stops at the deadline with the cursor on the current page and resumes without duplicates", async () => {
