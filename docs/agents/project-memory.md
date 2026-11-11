@@ -25,3 +25,15 @@ empty `publicPaths`). Found on the first cloud install, 2026-11-10 (AI-626);
 `starkeep/manifest.test.ts` now pins the declaration, and `src/App.tsx` sends
 `/sign-in` to `/` once a session exists. Reproduce the symptom with
 `curl -sI -H 'sec-fetch-dest: document' https://<base>/apps/exercise`.
+
+## garmin-personal-api-openapi-spec-location
+
+The Garmin Connect Personal API OpenAPI 3.0.1 spec is committed at
+`docs/reference/garmin-personal-api-openapi.json` (26 GET endpoints, 109
+schemas). Garmin publishes no spec URL: the developer site
+(https://developer.garmin.com/gc-developer-program/personal/swagger-docs/) is
+a Gatsby build that inlines the spec as a `JSON.parse('...')` string inside
+the page's `component---src-pages-gc-developer-program-personal-swagger-docs-js-*.js`
+bundle, so DevTools shows no spec request. To refresh it, fetch that bundle,
+cut the single-quoted JSON literal out, JS-unescape it and parse. Captured
+2026-11-11 while running `scripts/probes/garmin-probe.sh` for AI-627.
