@@ -1,5 +1,6 @@
 /** Garmin rides: resumable newest-first backfill, then a daily incremental sync (AI-638). */
 import { channelsFromFit } from "../fitChannels.js";
+import { SyncDeadlineError } from "../http.js";
 import { ingestActivity } from "../ingest.js";
 import { persistActivity } from "../persist.js";
 import type { SyncStore } from "../store.js";
@@ -83,7 +84,9 @@ export async function runGarminActivities(
     try {
       channels = channelsFromFit(await client.activityFitZip(id), "zip");
     } catch (e) {
-      if (e instanceof GarminAuthError) throw e;
+      // Auth and deadline refusals end the run: the ride stays unstored and the cursor stays on
+      // this page, so the next run fetches it in full.
+      if (e instanceof GarminAuthError || e instanceof SyncDeadlineError) throw e;
       // Summary only: no streams, flat TSS.
       skipped++;
     }

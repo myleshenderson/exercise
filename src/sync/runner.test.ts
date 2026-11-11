@@ -2,12 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { DailyTrainingLoad } from "../types.js";
 import { fakeGarmin, pagedSearch } from "./garmin/__fixtures__/fakeGarmin.js";
 import { JWT_IAT, LIST_PAGE } from "./garmin/__fixtures__/garmin.js";
+import { SyncDeadlineError } from "./http.js";
 import { PELOTON_TOKEN_URL } from "./peloton/index.js";
 import {
   DEFAULT_SYNC_TIMEZONE,
   SyncLoadError,
   dailyLoadFrom,
   deadlineSleep,
+  memoizeUntilRejected,
   readSyncEnv,
   runSync,
   todayIn,
@@ -120,7 +122,7 @@ function setup(today: string, seedDay: string) {
   const listAll = vi.spyOn(store, "listAllActivities");
   const box = { encrypt: vi.fn(), decrypt: vi.fn() };
   const deps = { store, fetch, sleep: async () => {}, box, env: ENV };
-  const opts = { mode: "incremental" as const, deadlineMs: NOW + 60_000, now: () => NOW, today };
+  const opts = { mode: "incremental" as const, deadlineMs: NOW + 60_000, now: () => NOW, today: () => today };
   return { garmin, fetch, pelotonCalls, store, upsertLoad, listAll, deps, opts };
 }
 
@@ -217,6 +219,98 @@ describe("runSync", () => {
     expect(results[0]!.error).toMatch(/wait 30 s, past this run's deadline/);
     expect(sleep).not.toHaveBeenCalledWith(30_000);
   });
+
+  it("a Retry-After past the deadline on a FIT download leaves the ride unstored, not summary-only", async () => {
+    const s = setup("2026-06-05", "2026-05-28");
+    const slowFit = () => new Response("slow down", { status: 429, headers: { "retry-after": "30" } });
+    const garmin = fakeGarmin({ search: pagedSearch(LIST_PAGE), fit: slowFit });
+    const results = await runSync(
+      { ...s.deps, fetch: garmin.fetch },
+      { ...s.opts, deadlineMs: NOW + 10_000, sources: ["garmin"] },
+    );
+    expect(results[0]).toMatchObject({ source: "garmin_activities", done: false, upserted: 0 });
+    expect(results[0]!.error).toMatch(/SyncDeadlineError|past this run's deadline/);
+    expect(s.store.state.activities.size).toBe(0);
+    expect(s.store.state.syncState.get("garmin_activities")).toMatchObject({ cursor: { mode: "backfill", start: 0 } });
+
+    // The next run, with time to spare, stores all three rides with their streams.
+    const rerun = await runSync(s.deps, { ...s.opts, sources: ["garmin"] });
+    expect(rerun[0]).toMatchObject({ upserted: 3, error: null });
+    expect(s.store.state.streams.size).toBe(3);
+  });
+
+  it("gives each source a share of the budget, so a slow Garmin run still leaves Peloton time", async () => {
+    const s = setup("2026-06-05", "2026-05-28");
+    let t = NOW;
+    // Every Garmin ride takes 25 s; three would use the whole 60 s budget.
+    const garmin = fakeGarmin({ search: pagedSearch(LIST_PAGE) });
+    let tokenCalls = 0;
+    const fetch = async (url: string, init?: RequestInit) => {
+      if (new URL(url).hostname.endsWith("garmin.com")) {
+        if (new URL(url).pathname.startsWith("/activity-service/")) t += 25_000;
+        return garmin.fetch(url, init);
+      }
+      // Peloton's token endpoint asks for a 5 s wait once, then refuses the token.
+      return tokenCalls++ === 0
+        ? new Response("slow down", { status: 429, headers: { "retry-after": "5" } })
+        : new Response(JSON.stringify({ error: "invalid_grant" }), { status: 403 });
+    };
+    const sleep = vi.fn(async () => {});
+    const results = await runSync(
+      { ...s.deps, fetch, sleep, env: { ...ENV, PELOTON_REFRESH_TOKEN: "bootstrap-token" } },
+      { ...s.opts, now: () => t, deadlineMs: NOW + 60_000, sources: ["garmin", "peloton"] },
+    );
+    // Garmin activities stop at their 20 s share (one ride), not at the 60 s overall deadline.
+    expect(results[0]).toMatchObject({ source: "garmin_activities", upserted: 1, done: false, error: null });
+    // Peloton starts with 35 s left, so its 5 s wait runs instead of being refused.
+    expect(sleep).toHaveBeenCalledWith(5_000);
+    expect(results[2]!.source).toBe("peloton");
+    expect(results[2]!.error).not.toMatch(/deadline/);
+  });
+
+  it("reads today when the daily-load recompute starts, so a run crossing midnight ends on the new day", async () => {
+    const s = setup("unused", "2025-12-20");
+    // Etc/GMT+1 is UTC-1: the run starts at 23:59:30 on 2025-12-31 there.
+    let t = NOW - 30_000;
+    const realGetSyncState = s.store.getSyncState.bind(s.store);
+    vi.spyOn(s.store, "getSyncState").mockImplementation(async (source) => {
+      if (source === "garmin_weight") t += 60_000; // the clock passes midnight mid-run
+      return realGetSyncState(source);
+    });
+    const now = () => t;
+    expect(todayIn("Etc/GMT+1", now())).toBe("2025-12-31");
+    await runSync(s.deps, { ...s.opts, now, today: () => todayIn("Etc/GMT+1", now()), sources: ["garmin"] });
+    const rows = s.upsertLoad.mock.calls[0]![0];
+    expect(rows[rows.length - 1]!.date).toBe("2026-01-01");
+  });
+
+  it("skipDailyLoadRecompute leaves daily_training_load to the caller", async () => {
+    const s = setup("2026-06-05", "2026-05-28");
+    const results = await runSync(s.deps, { ...s.opts, sources: ["garmin"], skipDailyLoadRecompute: true });
+    expect(results[0]).toMatchObject({ upserted: 3 });
+    expect(s.upsertLoad).not.toHaveBeenCalled();
+  });
+
+  it("rebuilds the ingest context after a failed build instead of caching the rejection", async () => {
+    const s = setup("2026-06-05", "2026-05-28");
+    s.listAll.mockRejectedValueOnce(new Error("db blip"));
+    const results = await runSync(s.deps, { ...s.opts, sources: ["garmin"] });
+    // The first ride's context build fails and ends that run; the cached promise is dropped.
+    expect(results[0]!.error).toMatch(/db blip/);
+    const rerun = await runSync(s.deps, { ...s.opts, sources: ["garmin"] });
+    expect(rerun[0]).toMatchObject({ upserted: 3, error: null });
+  });
+});
+
+describe("memoizeUntilRejected", () => {
+  it("caches a resolved value but retries after a rejection", async () => {
+    const f = vi.fn<() => Promise<number>>().mockRejectedValueOnce(new Error("first")).mockResolvedValue(7);
+    const get = memoizeUntilRejected(f);
+    await expect(get()).rejects.toThrow("first");
+    await expect(get()).resolves.toBe(7);
+    await expect(get()).resolves.toBe(7);
+    expect(f).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("deadlineSleep", () => {
@@ -224,6 +318,7 @@ describe("deadlineSleep", () => {
     const sleep = vi.fn(async () => {});
     const guarded = deadlineSleep(sleep, 10_000, () => 9_500);
     await guarded(1_000);
+    await expect(guarded(4_000)).rejects.toThrow(SyncDeadlineError);
     await expect(guarded(4_000)).rejects.toThrow("wait 4 s");
     await deadlineSleep(sleep, 10_000, () => 0)(8_000);
     expect(sleep.mock.calls).toEqual([[1_000], [8_000]]);

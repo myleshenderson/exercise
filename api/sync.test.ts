@@ -61,6 +61,7 @@ function fakeRes() {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 describe("handleSync", () => {
@@ -103,8 +104,8 @@ describe("handleSync", () => {
       sources: ["garmin", "peloton"],
       mode: "incremental",
       deadlineMs: START + 50_000,
-      today: "2026-11-11",
     });
+    expect(opts.today()).toBe("2026-11-11");
     expect(CRON_BUDGET_MS).toBe(50_000);
     expect(opts.now()).toBe(START);
   });
@@ -113,7 +114,7 @@ describe("handleSync", () => {
     const { deps } = setup();
     const late = Date.parse("2026-11-11T03:00:00.000Z"); // 22:00 on the 10th in New York
     await handleSync({ authorization: `Bearer ${SECRET}`, method: "GET" }, { ...deps, now: () => late });
-    expect((deps.runSync.mock.calls[0] as unknown as Parameters<HandleSyncDeps["runSync"]>)[1].today).toBe("2026-11-10");
+    expect((deps.runSync.mock.calls[0] as unknown as Parameters<HandleSyncDeps["runSync"]>)[1].today()).toBe("2026-11-10");
   });
 });
 
@@ -142,5 +143,51 @@ describe("handler", () => {
     // A 500 (missing SUPABASE_URL) would mean the sync deps were built before the check.
     expect(res.statusCode).toBe(401);
     expect(res.body).toEqual({ error: "Unauthorized" });
+  });
+
+  it("(a) answers 401 when CRON_SECRET is unset, without naming it", async () => {
+    vi.stubEnv("CRON_SECRET", undefined);
+    const res = fakeRes();
+    await handler({ method: "GET", headers: {} }, res);
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toEqual({ error: "Unauthorized" });
+    expect(JSON.stringify(res.body)).not.toContain("CRON_SECRET");
+  });
+
+  it("logs a thrown error before answering 500, never the bearer", async () => {
+    vi.stubEnv("CRON_SECRET", SECRET);
+    vi.stubEnv("SUPABASE_URL", "");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = fakeRes();
+    await handler({ method: "GET", headers: { authorization: `Bearer ${SECRET}` } }, res);
+    expect(res.statusCode).toBe(500);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(String(log.mock.calls[0]![0])).toMatch(/^sync cron: Missing required env vars: SUPABASE_URL/);
+    expect(JSON.stringify(log.mock.calls)).not.toContain(SECRET);
+  });
+});
+
+describe("handler logging", () => {
+  it("logs each failed source's counts and error, and nothing for clean ones", async () => {
+    const { syncDeps } = setup();
+    const failed: SyncRunResult = { ...RESULT, source: "peloton", fetched: 4, upserted: 0, skipped: 1, done: false, error: "PelotonHttpError: 503" };
+    vi.resetModules();
+    vi.doMock("../src/sync/nodeDeps.js", () => ({ createNodeSyncDeps: () => syncDeps }));
+    vi.doMock("../src/sync/runner.js", async (orig) => ({
+      ...(await orig<typeof import("../src/sync/runner.js")>()),
+      runSync: async () => [RESULT, failed],
+    }));
+    const { default: mockedHandler } = await import("./sync.js");
+    for (const [k, v] of Object.entries(syncDeps.env)) vi.stubEnv(k, v ?? undefined);
+    vi.stubEnv("CRON_SECRET", SECRET);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = fakeRes();
+    await mockedHandler({ method: "GET", headers: { authorization: `Bearer ${SECRET}` } }, res);
+    vi.doUnmock("../src/sync/nodeDeps.js");
+    vi.doUnmock("../src/sync/runner.js");
+    expect(res.statusCode).toBe(200);
+    expect(log.mock.calls).toEqual([
+      ["sync cron: peloton failed (fetched 4, upserted 0, skipped 1, done false): PelotonHttpError: 503"],
+    ]);
   });
 });

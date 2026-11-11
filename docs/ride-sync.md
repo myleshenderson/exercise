@@ -38,8 +38,8 @@ all of them. A missing variable fails the run with one error naming every missin
 ## Runbook
 
 1. **Fill `.env.local`** in the repo root with the variables above (`npm run sync` loads it
-   with `tsx --env-file=.env.local`, so the file must exist; `npx tsx scripts/sync.ts --help`
-   works without it).
+   with `tsx --env-file-if-exists=.env.local`; without the file every variable must come from
+   the shell, and `npm run sync -- --help` works with neither).
 2. **Backfill from your machine**, one source at a time:
 
    ```bash
@@ -84,3 +84,9 @@ Exactly one of `--full` and `--incremental` is required. Once a source's backfil
 both modes run incrementally; `--full` on a finished source is not a re-download. The reverse
 also holds: the adapters backfill any source whose backfill is incomplete, whatever the mode,
 so a cron run before the CLI backfill finishes chips at it 50 s a day. Run the CLI first.
+
+The run's budget (6 h for the CLI, 50 s for the cron) is shared out per source: Garmin
+activities, Garmin weight and Peloton each get an equal share of what is left when they start,
+and time one does not use passes to the next. A `--source all --full` backfill therefore gives
+Garmin activities about 2 h; rerun to resume. A provider `Retry-After` that would end past a
+source's share ends that source with an error, leaving the ride in hand for the next run.

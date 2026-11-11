@@ -3,13 +3,14 @@
  * and `api/sync.ts` (the daily Vercel cron). Pure: the caller injects env, fetch, sleep, the
  * store and the SecretBox, so nothing here reads process.env or imports node:*.
  */
-import { dateFromDayNumber, dayNumber, localDate, type EftpRide } from "../metrics/index.js";
+import { localDate, type EftpRide } from "../metrics/index.js";
 import type { SyncSource } from "../types.js";
 import { createGarminClient, runGarminActivities, runGarminWeight } from "./garmin/index.js";
 import { errorMessage } from "./garmin/runShared.js";
-import type { FetchLike } from "./http.js";
-import { recomputeDailyLoad } from "./load.js";
+import { SyncDeadlineError, type FetchLike } from "./http.js";
+import { addDays, recomputeDailyLoad } from "./load.js";
 import { createPelotonClient, getPelotonAccessToken, runPeloton, type SecretBox } from "./peloton/index.js";
+import { mmp20 } from "./recompute.js";
 import type { SyncStore } from "./store.js";
 import type { IngestContext, SyncRunResult } from "./types.js";
 
@@ -64,11 +65,19 @@ export interface SyncDeps {
 export interface SyncOptions {
   sources: readonly SyncProvider[];
   mode: "full" | "incremental";
-  /** Epoch ms; each source stops starting new items at it. */
+  /**
+   * Epoch ms; the whole run's budget. Each source (Garmin activities, Garmin weight and Peloton
+   * count as one slot each) gets an equal share of what is left when it starts.
+   */
   deadlineMs: number;
   now: () => number;
-  /** `YYYY-MM-DD` in SYNC_DEFAULT_TIMEZONE; the daily-load recompute ends here. */
-  today: string;
+  /**
+   * `YYYY-MM-DD` in SYNC_DEFAULT_TIMEZONE, read when the daily-load recompute starts (a long run
+   * can cross midnight); the recompute ends here.
+   */
+  today: () => string;
+  /** Skip the closing daily-load recompute (the CLI's `--recompute-all` does a full one after). */
+  skipDailyLoadRecompute?: boolean;
 }
 
 /** `YYYY-MM-DD` of an instant in `timeZone` (UTC when the zone is unknown). */
@@ -77,9 +86,9 @@ export function todayIn(timeZone: string, nowMs: number): string {
 }
 
 function shiftDate(date: string, days: number): string {
-  const n = dayNumber(date);
-  if (n === null) throw new Error(`not a YYYY-MM-DD date: ${date}`);
-  return dateFromDayNumber(n + days);
+  const shifted = addDays(date, days);
+  if (shifted === null) throw new Error(`not a YYYY-MM-DD date: ${date}`);
+  return shifted;
 }
 
 /** Days before `today` the daily-load recompute always covers (strength sessions logged this week). */
@@ -99,12 +108,6 @@ export function dailyLoadFrom(results: readonly SyncRunResult[], today: string):
     if (day < from) from = day;
   }
   return from;
-}
-
-function mmp20(powerCurve: unknown): number | null {
-  if (!powerCurve || typeof powerCurve !== "object") return null;
-  const w = (powerCurve as Record<string, unknown>)["1200"];
-  return typeof w === "number" && Number.isFinite(w) ? w : null;
 }
 
 /** Settings, FTP history and every stored ride's 20-minute best, for eFTP. */
@@ -135,15 +138,34 @@ export const ALWAYS_SLEEP_MS = 2_000;
 /**
  * `sleep` that refuses a wait (a Retry-After or a long backoff) ending past the deadline: the
  * adapters check the deadline only between items, and a cron function past its limit is killed
- * before it can save its cursor. The refusal is an error the adapter records like any other.
+ * before it can save its cursor. The refusal is a SyncDeadlineError, which the adapters let end
+ * the run (cursor saved, the item in hand left for the next run). `deadlineMs` may be a getter,
+ * so one client can serve sources with different deadlines.
  */
-export function deadlineSleep(sleep: (ms: number) => Promise<void>, deadlineMs: number, now: () => number) {
+export function deadlineSleep(
+  sleep: (ms: number) => Promise<void>,
+  deadlineMs: number | (() => number),
+  now: () => number,
+) {
+  const deadline = typeof deadlineMs === "number" ? () => deadlineMs : deadlineMs;
   return (ms: number): Promise<void> => {
-    if (ms > ALWAYS_SLEEP_MS && now() + ms > deadlineMs) {
-      return Promise.reject(new Error(`provider asked to wait ${Math.ceil(ms / 1000)} s, past this run's deadline; rerun later`));
+    if (ms > ALWAYS_SLEEP_MS && now() + ms > deadline()) {
+      return Promise.reject(
+        new SyncDeadlineError(`provider asked to wait ${Math.ceil(ms / 1000)} s, past this run's deadline; rerun later`),
+      );
     }
     return sleep(ms);
   };
+}
+
+/** Calls `f` once and caches its promise; a rejection is not cached, so the next call retries. */
+export function memoizeUntilRejected<T>(f: () => Promise<T>): () => Promise<T> {
+  let cached: Promise<T> | null = null;
+  return () =>
+    (cached ??= f().catch((e: unknown) => {
+      cached = null;
+      throw e;
+    }));
 }
 
 function failed(source: SyncSource, e: unknown): SyncRunResult {
@@ -152,19 +174,21 @@ function failed(source: SyncSource, e: unknown): SyncRunResult {
 
 /**
  * Runs each requested source in turn (Garmin activities, Garmin weight, Peloton), each in its own
- * try/catch so one failure leaves the others running, then recomputes daily_training_load from
- * the earliest affected day. The adapters write their own sync_state rows; when one throws
- * before doing so, the runner records the error there. A failed recompute throws SyncLoadError,
- * which still carries the per-source results.
+ * try/catch so one failure leaves the others running, each with an equal share of the budget
+ * left when it starts (time a source does not use passes to the later ones), then recomputes
+ * daily_training_load from the earliest affected day. The adapters write their own sync_state
+ * rows; when one throws before doing so, the runner records the error there. A failed recompute
+ * throws SyncLoadError, which still carries the per-source results.
  */
 export async function runSync(deps: SyncDeps, opts: SyncOptions): Promise<SyncRunResult[]> {
   const { store, fetch, box, env } = deps;
-  const { mode, deadlineMs, now } = opts;
-  const sleep = deadlineSleep(deps.sleep, deadlineMs, now);
+  const { mode, now } = opts;
+  /** The running source's deadline; the guarded sleep and the adapters read it. */
+  let jobDeadline = opts.deadlineMs;
+  const sleep = deadlineSleep(deps.sleep, () => jobDeadline, now);
 
-  let ctx: Promise<IngestContext> | null = null;
-  const ingestContext = () => (ctx ??= buildIngestContext(store));
-  const runOpts = { mode, deadlineMs, now, ingestContext };
+  const ingestContext = memoizeUntilRejected(() => buildIngestContext(store));
+  const runOpts = () => ({ mode, deadlineMs: jobDeadline, now, ingestContext });
 
   const jobs: [SyncSource, () => Promise<SyncRunResult>][] = [];
   if (opts.sources.includes("garmin")) {
@@ -174,8 +198,8 @@ export async function runSync(deps: SyncDeps, opts: SyncOptions): Promise<SyncRu
     };
     let garmin: ReturnType<typeof createGarminClient> | null = null;
     const shared = () => (garmin ??= client());
-    jobs.push(["garmin_activities", () => runGarminActivities(shared(), store, runOpts)]);
-    jobs.push(["garmin_weight", () => runGarminWeight(shared(), store, runOpts)]);
+    jobs.push(["garmin_activities", () => runGarminActivities(shared(), store, runOpts())]);
+    jobs.push(["garmin_weight", () => runGarminWeight(shared(), store, runOpts())]);
   }
   if (opts.sources.includes("peloton")) {
     jobs.push([
@@ -189,13 +213,15 @@ export async function runSync(deps: SyncDeps, opts: SyncOptions): Promise<SyncRu
             getPelotonAccessToken({ fetch, clientId, box, store, bootstrapRefreshToken: env.PELOTON_REFRESH_TOKEN, now, sleep }),
           sleep,
         });
-        return runPeloton(client, store, runOpts);
+        return runPeloton(client, store, runOpts());
       },
     ]);
   }
 
   const results: SyncRunResult[] = [];
-  for (const [source, run] of jobs) {
+  for (const [i, [source, run]] of jobs.entries()) {
+    const start = now();
+    jobDeadline = Math.min(opts.deadlineMs, start + Math.max(0, opts.deadlineMs - start) / (jobs.length - i));
     try {
       results.push(await run());
     } catch (e) {
@@ -209,8 +235,10 @@ export async function runSync(deps: SyncDeps, opts: SyncOptions): Promise<SyncRu
     }
   }
 
+  if (opts.skipDailyLoadRecompute) return results;
   try {
-    await recomputeDailyLoad(store, dailyLoadFrom(results, opts.today), opts.today, {
+    const today = opts.today();
+    await recomputeDailyLoad(store, dailyLoadFrom(results, today), today, {
       defaultTimeZone: env.SYNC_DEFAULT_TIMEZONE,
     });
   } catch (e) {

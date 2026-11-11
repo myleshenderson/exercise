@@ -16,7 +16,7 @@
     "starkeep:validate": "tsx starkeep/validate-manifest.ts",
     "bundle": "tsx starkeep/build-bundle.ts",
     "screenshots": "node scripts/screenshots.mjs",
-    "sync": "tsx --env-file=.env.local scripts/sync.ts"
+    "sync": "tsx --env-file-if-exists=.env.local scripts/sync.ts"
   },
   "dependencies": {
     "@hono/node-server": "1.19.17",

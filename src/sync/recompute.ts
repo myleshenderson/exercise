@@ -10,7 +10,8 @@ import { tssFields, type TssFields } from "./ingest.js";
 import { recomputeDailyLoad } from "./load.js";
 import type { SyncStore } from "./store.js";
 
-function mmp20(powerCurve: unknown): number | null {
+/** A stored ride's best 20-minute power (`powerCurve["1200"]`), for eFTP. */
+export function mmp20(powerCurve: unknown): number | null {
   if (!powerCurve || typeof powerCurve !== "object") return null;
   const w = (powerCurve as Record<string, unknown>)["1200"];
   return typeof w === "number" && Number.isFinite(w) ? w : null;
