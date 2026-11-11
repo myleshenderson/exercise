@@ -1,4 +1,4 @@
-# Handoff (2026-11-11, afternoon lead session, 12:00 to 13:20 UTC)
+# Handoff (2026-11-11, afternoon lead session, 12:00 to 13:50 UTC)
 
 ## 1. State
 
@@ -14,20 +14,24 @@
   probe captures are attached (two zips) with findings comments by Myles's session and the
   lead's payload-facts write-up (full document as a comment, 13:14Z; not committed because it
   describes Myles's own data and the repo is public).
-- **Wave 1 filed 13:11Z, all Todo + `auto-execute`, disjoint file sets:**
-  - AI-631 schema + DataLayer (L): production path, no `auto-merge`; the runner opens a PR
-    that must become a **draft** (`gh pr ready <n> --undo`) for Myles to merge. SQL is
-    unexecuted in the container; the PR body lists statements for Myles to eyeball.
-  - AI-632 maths module `src/metrics/**` (M): `auto-merge`.
-  - AI-633 FIT decoder `src/fit/**` + fflate line in package.json (M): `auto-merge`.
-  Myles was told he can pull `auto-execute` off any of them to read first. His runner may be
-  paused: AI-630 (worktree-tools, In Progress) is about the dispatch loop and rate limits.
-- **AI-628** (In Progress): PR #79 merged by Myles at 13:13Z; set Done by hand 15 min after
-  the merge if the monitor has not (profile rule). **AI-629** (In Progress, `auto-merge`):
+- **Wave 1 filed 13:11Z; the runner took all three within minutes.**
+  - AI-632 maths module: PR #85 merged 13:28Z (monitor), **Done**; post-merge verification
+    passed all 17 must-dos, no follow-up.
+  - AI-633 FIT decoder: PR #86 merged, **Done**; verification passed, no follow-up.
+  - AI-631 schema + DataLayer: **PR #84, draft, Myles merges** (migration). `/code-review
+    high` found ten findings; eight fixed in 8e75802 (parent-ownership RLS on streams and
+    pairing, double precision streams, moddatetime trigger, real replace semantics, payload
+    guard, mock FK and timestamp checks), CI green. Review brief posted on the PR 13:47Z.
+    After merge: AI-631 Done if the monitor lags, then file wave 2.
+- **Monitor behaviour today:** it merged the runner's PRs (#85, #86) and moved their issues
+  to Done, but did not merge the lead-opened #79, #82 or #83 (green, CLEAN, `auto-merge` on
+  AI-628/AI-629/AI-634). Myles merged #79 and #80 by hand; #82 and #83 await him or a
+  monitor fix. The profile's "#66 merged four minutes after" fact may no longer hold.
+- **AI-628** Done by hand 13:34Z (PR #79 merged by Myles 13:13Z; monitor had not moved it). **AI-629** (In Progress, `auto-merge`):
   Done once #82 merges. **AI-634**: Done once this PR merges.
 - Wave 2 (Garmin sync, Peloton sync with refresh tokens, CLI backfill, Strava gap import),
-  wave 3 (screens, MCP tools) and wave 4 (cron, env) are not filed. File wave 2 when wave 1's
-  schema PR is merged; its briefs must read the payload-facts comment on AI-627 (section 12,
+  wave 3 (screens, MCP tools) and wave 4 (cron, env) are not filed. File wave 2 when #84 is
+  merged; its briefs must read the payload-facts comment on AI-627 (section 12,
   deltas) and decisions 14 and 16.
 
 ### Facts learned this session
@@ -56,6 +60,6 @@ test on 2026-11-10, so no manual entry is needed unless he prefers one.
 
 ## 3. For the host
 
-Remove scratch worktrees `wt-lead4` (branch `AI-627-probes`, merged) and `wt-lead5` (branch
-`AI-634-docs`) under the scratchpad directory, plus the earlier ones listed in the profile.
+Remove scratch worktrees `wt-lead4`, `wt-lead5`, `wt-verify85`, `wt-verify86` and `wt-fix84`
+under the scratchpad directory, plus the earlier ones listed in the profile.
 Branch `AI-627-probes` can be deleted once #82 merges.

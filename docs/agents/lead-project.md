@@ -114,7 +114,7 @@ into the pending issues' ACs before they dispatch.
   the browser. `/repo/node_modules` is stale against the lockfile (no `@starkeep/*`);
   verifiers run `npm ci` in their worktree rather than symlinking it.
   Known stale ones: `wt-main`, `wt-55` to `wt-61`, `wt-lead`, `wt-lead2`, `wt-verify`
-  (earlier sessions), `wt-starkeep`, `wt-verify2`, `wt-lead3` (2026-11-10), `wt-lead4` and `wt-lead5` (2026-11-11)
+  (earlier sessions), `wt-starkeep`, `wt-verify2`, `wt-lead3` (2026-11-10), `wt-lead4`, `wt-lead5`, `wt-verify85`, `wt-verify86` and `wt-fix84` (2026-11-11)
   (2026-11-11).
 - Scratch work goes under the session scratchpad directory, never the checkout.
   Starkeep source for research is cloned there (`starkeep-core`, `starkeep-apps`).
