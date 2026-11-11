@@ -129,6 +129,12 @@ export function createMemorySyncStore(ownerUserId: string, seed: MemorySyncSeed 
       }
       return added;
     },
+    async deleteFtpHistoryEntries(ids) {
+      const gone = new Set(ids);
+      const before = state.ftpHistory.length;
+      state.ftpHistory = state.ftpHistory.filter((h) => !gone.has(h.id));
+      return before - state.ftpHistory.length;
+    },
 
     async hasActivity(source, sourceId) {
       return [...state.activities.values()].some((a) => a.source === source && a.sourceId === sourceId);

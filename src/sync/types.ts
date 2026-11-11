@@ -63,6 +63,8 @@ export interface SyncRunResult {
   /** The earliest `startedAt` written in the run; null when nothing was written. */
   earliestAffected: string | null;
   error: string | null;
+  /** Run-specific remarks for the operator, e.g. "ftp_history collapsed: 3". */
+  notes?: string[];
 }
 
 /** A provider_credentials row (encrypted tokens; ciphertext, iv and authTag are base64). */

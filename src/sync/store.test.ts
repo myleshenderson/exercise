@@ -141,6 +141,21 @@ describe("createSupabaseSyncStore (h)", () => {
     expect((inserts[0].calls.find(([m]) => m === "insert") as Call)[1]).toMatchObject({ user_id: "owner-1", effective_from: "2026-02-01T00:00:00.000Z" });
   });
 
+  it("deleteFtpHistoryEntries deletes by id within the owner and counts the deleted rows", async () => {
+    const { client, queries } = recordingClient(() => ok([{ id: "h1" }, { id: "h2" }]));
+    const store = createSupabaseSyncStore(client, "owner-1");
+    expect(await store.deleteFtpHistoryEntries(["h1", "h2", "h3"])).toBe(2);
+    expect(queries).toHaveLength(1);
+    expect(queries[0].table).toBe("ftp_history");
+    expect(has(queries[0], "delete")).toBe(true);
+    expect(has(queries[0], "eq", "user_id", "owner-1")).toBe(true);
+    expect(has(queries[0], "in", "id", ["h1", "h2", "h3"])).toBe(true);
+
+    queries.length = 0;
+    expect(await store.deleteFtpHistoryEntries([])).toBe(0);
+    expect(queries).toHaveLength(0);
+  });
+
   it("saveCredential is a compare-and-swap on rotated_at", async () => {
     const cred: StoredCredential = { ciphertext: "c", iv: "i", authTag: "t", keyId: "k1", accessExpiresAt: null, rotatedAt: "2026-06-02T00:00:00Z", revokedAt: null };
     let updated: unknown[] = [];
@@ -190,5 +205,13 @@ describe("createMemorySyncStore", () => {
     expect(await store.addFtpHistoryEntries([e, e])).toHaveLength(1);
     expect(await store.addFtpHistoryEntries([{ ...e, effectiveFrom: "2026-01-01T00:00:00.000Z" }, { ...e, source: "manual" }])).toHaveLength(1);
     expect(await store.listFtpHistory()).toHaveLength(2);
+  });
+
+  it("deleteFtpHistoryEntries removes only the given ids", async () => {
+    const e = (id: string, effectiveFrom: string) => ({ id, effectiveFrom, ftpW: 240, source: "peloton_manual" as const, sourceRef: null });
+    const store = createMemorySyncStore("owner", { ftpHistory: [e("a", "2026-01-01T00:00:00Z"), e("b", "2026-01-02T00:00:00Z"), e("c", "2026-01-03T00:00:00Z")] });
+    expect(await store.deleteFtpHistoryEntries(["a", "c", "missing"])).toBe(2);
+    expect((await store.listFtpHistory()).map((h) => h.id)).toEqual(["b"]);
+    expect(await store.deleteFtpHistoryEntries([])).toBe(0);
   });
 });

@@ -64,6 +64,8 @@ export interface SyncStore {
   listFtpHistory(): Promise<FtpHistoryEntry[]>;
   /** Inserts the entries whose (effectiveFrom, source) is not stored yet; returns the inserted ones. */
   addFtpHistoryEntries(entries: readonly Omit<FtpHistoryEntry, "id">[]): Promise<FtpHistoryEntry[]>;
+  /** Deletes the owner's entries with these ids; returns how many were deleted. */
+  deleteFtpHistoryEntries(ids: readonly string[]): Promise<number>;
 
   hasActivity(source: ActivitySource, sourceId: string): Promise<boolean>;
   /** startedAt in [fromIso, toIso], oldest first. */
@@ -247,6 +249,12 @@ export function createSupabaseSyncStore(client: SupabaseClient, ownerUserId: str
         added.push(await addFtpHistoryEntry(client, e, ownerUserId));
       }
       return added;
+    },
+    async deleteFtpHistoryEntries(ids) {
+      if (ids.length === 0) return 0;
+      const { data, error } = await client.from("ftp_history").delete().eq("user_id", ownerUserId).in("id", [...ids]).select("id");
+      if (error) throw error;
+      return (data ?? []).length;
     },
 
     async hasActivity(source, sourceId) {
