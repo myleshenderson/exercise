@@ -161,7 +161,7 @@ export default function Settings({ now, syncClient }: { now?: Date; syncClient?:
 
   // Sync and recompute are owner-only on the server; the owner's sync_state rows exist after the
   // first backfill and another account sees none under RLS, so rows mark the owner (AI-669).
-  // Until the read answers (or if it fails) the controls stay hidden.
+  // Until the read answers (or if it fails) the Sync card and the controls stay hidden.
   const owner = syncRows !== null && syncRows.length > 0;
 
   // Ready once every read has answered, an error included, so the error state can be captured too.
@@ -191,14 +191,16 @@ export default function Settings({ now, syncClient }: { now?: Date; syncClient?:
         {history.status === "error" && <p className="text-sm text-red-700">Couldn't load the FTP history: {history.message}</p>}
         {historyRows !== null && <FtpHistory rows={historyRows} />}
       </Card>
-      <SyncSection
-        rows={syncRows}
-        loadError={sync.status === "error" ? sync.message : null}
-        nowMs={nowMs}
-        client={client}
-        owner={owner}
-        onSynced={() => setSyncKey((k) => k + 1)}
-      />
+      {/* The whole Sync card is the owner's: nothing while the read is pending, failed, or empty (AI-673). */}
+      {owner && syncRows !== null && (
+        <SyncSection
+          rows={syncRows}
+          loadError={sync.status === "error" ? sync.message : null}
+          nowMs={nowMs}
+          client={client}
+          onSynced={() => setSyncKey((k) => k + 1)}
+        />
+      )}
     </div>
   );
 }
@@ -391,15 +393,13 @@ function SyncSection({
   loadError,
   nowMs,
   client,
-  owner,
   onSynced,
 }: {
-  rows: SyncState[] | null;
+  /** The owner's sync_state rows; the card renders only for the owner account (AI-673). */
+  rows: SyncState[];
   loadError: string | null;
   nowMs: number;
   client: SyncClient | null;
-  /** Sync now shows only for the owner account (it has sync_state rows). */
-  owner: boolean;
   onSynced(): void;
 }) {
   const [run, setRun] = useState<Run<SyncRunResult[]>>({ status: "idle" });
@@ -423,8 +423,7 @@ function SyncSection({
     <Card
       title="Sync"
       action={
-        client &&
-        owner && (
+        client && (
           <button
             type="button"
             onClick={() => void syncNow()}
@@ -448,14 +447,11 @@ function SyncSection({
         </div>
       )}
       {loadError && <p className="text-sm text-red-700">Couldn't load the sync status: {loadError}</p>}
-      {rows !== null && rows.length === 0 && <p className="text-sm text-gray-500">No sync has run yet</p>}
-      {rows !== null && rows.length > 0 && (
-        <div className="space-y-2">
-          {rows.map((r) => (
-            <SyncCard key={r.source} row={r} nowMs={nowMs} />
-          ))}
-        </div>
-      )}
+      <div className="space-y-2">
+        {rows.map((r) => (
+          <SyncCard key={r.source} row={r} nowMs={nowMs} />
+        ))}
+      </div>
     </Card>
   );
 }

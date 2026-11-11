@@ -47,6 +47,16 @@ const input = (name: string) => screen.getByLabelText(name, { selector: "input,s
 const change = (name: string, value: string) => fireEvent.change(input(name), { target: { value } });
 const save = () => fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
+/** No element of the Sync card: its region, title, status lines or buttons (AI-673). */
+function expectNoSyncCard() {
+  expect(screen.queryByRole("region", { name: "Sync" })).toBeNull();
+  expect(screen.queryByRole("heading", { name: "Sync" })).toBeNull();
+  expect(screen.queryByText("No sync has run yet")).toBeNull();
+  expect(screen.queryByText("Sync runs on the Vercel deployment only")).toBeNull();
+  expect(screen.queryByText(/Couldn't load the sync status/)).toBeNull();
+  expect(screen.queryByRole("button", { name: /Sync now|Syncing/ })).toBeNull();
+}
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
@@ -176,10 +186,10 @@ test("sync cards from the fixtures, with the Peloton reconnect prompt and its er
   expect(garmin).not.toHaveTextContent("reconnecting");
 });
 
-test("no sync rows: No sync has run yet", async () => {
+test("no sync rows and no sync client: no Sync card at all, not even the Vercel-only line", async () => {
   renderSettings(createMockDataLayer({ rides: { ...buildRideFixtures(NOW), syncState: [] } }), null);
   await ready();
-  expect(screen.getByText("No sync has run yet")).toBeInTheDocument();
+  expectNoSyncCard();
 });
 
 test("Sync now: disabled while running, then each source's counts or error, and the cards reload", async () => {
@@ -271,12 +281,12 @@ test("Save is disabled while a recompute runs", async () => {
   await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
 });
 
-test("a failed sync-state read still marks the page ready, with the error", async () => {
+test("a failed first sync-state read still marks the page ready, with no Sync card (ownership is unknown)", async () => {
   const db = createRideFixtureDb(NOW);
   db.listSyncState = () => Promise.reject(new Error("no table"));
   renderSettings(db, null);
   await ready();
-  expect(screen.getByText("Couldn't load the sync status: no table")).toBeInTheDocument();
+  expectNoSyncCard();
 });
 
 test("mock build: Sync now answers the fixture counts", async () => {
@@ -304,6 +314,8 @@ test("another account (empty sync state): no Sync now and no recompute", async (
   await ready();
   expect(screen.queryByRole("button", { name: "Sync now" })).toBeNull();
   expect(screen.queryByText("Sync runs on the Vercel deployment only")).toBeNull();
+  expect(screen.queryByRole("heading", { name: "Sync" })).toBeNull();
+  expectNoSyncCard();
   change("Threshold HR", "170");
   save();
   await screen.findByText("Saved");
@@ -312,18 +324,33 @@ test("another account (empty sync state): no Sync now and no recompute", async (
   expect(fetch).not.toHaveBeenCalled();
 });
 
-test("while the sync-state read is pending, the sync controls are not rendered", async () => {
+test("while the sync-state read is pending, no element of the Sync card is rendered", async () => {
   const db = createRideFixtureDb(NOW);
   let answer!: (rows: Awaited<ReturnType<DataLayer["listSyncState"]>>) => void;
   const original = db.listSyncState.bind(db);
   db.listSyncState = () => new Promise((r) => (answer = r));
   renderSettings(db, fetchClient(vi.fn()));
   await screen.findByRole("button", { name: "Save" });
-  expect(screen.queryByRole("button", { name: "Sync now" })).toBeNull();
+  expectNoSyncCard();
   const rows = await original();
   await act(async () => answer(rows));
   await ready();
+  expect(screen.getByRole("region", { name: "Sync" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Sync now" })).toBeInTheDocument();
+});
+
+test("while the sync-state read is pending without a sync client, not even the Vercel-only line shows", async () => {
+  const db = createRideFixtureDb(NOW);
+  let answer!: (rows: Awaited<ReturnType<DataLayer["listSyncState"]>>) => void;
+  const original = db.listSyncState.bind(db);
+  db.listSyncState = () => new Promise((r) => (answer = r));
+  renderSettings(db, null);
+  await screen.findByRole("button", { name: "Save" });
+  expectNoSyncCard();
+  const rows = await original();
+  await act(async () => answer(rows));
+  await ready();
+  expect(screen.getByText("Sync runs on the Vercel deployment only")).toBeInTheDocument();
 });
 
 test("a failed sync-state read hides Sync now", async () => {
