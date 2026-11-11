@@ -1516,6 +1516,8 @@ describe("Supabase DataLayer contract: ride analytics", () => {
           steps: [
             { method: "select", args: [EXTERNAL_ACTIVITY_COLUMNS] },
             { method: "order", args: ["started_at", { ascending: false }] },
+            { method: "order", args: ["id"] },
+            { method: "range", args: [0, 999] },
           ],
         },
       ]);
@@ -1537,10 +1539,60 @@ describe("Supabase DataLayer contract: ride analytics", () => {
         ["eq", "source", "peloton"],
         ["eq", "environment", "indoor"],
       ]);
-      expect(q.steps.slice(-2)).toEqual([
+      expect(q.steps.slice(-3)).toEqual([
         { method: "order", args: ["started_at", { ascending: false }] },
-        { method: "limit", args: [20] },
+        { method: "order", args: ["id"] },
+        { method: "range", args: [0, 19] },
       ]);
+    });
+
+    const page = (n: number, offset = 0) => Array.from({ length: n }, (_, i) => activityRow(`a-${offset + i}`));
+    const ranges = (stub: SupabaseStub) => stub.queries.map((q) => q.steps.filter((s) => s.method === "range").map((s) => s.args));
+
+    test("listExternalActivities pages past the 1000-row cap: a full page asks for the next, with the same filters and order", async () => {
+      const { db, stub } = setup();
+      stub.reply({ data: page(1000) }, { data: page(3, 1000) });
+      const out = await db.listExternalActivities({ source: "garmin" });
+      expect(out).toHaveLength(1003);
+      expect(out[1000]).toEqual(activity("a-1000"));
+      expect(ranges(stub)).toEqual([[[0, 999]], [[1000, 1999]]]);
+      expect(stub.queries[1].steps.slice(0, -1)).toEqual(stub.queries[0].steps.slice(0, -1));
+      expect(stub.filters(stub.queries[1])).toEqual([["eq", "source", "garmin"]]);
+    });
+
+    test("listExternalActivities stops after a short page", async () => {
+      const { db, stub } = setup();
+      stub.reply({ data: page(999) });
+      expect(await db.listExternalActivities({})).toHaveLength(999);
+      expect(ranges(stub)).toEqual([[[0, 999]]]);
+    });
+
+    test("listExternalActivities with a limit asks for exactly that many rows and stops", async () => {
+      const { db, stub } = setup();
+      stub.reply({ data: page(50) });
+      expect(await db.listExternalActivities({ limit: 50 })).toHaveLength(50);
+      expect(ranges(stub)).toEqual([[[0, 49]]]);
+      expect(stub.queries[0].steps.some((s) => s.method === "limit")).toBe(false);
+    });
+
+    test("listExternalActivities with a limit above the cap pages up to it and no further", async () => {
+      const { db, stub } = setup();
+      stub.reply({ data: page(1000) }, { data: page(200, 1000) });
+      expect(await db.listExternalActivities({ limit: 1200 })).toHaveLength(1200);
+      expect(ranges(stub)).toEqual([[[0, 999]], [[1000, 1199]]]);
+    });
+
+    test("listExternalActivities with limit 0 issues no query", async () => {
+      const { db, stub } = setup();
+      expect(await db.listExternalActivities({ limit: 0 })).toEqual([]);
+      expect(stub.queries).toHaveLength(0);
+    });
+
+    test("listExternalActivities throws an error from a later page", async () => {
+      const { db, stub } = setup();
+      stub.reply({ data: page(1000) }, { error: FAIL });
+      await expect(db.listExternalActivities({})).rejects.toBe(FAIL);
+      expect(stub.queries).toHaveLength(2);
     });
 
     test("listExternalActivities maps numeric strings and throws the Supabase error", async () => {
@@ -1771,8 +1823,26 @@ describe("Supabase DataLayer contract: ride analytics", () => {
         ["gte", "measured_at", "2026-11-01T00:00:00Z"],
         ["lte", "measured_at", "2026-11-30T23:59:59Z"],
       ]);
-      expect(q.steps[q.steps.length - 1]).toEqual({ method: "order", args: ["measured_at"] });
+      expect(q.steps.slice(-3)).toEqual([
+        { method: "order", args: ["measured_at"] },
+        { method: "order", args: ["id"] },
+        { method: "range", args: [0, 999] },
+      ]);
       await expect(db.listBodyWeights("a", "b")).rejects.toBe(FAIL);
+    });
+
+    test("listBodyWeights pages past the 1000-row cap", async () => {
+      const { db, stub } = setup();
+      stub.reply({ data: Array.from({ length: 1000 }, (_, i) => ({ ...weightRow, id: `bw-${i}` })) }, { data: [weightRow] });
+      expect(await db.listBodyWeights("a", "b")).toHaveLength(1001);
+      expect(stub.queries.map((q) => q.steps[q.steps.length - 1])).toEqual([
+        { method: "range", args: [0, 999] },
+        { method: "range", args: [1000, 1999] },
+      ]);
+      expect(stub.filters(stub.queries[1])).toEqual([
+        ["gte", "measured_at", "a"],
+        ["lte", "measured_at", "b"],
+      ]);
     });
 
     test("upsertBodyWeights upserts on (user_id,source,source_id) with the payload; userId stamped when given", async () => {
@@ -1883,9 +1953,21 @@ describe("Supabase DataLayer contract: ride analytics", () => {
           { method: "select", args: [COLUMNS] },
           { method: "order", args: ["effective_from"] },
           { method: "order", args: ["created_at"] },
+          { method: "order", args: ["id"] },
+          { method: "range", args: [0, 999] },
         ],
       });
       await expect(db.listFtpHistory()).rejects.toBe(FAIL);
+    });
+
+    test("listFtpHistory pages past the 1000-row cap", async () => {
+      const { db, stub } = setup();
+      stub.reply({ data: Array.from({ length: 1000 }, (_, i) => ({ ...row, id: `f-${i}` })) }, { data: [] });
+      expect(await db.listFtpHistory()).toHaveLength(1000);
+      expect(stub.queries.map((q) => q.steps[q.steps.length - 1])).toEqual([
+        { method: "range", args: [0, 999] },
+        { method: "range", args: [1000, 1999] },
+      ]);
     });
 
     test("addFtpHistoryEntry inserts one row and returns it; a userId is stamped; a unique violation throws", async () => {
@@ -1928,8 +2010,22 @@ describe("Supabase DataLayer contract: ride analytics", () => {
         ["gte", "date", "2026-11-01"],
         ["lte", "date", "2026-11-07"],
       ]);
-      expect(q.steps[q.steps.length - 1]).toEqual({ method: "order", args: ["date"] });
+      expect(q.steps.slice(-2)).toEqual([
+        { method: "order", args: ["date"] },
+        { method: "range", args: [0, 999] },
+      ]);
       await expect(db.listDailyTrainingLoad("a", "b")).rejects.toBe(FAIL);
+    });
+
+    test("listDailyTrainingLoad pages past the 1000-row cap", async () => {
+      const { db, stub } = setup();
+      const dbRow = { date: "2026-11-01", tss_total: 0, tss_by_source: {}, ctl: 0, atl: 0, tsb: 0 };
+      stub.reply({ data: Array.from({ length: 1000 }, () => dbRow) }, { data: [dbRow] });
+      expect(await db.listDailyTrainingLoad("a", "b")).toHaveLength(1001);
+      expect(stub.queries.map((q) => q.steps[q.steps.length - 1])).toEqual([
+        { method: "range", args: [0, 999] },
+        { method: "range", args: [1000, 1999] },
+      ]);
     });
 
     test("upsertDailyTrainingLoad upserts on (user_id,date); a userId is stamped; [] is a no-op", async () => {
