@@ -51,14 +51,16 @@ the session-end docs). Sections follow `.claude/skills/lead/PROFILE-TEMPLATE.md`
   Done about ten minutes after the merge (AI-622 on 2026-11-10: merged, In Progress at
   01:04, Done at 01:09); wait fifteen minutes before setting Done by hand, and set it by
   hand only for a PR Myles merged himself (#69).
-- **Monitor key is unverified.** PR #79 (branch `AI-627-probes`, title `AI-628: ...`, `auto-merge`
-  on AI-628) sat CLEAN for 9 h unmerged on 2026-11-11 until Myles merged it by hand; #80 (branch
-  `AI-627-garmin-openapi`, under the epic) likewise. Until Myles says what the monitor keys on,
-  name a lead PR's branch after the issue that carries the label (`AI-634-docs`, `AI-629-to-main`).
-- **A PR based on another open PR's branch strands its commits** when the base PR merges first:
-  #81 merged into `AI-627-probes` 27 s after #79 took that branch to main (2026-11-11 13:13Z), so
-  PR #82 had to carry the same two commits again. Base every PR on main, as the skill says, even
-  when the files only exist on the other branch (cherry-pick instead).
+- **Monitor and lead-opened PRs.** On 2026-11-11 the monitor merged runner PRs but skipped every
+  lead-opened PR for 11 h (#79, #82, #83, #87) until Myles fixed it at ~15:00Z; after the fix all
+  three merged within seconds and their issues moved to Done ~10 min later. AI-636 (worktree-tools)
+  asks for the rule to be documented; until then name a lead PR's branch after the labelled issue
+  (`AI-634-docs`), which is harmless and may be required.
+- **Dispatcher restarts orphan claims.** A dispatcher restart posts "Agent failed: Orphaned claim"
+  and returns the issue to Todo with labels intact; the runner re-claims it when it is next idle.
+  No lead action unless a strike removes the label (2026-11-11, AI-640 twice, AI-645).
+- **Lead PRs may race.** #81 (based on #79's branch) merged into that branch 27 s after Myles merged
+  #79 to main, stranding two commits (PR #82 carried them). Base every PR on main.
 - `needs-input` label: blocked on a decision from Myles; leave the issue in Todo or
   Backlog with the questions in a comment.
 - Runner quirks seen here: an agent may skip a decided item in the AC (PR #55 left out
@@ -91,7 +93,7 @@ into the pending issues' ACs before they dispatch.
 ## Validation commands for briefs
 
 - `npm run typecheck` (tsc for the app, `tsconfig.api.json` and `tsconfig.starkeep.json`;
-  all three must pass).
+  all three must pass; AI-648 adds a fourth config for `scripts/**`).
 - Touched tests: `npx vitest run <files>`; the full suite (`npm test`, ~50 files / 555
   tests as of 2026-11-07) is CI's job.
 - `npm run build` when the Vite app changes; `npm run bundle` and `npm run
@@ -114,7 +116,7 @@ into the pending issues' ACs before they dispatch.
   the browser. `/repo/node_modules` is stale against the lockfile (no `@starkeep/*`);
   verifiers run `npm ci` in their worktree rather than symlinking it.
   Known stale ones: `wt-main`, `wt-55` to `wt-61`, `wt-lead`, `wt-lead2`, `wt-verify`
-  (earlier sessions), `wt-starkeep`, `wt-verify2`, `wt-lead3` (2026-11-10), `wt-lead4`, `wt-lead5`, `wt-verify85`, `wt-verify86` and `wt-fix84` (2026-11-11)
+  (earlier sessions), `wt-starkeep`, `wt-verify2`, `wt-lead3` (2026-11-10), `wt-lead4`, `wt-lead5`, `wt-lead6`, `wt-ci635`, `wt-verify85`, `wt-verify86`, `wt-verify88`, `wt-verify89`, `wt-verify90`, `wt-verify91`, `wt-fix84`, `wt-fix92` and `wt-merge92` (2026-11-11)
   (2026-11-11).
 - Scratch work goes under the session scratchpad directory, never the checkout.
   Starkeep source for research is cloned there (`starkeep-core`, `starkeep-apps`).

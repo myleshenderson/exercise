@@ -1,65 +1,54 @@
-# Handoff (2026-11-11, afternoon lead session, 12:00 to 13:50 UTC)
+# Handoff (2026-11-11, afternoon lead session, 12:00 to 15:50 UTC)
 
 ## 1. State
 
-- **main** `ba614c8` (#80 merged after #79 at 13:13Z by Myles, by hand). CI on both merge
-  commits was in progress at 13:15Z; the previous head 682b500 was green on both jobs.
-- **Open PRs**
-  - **#82** (AI-629, `auto-merge` on the issue, branch `AI-629-to-main`): carries PR #81's two
-    Peloton-probe commits (bearer token, `joins` fix) that were stranded on `AI-627-probes`.
-    Touches `scripts/probes/README.md` and `scripts/probes/peloton-probe.sh` only. Lead-opened.
-  - **This docs PR** (AI-634, `auto-merge`, branch `AI-634-docs`): decision log, this handoff,
-    profile corrections, `scripts/probes/garmin-probe.sh` closing message (spec is committed).
-- **Epic AI-627** (Backlog, no `needs-input`): 16 decisions recorded in its description; the
-  probe captures are attached (two zips) with findings comments by Myles's session and the
-  lead's payload-facts write-up (full document as a comment, 13:14Z; not committed because it
-  describes Myles's own data and the repo is public).
-- **Wave 1 filed 13:11Z; the runner took all three within minutes.**
-  - AI-632 maths module: PR #85 merged 13:28Z (monitor), **Done**; post-merge verification
-    passed all 17 must-dos, no follow-up.
-  - AI-633 FIT decoder: PR #86 merged, **Done**; verification passed, no follow-up.
-  - AI-631 schema + DataLayer: **PR #84, draft, Myles merges** (migration). `/code-review
-    high` found ten findings; eight fixed in 8e75802 (parent-ownership RLS on streams and
-    pairing, double precision streams, moddatetime trigger, real replace semantics, payload
-    guard, mock FK and timestamp checks), CI green. Review brief posted on the PR 13:47Z.
-    After merge: AI-631 Done if the monitor lags, then file wave 2.
-- **Monitor behaviour today:** it merged the runner's PRs (#85, #86) and moved their issues
-  to Done, but did not merge the lead-opened #79, #82 or #83 (green, CLEAN, `auto-merge` on
-  AI-628/AI-629/AI-634). Myles merged #79 and #80 by hand; #82 and #83 await him or a
-  monitor fix. The profile's "#66 merged four minutes after" fact may no longer hold.
-- **AI-628** Done by hand 13:34Z (PR #79 merged by Myles 13:13Z; monitor had not moved it). **AI-629** (In Progress, `auto-merge`):
-  Done once #82 merges. **AI-634**: Done once this PR merges.
-- Wave 2 (Garmin sync, Peloton sync with refresh tokens, CLI backfill, Strava gap import),
-  wave 3 (screens, MCP tools) and wave 4 (cron, env) are not filed. File wave 2 when #84 is
-  merged; its briefs must read the payload-facts comment on AI-627 (section 12,
-  deltas) and decisions 14 and 16.
+- **main** green (test + migrate) at the #82 merge 57fd7ac and after. The ride-analytics
+  migration `20261111131256_ride_analytics.sql` **is applied in production** (migrate job on
+  5f1c4c4, 15:04Z) after #87 added `--yes` to `supabase db push --remote` (AI-635).
+- **Epic AI-627:** 16 decisions in its description; payload facts (two probe zips, lead
+  write-up 13:14Z) as comments. Planning page https://claude.ai/artifact/PwEDmeQjPUHJiLFu2P7AG8.
+- **Wave 1 Done:** AI-631 schema (#84, migration applied), AI-632 maths (#85), AI-633 FIT (#86).
+  All three verified post-merge, no follow-ups.
+- **Wave 2:** AI-637 core (#88), AI-638 Garmin (#89), AI-639 Peloton (#90), AI-646 FTP-history
+  collapse (#91) merged and verified, no follow-ups. **AI-641 runner: PR #92 draft, CLEAN, CI
+  green on c392ec3, review brief posted 15:3xZ; Myles merges** (production path: `api/sync.ts`,
+  `vercel.json`). AI-640 Strava import and AI-645 FIT start offset: Todo + labels, unclaimed
+  since the dispatcher restart orphaned them (~15:00Z). AI-648 typecheck scripts: Todo, blocked
+  by AI-641 (shared `package.json`). Owner-run AI-642 (env vars, first backfill, size check) and
+  AI-643 (Strava import run) wait on #92 and AI-640. Gate AI-644.
+- **Wave 3 filed 15:38Z:** AI-649 UI foundation (Todo, `auto-execute` + `auto-merge`, brief read
+  by the lead), AI-650 feed + detail, AI-651 My Stats + Training, AI-652 Power + Weight +
+  Settings, AI-653 owner-authenticated sync endpoint (production path), AI-654 MCP tools
+  (production path), AI-655 paging fix for DataLayer list reads (production path, `auto-execute`,
+  draft PR for Myles; My Stats waits on it), gate AI-656. Relations: 649→650/651/652/654,
+  641→653, 653→652, 655→651. Briefs for 650–654 are in the lead's scratchpad `wave3/` and must
+  be read before their labels are added (the drafter's cover note is in the same folder).
+- **Open PRs:** #92 (Myles). This docs PR (AI-657).
+- **Dispatcher:** idle since ~15:00Z; AI-649, AI-655, AI-640, AI-645 are labelled Todo and
+  unclaimed. Myles's side (AI-630 rate-limit handling, AI-636 monitor rule, AI-647 host restart).
 
-### Facts learned this session
+### Facts learned this session (after 13:50Z)
 
-- Probe results (Myles ran both scripts): Garmin Personal API works end to end (17 GETs, FIT
-  download). Garmin has **no heart rate** for Myles's account anywhere (list, FIT, dailies,
-  sleep); 9 of 20 recent rides carry power and Garmin's own NP/TSS/IF in the list item; weight
-  is in grams. Peloton password login is retired (403); an Auth0 bearer token (48 h,
-  `offline_access`) works; workout detail accepts only `joins=ride,ride.instructor,user`;
-  `workout_history_csv` gives 753 summary rows without ids. Full detail: payload-facts comment
-  on AI-627 and `docs/reference/garmin-personal-api-openapi.json` (PR #80).
-- `@garmin/fitsdk`'s licence forbids redistribution; AI-633 hand-writes the decoder.
-- The monitor did not merge #79 or #80 in 9 h (branches named `AI-627-*`, label on AI-628 or
-  none); Myles merged by hand. Key unverified; lead branches are now named for the labelled
-  issue. A PR based on another open PR's branch (#81 on #79) stranded its commits.
-- Myles answered the planning page's nine decisions one by one (decisions 5 to 13), then
-  Peloton sync auth = token pair + refresh (14), wait for probes before wave 1 (15), flat
-  55 TSS/h for rides with neither power nor HR (16).
+- CLI 3.x `supabase db push --remote` needs `--yes` in CI; the AI-602 run passed only because
+  nothing was pending. `docs/supabase-migrations.md` now says so.
+- Monitor: after Myles's fix, lead-opened PRs merge and their issues reach Done ~10 min later.
+- `src/data/supabase.ts` list reads do not page: PostgREST's 1000-row cap would truncate
+  all-time stats once the backfill lands (AI-655).
+- `@garmin/fitsdk`'s licence forbids redistribution; the FIT decoder is hand-written.
+- Garmin has no HR for Myles's account; rides without power get the flat 55 TSS/h (decision 16).
+- Runner-filed follow-ups arrive with either/or wording; the lead re-pins them before labelling
+  (AI-645, AI-646, AI-648).
 
 ## 2. Questions for Myles
 
-None blocking. Still on his list from the morning page: request the Strava archive before the
-subscription ends; rotate the Garmin key pasted in chat (never used, never recorded); put the
-new key in Vercel env; FTP and threshold HR can now come from Peloton `/api/me` and the FTP
-test on 2026-11-10, so no manual entry is needed unless he prefers one.
+None blocking. Grey-area call to confirm or reverse: Activities and Stats nav links visible to
+every account (the second user sees empty states; sync controls are owner-only). Still open from
+the morning: request the Strava archive, rotate the Garmin key, set the Vercel env vars listed in
+#92's brief, then run AI-642.
 
 ## 3. For the host
 
-Remove scratch worktrees `wt-lead4`, `wt-lead5`, `wt-verify85`, `wt-verify86` and `wt-fix84`
-under the scratchpad directory, plus the earlier ones listed in the profile.
-Branch `AI-627-probes` can be deleted once #82 merges.
+Remove scratch worktrees under the scratchpad directory: `wt-lead4`, `wt-lead5`, `wt-lead6`,
+`wt-ci635`, `wt-verify85`, `wt-verify86`, `wt-verify88`, `wt-verify89`, `wt-verify90`,
+`wt-verify91`, `wt-fix84`, `wt-fix92`, `wt-merge92`, plus the earlier ones in the profile.
+Branch `AI-627-probes` can be deleted (#82 carried its last commits).
