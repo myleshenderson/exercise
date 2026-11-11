@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2" xmlns:ns3="http://www.garmin.com/xmlschemas/ActivityExtension/v2">
+  <Activities>
+    <Activity Sport="Biking">
+      <Id>2015-03-01T12:00:00Z</Id>
+      <Lap StartTime="2015-03-01T12:00:00Z">
+        <Track>
+          <Trackpoint>
+            <Time>2015-03-01T12:00:00Z</Time>
+            <DistanceMeters>0.0</DistanceMeters>
+            <HeartRateBpm><Value>110</Value></HeartRateBpm>
+            <Cadence>85</Cadence>
+            <Extensions><ns3:TPX><ns3:Speed>8.0</ns3:Speed><ns3:Watts>150</ns3:Watts></ns3:TPX></Extensions>
+          </Trackpoint>
+          <Trackpoint>
+            <Time>2015-03-01T12:00:01.200Z</Time>
+            <DistanceMeters>8.0</DistanceMeters>
+            <HeartRateBpm><Value>111</Value></HeartRateBpm>
+            <Cadence>86</Cadence>
+            <Extensions><ns3:TPX><ns3:Watts>160</ns3:Watts></ns3:TPX></Extensions>
+          </Trackpoint>
+          <Trackpoint>
+            <Time>2015-03-01T12:00:01.800Z</Time>
+            <DistanceMeters>12.0</DistanceMeters>
+            <HeartRateBpm><Value>112</Value></HeartRateBpm>
+            <Cadence>87</Cadence>
+            <Extensions><ns3:TPX><ns3:Watts>170</ns3:Watts></ns3:TPX></Extensions>
+          </Trackpoint>
+          <Trackpoint>
+            <Time>2015-03-01T12:00:04Z</Time>
+            <DistanceMeters>30.0</DistanceMeters>
+            <HeartRateBpm><Value>115</Value></HeartRateBpm>
+            <Cadence>90</Cadence>
+            <Extensions><ns3:TPX><ns3:Watts>200</ns3:Watts></ns3:TPX></Extensions>
+          </Trackpoint>
+        </Track>
+      </Lap>
+    </Activity>
+  </Activities>
+</TrainingCenterDatabase>
