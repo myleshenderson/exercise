@@ -1,4 +1,4 @@
-import { DEFAULT_ATHLETE_SETTINGS, assertProviderPayloads, type DataLayer } from "./DataLayer";
+import { DEFAULT_ATHLETE_SETTINGS, assertListLimit, assertProviderPayloads, type DataLayer } from "./DataLayer";
 import type {
   Exercise,
   WorkoutDay,
@@ -278,6 +278,8 @@ export function createMockDataLayer(opts?: { seed?: boolean; rides?: RideFixture
     },
 
     async listExternalActivities(f) {
+      assertListLimit(f.limit);
+      if (f.limit === 0) return [];
       const out = activities
         .filter(
           (a) =>

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { DEFAULT_ATHLETE_SETTINGS, assertProviderPayloads, type DataLayer, type DayLookup, type ExternalActivityFilter } from "./DataLayer.js";
+import { DEFAULT_ATHLETE_SETTINGS, assertListLimit, assertProviderPayloads, type DataLayer, type DayLookup, type ExternalActivityFilter } from "./DataLayer.js";
 import type {
   Exercise,
   WorkoutDay,
@@ -456,17 +456,50 @@ function fromExternalActivityInput(a: ExternalActivityInput, now: string): DbRow
   return row;
 }
 
+/** PostgREST's default response cap (`max-rows`); list reads page in steps of this size. */
+export const PAGE_SIZE = 1000;
+
+/**
+ * Reads every page of an ordered query, `PAGE_SIZE` rows at a time, until a
+ * page comes back empty or `limit` rows have been collected. The end is never
+ * inferred from a short page, so a server whose `max-rows` is below
+ * `PAGE_SIZE` still reads everything (a full read costs one extra, empty
+ * request). `page(from, to)` must build a fresh query ending in
+ * `.range(from, to)` (inclusive bounds) on each call: a supabase-js builder
+ * mutates on `.range()`, so one is not reused across pages. `limit` follows
+ * `assertListLimit` (DataLayer.ts); 0 returns `[]` with no query.
+ */
+export async function readPages<T>(
+  page: (from: number, to: number) => PromiseLike<{ data: unknown; error: unknown }>,
+  map: (r: DbRow) => T,
+  limit?: number,
+): Promise<T[]> {
+  assertListLimit(limit);
+  const out: T[] = [];
+  let from = 0;
+  while (limit === undefined || out.length < limit) {
+    const want = limit === undefined ? PAGE_SIZE : Math.min(PAGE_SIZE, limit - out.length);
+    const { data, error } = await page(from, from + want - 1);
+    if (error) throw error;
+    const rows = (data ?? []) as DbRow[];
+    if (rows.length === 0) break;
+    for (const r of rows) out.push(map(r));
+    from += rows.length;
+  }
+  return limit === undefined ? out : out.slice(0, limit);
+}
+
 export async function listExternalActivities(client: SupabaseClient, f: ExternalActivityFilter): Promise<ExternalActivity[]> {
-  let q = client.from("external_activities").select(EXTERNAL_ACTIVITY_COLUMNS);
-  if (f.from !== undefined) q = q.gte("started_at", f.from);
-  if (f.to !== undefined) q = q.lte("started_at", f.to);
-  if (f.source !== undefined) q = q.eq("source", f.source);
-  if (f.environment !== undefined) q = q.eq("environment", f.environment);
-  let ordered = q.order("started_at", { ascending: false });
-  if (f.limit !== undefined) ordered = ordered.limit(f.limit);
-  const { data, error } = await ordered;
-  if (error) throw error;
-  return ((data ?? []) as unknown as DbRow[]).map(toExternalActivity);
+  const page = (start: number, end: number) => {
+    let q = client.from("external_activities").select(EXTERNAL_ACTIVITY_COLUMNS);
+    if (f.from !== undefined) q = q.gte("started_at", f.from);
+    if (f.to !== undefined) q = q.lte("started_at", f.to);
+    if (f.source !== undefined) q = q.eq("source", f.source);
+    if (f.environment !== undefined) q = q.eq("environment", f.environment);
+    // id breaks started_at ties so consecutive pages neither skip nor repeat a row.
+    return q.order("started_at", { ascending: false }).order("id").range(start, end);
+  };
+  return readPages(page, toExternalActivity, f.limit);
 }
 
 export async function getExternalActivity(client: SupabaseClient, id: string): Promise<ExternalActivity | null> {
@@ -551,14 +584,18 @@ const toBodyWeight = (r: DbRow): BodyWeight => ({
 });
 
 export async function listBodyWeights(client: SupabaseClient, from: string, to: string): Promise<BodyWeight[]> {
-  const { data, error } = await client
-    .from("body_weights")
-    .select(BODY_WEIGHT_COLUMNS)
-    .gte("measured_at", from)
-    .lte("measured_at", to)
-    .order("measured_at");
-  if (error) throw error;
-  return ((data ?? []) as DbRow[]).map(toBodyWeight);
+  return readPages(
+    (start, end) =>
+      client
+        .from("body_weights")
+        .select(BODY_WEIGHT_COLUMNS)
+        .gte("measured_at", from)
+        .lte("measured_at", to)
+        .order("measured_at")
+        .order("id")
+        .range(start, end),
+    toBodyWeight,
+  );
 }
 
 export async function upsertBodyWeights(client: SupabaseClient, rows: BodyWeightInput[], userId?: string): Promise<void> {
@@ -639,13 +676,11 @@ const toFtpHistoryEntry = (r: DbRow): FtpHistoryEntry => ({
 });
 
 export async function listFtpHistory(client: SupabaseClient): Promise<FtpHistoryEntry[]> {
-  const { data, error } = await client
-    .from("ftp_history")
-    .select(FTP_HISTORY_COLUMNS)
-    .order("effective_from")
-    .order("created_at");
-  if (error) throw error;
-  return ((data ?? []) as DbRow[]).map(toFtpHistoryEntry);
+  return readPages(
+    (from, to) =>
+      client.from("ftp_history").select(FTP_HISTORY_COLUMNS).order("effective_from").order("created_at").order("id").range(from, to),
+    toFtpHistoryEntry,
+  );
 }
 
 export async function addFtpHistoryEntry(
@@ -677,14 +712,18 @@ const toDailyTrainingLoad = (r: DbRow): DailyTrainingLoad => ({
 });
 
 export async function listDailyTrainingLoad(client: SupabaseClient, from: string, to: string): Promise<DailyTrainingLoad[]> {
-  const { data, error } = await client
-    .from("daily_training_load")
-    .select(DAILY_TRAINING_LOAD_COLUMNS)
-    .gte("date", from)
-    .lte("date", to)
-    .order("date");
-  if (error) throw error;
-  return ((data ?? []) as DbRow[]).map(toDailyTrainingLoad);
+  // date is unique per user (the upsert key is user_id,date), so it needs no tiebreaker.
+  return readPages(
+    (start, end) =>
+      client
+        .from("daily_training_load")
+        .select(DAILY_TRAINING_LOAD_COLUMNS)
+        .gte("date", from)
+        .lte("date", to)
+        .order("date")
+        .range(start, end),
+    toDailyTrainingLoad,
+  );
 }
 
 export async function upsertDailyTrainingLoad(client: SupabaseClient, rows: DailyTrainingLoad[], userId?: string): Promise<void> {
