@@ -92,8 +92,8 @@ into the pending issues' ACs before they dispatch.
 
 ## Validation commands for briefs
 
-- `npm run typecheck` (tsc for the app, `tsconfig.api.json` and `tsconfig.starkeep.json`;
-  all three must pass; AI-648 adds a fourth config for `scripts/**`).
+- `npm run typecheck` (tsc for the app, `tsconfig.api.json`, `tsconfig.starkeep.json` and
+  `tsconfig.scripts.json` for the tsx-run `scripts/**/*.ts`; all four must pass).
 - Touched tests: `npx vitest run <files>`; the full suite (`npm test`, ~50 files / 555
   tests as of 2026-11-07) is CI's job.
 - `npm run build` when the Vite app changes; `npm run bundle` and `npm run
