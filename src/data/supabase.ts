@@ -787,32 +787,50 @@ export async function upsertSyncState(
   return toSyncState(data as DbRow);
 }
 
+const toSetEntry = (row: DbRow): SetEntry => ({
+  setNumber: row.set_number as number,
+  weight: Number(row.weight),
+  reps: row.reps as number,
+});
+
+/**
+ * Sessions from `sessions` rows that embed `session_sets`, in row order, each
+ * id once (the first row wins: offset paging can read a row twice). Sets are
+ * sorted by set number and grouped by exercise in first-seen order, the shape
+ * `loadSession` builds from its own two reads.
+ */
+function sessionsFromRows(rows: DbRow[]): Session[] {
+  const seen = new Set<string>();
+  const out: Session[] = [];
+  for (const s of rows) {
+    const id = s.id as string;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const sets = [...((s.session_sets as DbRow[] | null) ?? [])].sort(
+      (a, b) => (a.set_number as number) - (b.set_number as number),
+    );
+    const byExercise = new Map<string, SetEntry[]>();
+    for (const row of sets) {
+      const key = row.exercise_id as string;
+      if (!byExercise.has(key)) byExercise.set(key, []);
+      byExercise.get(key)!.push(toSetEntry(row));
+    }
+    out.push({
+      id,
+      workoutDayId: s.workout_day_id as string | null,
+      performedOn: s.performed_on as string,
+      exercises: [...byExercise].map(([exerciseId, exSets]) => ({ exerciseId, sets: exSets })),
+    });
+  }
+  return out;
+}
+
 export function createSupabaseDataLayer(): DataLayer {
   const supabase = getSupabase();
 
   async function fetchExercise(id: string): Promise<Exercise | null> {
     const { data } = await supabase.from("exercises").select("*").eq("id", id).maybeSingle();
     return data ? toExercise(data) : null;
-  }
-
-  /**
-   * Session ids newest first (optionally only those before `beforeDate`), paged
-   * past the PostgREST row cap. id breaks performed_on/created_at ties so
-   * consecutive pages neither skip nor repeat a row.
-   */
-  function readSessionIdsNewestFirst(beforeDate?: string): Promise<string[]> {
-    return readPages(
-      (from, to) => {
-        let q = supabase.from("sessions").select("id");
-        if (beforeDate !== undefined) q = q.lt("performed_on", beforeDate);
-        return q
-          .order("performed_on", { ascending: false })
-          .order("created_at", { ascending: false })
-          .order("id")
-          .range(from, to);
-      },
-      (r) => r.id as string,
-    );
   }
 
   async function loadSession(id: string): Promise<Session | null> {
@@ -839,6 +857,18 @@ export function createSupabaseDataLayer(): DataLayer {
     };
   }
 
+  /**
+   * `sessions` columns plus every set of the session, embedded. One row per
+   * session; PostgREST's `max-rows` caps top-level rows only, so the embedded
+   * sets are never truncated. `created_at` is selected for the ordering the
+   * scans share (`performed_on desc, created_at desc, id`), not returned.
+   */
+  const SESSION_WITH_SETS =
+    "id, workout_day_id, performed_on, created_at, session_sets(exercise_id, set_number, weight, reps)";
+
+  /** Rows per getLastSetsForExercise read; a session holding more sets of the exercise takes one follow-up read. */
+  const LAST_SETS_LIMIT = 200;
+
   return {
     claimSeed: () => claimSeed(supabase),
     listExercises: () => listExercises(supabase),
@@ -856,11 +886,22 @@ export function createSupabaseDataLayer(): DataLayer {
       const { data: programRows } = await supabase.from("programs").select("id, name").is("deleted_at", null);
       const programsById = new Map((programRows ?? []).map((p) => [p.id as string, p.name as string]));
 
-      const { data: doneRows } = await supabase
-        .from("sessions")
-        .select("id, workout_day_id, session_sets!inner(id)")
-        .not("workout_day_id", "is", null);
-      const completed = new Set((doneRows ?? []).map((r) => r.workout_day_id as string));
+      // One row per session that has sets, paged past the PostgREST row cap; id
+      // makes the pages deterministic. The inner embed only tests that a set
+      // exists, so it carries one set id per session. A failed read marks
+      // nothing completed, as before paging.
+      const doneDayIds = await readPages(
+        (from, to) =>
+          supabase
+            .from("sessions")
+            .select("id, workout_day_id, session_sets!inner(id)")
+            .not("workout_day_id", "is", null)
+            .limit(1, { referencedTable: "session_sets" })
+            .order("id")
+            .range(from, to),
+        (r) => r.workout_day_id as string,
+      ).catch((): string[] => []);
+      const completed = new Set(doneDayIds);
 
       const availabilityInput = rows.map((d) => ({
         id: d.id as string,
@@ -944,22 +985,40 @@ export function createSupabaseDataLayer(): DataLayer {
         return { targetSets, recordedAt: row.recorded_at as string };
       });
     },
+    /**
+     * One query: this exercise's sets in sessions before the date, newest
+     * session first (the order listSessions uses), so the first row names the
+     * last session and its sets follow it in set order. The query is capped at
+     * LAST_SETS_LIMIT (200) rows. If all of them belong to the first session,
+     * that session may hold more, so one follow-up read takes all of its sets
+     * of the exercise (itself capped by PostgREST's max-rows, 1000). So the
+     * read costs one request, or two for a session with 200 or more sets of
+     * the exercise.
+     */
     async getLastSetsForExercise(exerciseId, beforeDate) {
-      // A failed read yields no earlier sessions (and so no last sets), as before paging:
-      // the callers have no catch and must keep rendering.
-      const ids = await readSessionIdsNewestFirst(beforeDate).catch((): string[] => []);
-      for (const id of ids) {
-        const { data: sets } = await supabase
-          .from("session_sets")
-          .select("*")
-          .eq("session_id", id)
-          .eq("exercise_id", exerciseId)
-          .order("set_number");
-        if (sets && sets.length) {
-          return sets.map((row) => ({ setNumber: row.set_number, weight: Number(row.weight), reps: row.reps }));
-        }
-      }
-      return [];
+      const { data, error } = await supabase
+        .from("session_sets")
+        .select("session_id, set_number, weight, reps, sessions!inner(performed_on, created_at)")
+        .eq("exercise_id", exerciseId)
+        .lt("sessions.performed_on", beforeDate)
+        .order("sessions(performed_on)", { ascending: false })
+        .order("sessions(created_at)", { ascending: false })
+        .order("session_id")
+        .order("set_number")
+        .limit(LAST_SETS_LIMIT);
+      // A failed read yields no last sets, as before: the callers have no catch and must keep rendering.
+      if (error || !data || data.length === 0) return [];
+      const last = data[0].session_id;
+      const rows = data.filter((row) => row.session_id === last);
+      if (data.length < LAST_SETS_LIMIT || rows.length < data.length) return rows.map(toSetEntry);
+      const { data: all, error: allError } = await supabase
+        .from("session_sets")
+        .select("session_id, set_number, weight, reps")
+        .eq("session_id", last)
+        .eq("exercise_id", exerciseId)
+        .order("set_number");
+      if (allError || !all) return [];
+      return all.map(toSetEntry);
     },
     async startSession(workoutDayId, date) {
       const { data, error } = await supabase
@@ -998,31 +1057,43 @@ export function createSupabaseDataLayer(): DataLayer {
     },
     logExercise: (sessionId, exerciseId, sets) => logExercise(supabase, sessionId, exerciseId, sets),
     async getExerciseHistory(exerciseId) {
-      // The result is sorted below; ordering by id only makes the pages deterministic.
-      // A failed read yields an empty history, as before paging: the callers have no catch.
-      const sessionIds = await readPages(
+      // One paged scan of sessions in listSessions' order, each with all of its
+      // sets embedded; the aliased `probe` inner embed, filtered to this
+      // exercise, keeps only the sessions that logged it. One row per session,
+      // so the cost is ceil(sessions/1000)+1 requests.
+      // A failed read yields an empty history, as before: the callers have no catch.
+      const rows = await readPages(
         (from, to) =>
-          supabase.from("session_sets").select("session_id").eq("exercise_id", exerciseId).order("id").range(from, to),
-        (r) => r.session_id as string,
-      ).catch((): string[] => []);
-      const ids = [...new Set(sessionIds)];
-      const sessions: Session[] = [];
-      for (const id of ids) {
-        const sess = await loadSession(id);
-        if (sess) sessions.push(sess);
-      }
-      return sessions.sort((a, b) => (a.performedOn < b.performedOn ? 1 : -1));
+          supabase
+            .from("sessions")
+            .select(`${SESSION_WITH_SETS}, probe:session_sets!inner(id)`)
+            .eq("probe.exercise_id", exerciseId)
+            .order("performed_on", { ascending: false })
+            .order("created_at", { ascending: false })
+            .order("id")
+            .range(from, to),
+        (r) => r,
+      ).catch((): DbRow[] => []);
+      return sessionsFromRows(rows);
     },
     async listSessions() {
-      // A failed read yields no sessions, as before paging: the callers have no catch.
-      // A row shifted between pages can be read twice, so ids are de-duplicated (first wins).
-      const ids = [...new Set(await readSessionIdsNewestFirst().catch((): string[] => []))];
-      const sessions: Session[] = [];
-      for (const id of ids) {
-        const sess = await loadSession(id);
-        if (sess) sessions.push(sess);
-      }
-      return sessions;
+      // One paged scan of sessions with their sets embedded, newest first; id
+      // breaks performed_on/created_at ties so consecutive pages neither skip
+      // nor repeat a row. Sessions with no sets are kept (LoggedWorkouts lists
+      // them for deletion), which is why this scans sessions, not session_sets.
+      // A failed read yields no sessions, as before: the callers have no catch.
+      const rows = await readPages(
+        (from, to) =>
+          supabase
+            .from("sessions")
+            .select(SESSION_WITH_SETS)
+            .order("performed_on", { ascending: false })
+            .order("created_at", { ascending: false })
+            .order("id")
+            .range(from, to),
+        (r) => r,
+      ).catch((): DbRow[] => []);
+      return sessionsFromRows(rows);
     },
     async deleteSession(id) {
       const { error } = await supabase.from("sessions").delete().eq("id", id);
