@@ -63,8 +63,11 @@ const TOOLS = [
  * cookie, which a same-origin fetch sends by itself; the body carries no
  * credential.
  */
-async function authBody(extra: Record<string, string> = {}): Promise<Record<string, string> | null> {
-  if (isStarkeepBackend()) return { ...extra };
+async function authBody(
+  starkeep: boolean,
+  extra: Record<string, string> = {},
+): Promise<Record<string, string> | null> {
+  if (starkeep) return { ...extra };
   const { data } = await (await loadSupabase()).auth.getSession();
   const session = data?.session;
   if (!session) return null;
@@ -86,12 +89,16 @@ export default function MCPLogin() {
   const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [sessionsVersion, setSessionsVersion] = useState(0);
+  // The backend is fixed for the life of the screen: read it once at mount, so
+  // an async continuation (the session list refreshed after a new token) never
+  // re-reads it and picks the Supabase path mid-flight.
+  const [starkeep] = useState(isStarkeepBackend);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const body = await authBody();
+        const body = await authBody(starkeep);
         if (!body) return;
         const res = await fetch(appPath("api/mcp-sessions"), {
           method: "POST",
@@ -108,13 +115,13 @@ export default function MCPLogin() {
     return () => {
       cancelled = true;
     };
-  }, [sessionsVersion]);
+  }, [sessionsVersion, starkeep]);
 
   async function revokeSession(id: string) {
     setRevokingId(id);
     setSessionsError(null);
     try {
-      const body = await authBody({ session_id: id });
+      const body = await authBody(starkeep, { session_id: id });
       if (!body) {
         setSessionsError(SESSION_EXPIRED);
         return;
@@ -125,7 +132,7 @@ export default function MCPLogin() {
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        if (isStarkeepBackend() && res.status === 401) {
+        if (starkeep && res.status === 401) {
           setSessionsError(SESSION_EXPIRED);
           return;
         }
@@ -142,7 +149,7 @@ export default function MCPLogin() {
 
   // Starkeep serves MCP at the app's own `mcp` route (under `/apps/exercise/`
   // in the cloud); Vercel at `/api/mcp`.
-  const endpointUrl = isStarkeepBackend()
+  const endpointUrl = starkeep
     ? `${window.location.origin}${appPath("mcp")}`
     : `${window.location.origin}/api/mcp`;
   const tokenPlaceholder = token ?? "YOUR_TOKEN";
@@ -175,7 +182,7 @@ export default function MCPLogin() {
     setToken(null);
     setExpiresAt(null);
     try {
-      const auth = await authBody();
+      const auth = await authBody(starkeep);
       if (!auth) {
         setError(SESSION_EXPIRED);
         return;
@@ -187,7 +194,7 @@ export default function MCPLogin() {
       });
       if (!res.ok) {
         // Starkeep authenticates by cookie, so an expired session shows up here.
-        if (isStarkeepBackend() && res.status === 401) {
+        if (starkeep && res.status === 401) {
           setError(SESSION_EXPIRED);
           return;
         }
