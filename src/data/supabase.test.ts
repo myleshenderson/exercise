@@ -1223,7 +1223,7 @@ describe("Supabase DataLayer contract", () => {
       expect(await db.getLastSetsForExercise("ex-1", "2026-11-08")).toEqual([{ setNumber: 1, weight: 80, reps: 8 }]);
       expect(stub.queries).toHaveLength(4);
       expect(stub.queries[0].steps).toEqual([
-        { method: "select", args: ["id, performed_on"] },
+        { method: "select", args: ["id"] },
         { method: "lt", args: ["performed_on", "2026-11-08"] },
         { method: "order", args: ["performed_on", { ascending: false }] },
         { method: "order", args: ["created_at", { ascending: false }] },
@@ -1441,6 +1441,39 @@ describe("Supabase DataLayer contract", () => {
         const setReads = stub.queries.filter((q) => q.table === "session_sets");
         expect(setReads).toHaveLength(ROWS);
         expect(setReads.map((q) => stub.filters(q)[0][2])).toEqual(ids);
+      });
+
+      test("listSessions hydrates a session id read twice across pages only once", async () => {
+        const { db, stub } = setup();
+        // s-b shifts from the end of page 1 to the start of page 2 between the reads.
+        const page1 = [...Array.from({ length: 999 }, (_, i) => ({ id: `p-${i}` })), { id: "s-b" }];
+        stub.reply({ data: page1 }, { data: [{ id: "s-b" }, { id: "s-c" }] }, { data: [] });
+        const expected = [...page1.map((r) => r.id), "s-c"];
+        stub.reply(...expected.flatMap((id) => [{ data: sessionRow(id, null, "2026-11-01") }, { data: [] }]));
+        const out = await db.listSessions();
+        expect(out.map((s) => s.id)).toEqual(expected);
+        expect(stub.queries.filter((q) => q.table === "sessions" && q.op === "select" && stub.filters(q).some((f) => f[2] === "s-b"))).toHaveLength(1);
+      });
+    });
+
+    describe("a failed page read keeps the pre-paging result instead of rejecting", () => {
+      test("listSessions returns [] when the sessions read fails", async () => {
+        const { db, stub } = setup();
+        stub.reply({ error: FAIL });
+        await expect(db.listSessions()).resolves.toEqual([]);
+      });
+
+      test("getExerciseHistory returns [] when the session_sets read fails", async () => {
+        const { db, stub } = setup();
+        stub.reply({ error: FAIL });
+        await expect(db.getExerciseHistory("ex-1")).resolves.toEqual([]);
+      });
+
+      test("getLastSetsForExercise returns [] when the earlier-sessions read fails", async () => {
+        const { db, stub } = setup();
+        stub.reply({ error: FAIL });
+        await expect(db.getLastSetsForExercise("ex-1", "2026-11-08")).resolves.toEqual([]);
+        expect(stub.queries.filter((q) => q.table === "session_sets")).toHaveLength(0);
       });
     });
 
