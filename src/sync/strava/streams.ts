@@ -1,7 +1,6 @@
 /** A Strava archive activity file (FIT, GPX or TCX, optionally gzipped) to 1 Hz channels (AI-640). Pure. */
 import { gunzipSync } from "fflate";
-import { channelsFromFitWithStart } from "../fitChannels.js";
-import { fitStartOffsetS } from "../garmin/runActivities.js";
+import { channelsFromFitWithStart, fitStartOffsetS } from "../fitChannels.js";
 import type { Channels } from "../types.js";
 import { gpxToChannels } from "./gpx.js";
 import { tcxToChannels } from "./tcx.js";

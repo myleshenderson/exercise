@@ -3,46 +3,12 @@
  * workout whose detail or performance graph cannot be fetched. The CSV has no workout id; rows
  * join on (local start minute, title), with Total Output as the tie-break.
  */
+import { parseCsvRecords } from "../csv.js";
 import { PELOTON_CSV_COLUMNS, type PelotonCsvRow, type PelotonWorkout } from "./types.js";
-
-/** RFC 4180 records: quoted fields, doubled quotes, commas and newlines inside quotes, CRLF or LF. */
-function parseRecords(text: string): string[][] {
-  const records: string[][] = [];
-  let record: string[] = [];
-  let field = "";
-  let quoted = false;
-  let i = text.charCodeAt(0) === 0xfeff ? 1 : 0;
-  for (; i < text.length; i++) {
-    const c = text[i];
-    if (quoted) {
-      if (c === '"') {
-        if (text[i + 1] === '"') {
-          field += '"';
-          i++;
-        } else quoted = false;
-      } else field += c;
-    } else if (c === '"') quoted = true;
-    else if (c === ",") {
-      record.push(field);
-      field = "";
-    } else if (c === "\n" || c === "\r") {
-      if (c === "\r" && text[i + 1] === "\n") i++;
-      record.push(field);
-      records.push(record);
-      record = [];
-      field = "";
-    } else field += c;
-  }
-  if (field !== "" || record.length > 0) {
-    record.push(field);
-    records.push(record);
-  }
-  return records.filter((r) => !(r.length === 1 && r[0].trim() === ""));
-}
 
 /** Rows keyed by the 18 known columns; a column missing from the header reads as "". */
 export function parseWorkoutHistoryCsv(text: string): PelotonCsvRow[] {
-  const [header, ...body] = parseRecords(text);
+  const [header, ...body] = parseCsvRecords(text);
   if (!header) return [];
   const names = header.map((h) => h.trim());
   if (!names.includes("Workout Timestamp")) throw new Error("workout_history.csv has no Workout Timestamp column");
