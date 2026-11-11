@@ -4,8 +4,8 @@ A mobile-first web app (PWA) for logging weightlifting workouts. You build
 programs out of day templates, give each exercise on a day its own
 progressive set scheme, then log sessions set by set. The app shows your
 history per exercise and a summary after each session. It also runs an MCP
-server with 25 tools, so an AI client such as Claude can read your training
-data and edit your plan.
+server with 32 tools, so an AI client such as Claude can read your training
+data and rides and edit your plan.
 
 <img src="docs/images/home.png" alt="Home screen with today's planned workout" width="320">
 
@@ -76,12 +76,13 @@ on claude.ai take the same `Authorization` header.
 
 <img src="docs/images/mcp.png" alt="MCP screen for creating a connector token" width="320">
 
-The 25 tools (the authoritative list is
+The 32 tools (the authoritative list is
 [`src/mcp/__fixtures__/tools-list.main.json`](src/mcp/__fixtures__/tools-list.main.json)):
 
 | Kind | Tools |
 | --- | --- |
 | Read (9) | `progression_for_exercise`, `sets_for_exercise`, `weekly_volume`, `training_gaps`, `get_day_templates`, `get_workout_history`, `scheme_history_for_day_exercise`, `adherence_for_day`, `list_exercises` |
+| Read: rides (7) | `list_activities`, `get_activity`, `activity_stats`, `training_load`, `power_curve`, `weight_history`, `sync_status` |
 | Write: day templates (7) | `create_day_template`, `rename_day_template`, `delete_day_template`, `add_exercise_to_day`, `remove_exercise_from_day`, `reorder_day_exercises`, `set_day_exercise_scheme` |
 | Write: exercises (3) | `create_exercise`, `update_exercise`, `delete_exercise` |
 | Write: programs (6) | `create_program`, `rename_program`, `delete_program`, `add_day_to_program`, `remove_day_from_program`, `reorder_program_days` |
@@ -116,7 +117,8 @@ There are three ways to run the app for real. Pick one.
 
 The analysis behind the read tools (progression, volume, gaps, adherence) is
 plain TypeScript in `src/analysis/`. It replaced SQL functions, and its tests
-check it against the semantics of that SQL.
+check it against the semantics of that SQL. The ride tools share one
+implementation in `src/analysis/rides/`, over the ride maths in `src/metrics/`.
 
 ## Development
 

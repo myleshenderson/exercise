@@ -1,5 +1,5 @@
 /**
- * The Starkeep implementation of all 25 MCP tools (AI-604).
+ * The Starkeep implementation of all 32 MCP tools (AI-604).
  *
  * `api/mcp.ts` (the Supabase handler set) is the behavioural reference: same
  * validation, same lookups in the same order, same error texts, same output
@@ -13,6 +13,12 @@
  * - Write tools use the Starkeep DataLayer, plus row-client reads for the raw
  *   checks `api/mcp.ts` does against Postgres (live-row lookups by id,
  *   duplicate link, attachment, current membership).
+ *
+ * - The seven ride analytics read tools (AI-654) are the shared
+ *   `src/analysis/rides` handlers over this request's DataLayer. Starkeep has
+ *   no ride tables yet (decision 3): its ride reads answer "nothing stored",
+ *   so these tools return the empty-account answer, as Supabase does for a
+ *   user with no rides.
  *
  * Built per request over a transport carrying that request's user token
  * (see `mcp.ts`); nothing here holds a client between requests.
@@ -52,6 +58,8 @@ import {
   type WorkoutDayRow,
 } from "../src/analysis/index.js";
 import { compileIlike } from "../src/analysis/sqlSemantics.js";
+import { createRideToolHandlers } from "../src/analysis/rides/index.js";
+import { DEFAULT_ATHLETE_TIMEZONE } from "../src/metrics/dates.js";
 
 // ---- Starkeep rows (starkeep.manifest.json tables) --------------------------
 
@@ -323,6 +331,9 @@ export function createStarkeepHandlers(data: DataLayer, rows: RowClient): McpToo
   }
 
   return {
+    // The seven ride analytics read tools, shared with api/mcp.ts (src/analysis/rides).
+    // Starkeep has no env: the same default zone the Supabase server falls back to.
+    ...createRideToolHandlers((run) => run(data), { defaultTimeZone: DEFAULT_ATHLETE_TIMEZONE }),
     progression_for_exercise: ({ exercise_name }) =>
       readTool("progression_for_exercise", async () =>
         progressionForExercise(await setsForName(exercise_name), { exercise_name }),

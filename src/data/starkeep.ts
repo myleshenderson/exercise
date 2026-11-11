@@ -20,7 +20,7 @@
  * No `user_id` anywhere: Starkeep scopes rows to the caller underneath the
  * row API.
  */
-import { DEFAULT_ATHLETE_SETTINGS, type DataLayer, type DayLookup } from "./DataLayer.js";
+import { assertListLimit, DEFAULT_ATHLETE_SETTINGS, type DataLayer, type DayLookup } from "./DataLayer.js";
 import type { Exercise, Program, Session, SetEntry, WorkoutDay } from "../types.js";
 import { nextAvailablePositionByProgram, isDayAvailable } from "../lib/programAvailability.js";
 import { compareText } from "../analysis/sqlSemantics.js";
@@ -208,7 +208,10 @@ const rideAnalyticsStub: Pick<
   | "saveAthleteSettings" | "listFtpHistory" | "addFtpHistoryEntry" | "listDailyTrainingLoad"
   | "upsertDailyTrainingLoad" | "listSyncState"
 > = {
-  listExternalActivities: async () => [],
+  listExternalActivities: async (f) => {
+    assertListLimit(f.limit);
+    return [];
+  },
   getExternalActivity: async () => null,
   getActivityStreams: async () => [],
   listBodyWeights: async () => [],

@@ -47,3 +47,29 @@ export function localDate(instant: string, timeZone: string | undefined): string
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
+
+/**
+ * The athlete's time zone when nothing else says (no `SYNC_DEFAULT_TIMEZONE`, a row without a
+ * stored zone): the zone sync files `daily_training_load` days in.
+ */
+export const DEFAULT_ATHLETE_TIMEZONE = "America/New_York";
+
+/** `YYYY-MM-DD` of an instant in `timeZone` (UTC when the zone is unknown). */
+export function todayIn(timeZone: string, nowMs: number): string {
+  return localDate(new Date(nowMs).toISOString(), timeZone) ?? new Date(nowMs).toISOString().slice(0, 10);
+}
+
+/** `date` moved by `days` calendar days. Throws on a malformed date. */
+export function addDays(date: string, days: number): string {
+  const day = dayNumber(date);
+  if (day === null) throw new RangeError(`addDays: not a YYYY-MM-DD date: ${date}`);
+  return dateFromDayNumber(day + days);
+}
+
+/**
+ * The local date an activity happened on, in its own time zone, else `defaultTimeZone` (else
+ * UTC): how `daily_training_load` files it (`src/sync/load.ts`).
+ */
+export function activityDate(a: { startedAt: string; timezone?: string | null }, defaultTimeZone?: string): string | null {
+  return localDate(a.startedAt, a.timezone ?? defaultTimeZone);
+}

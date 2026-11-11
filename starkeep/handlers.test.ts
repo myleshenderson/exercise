@@ -2,7 +2,7 @@
 // api/mcp.ts reaches src/data/supabaseClient.ts, which reads import.meta.env.
 /// <reference types="vite/client" />
 /**
- * All 25 MCP tools under Starkeep (AI-604), called in-process through the
+ * All 32 MCP tools under Starkeep (AI-604), called in-process through the
  * Hono app's `POST /mcp` with a real sealed bearer token.
  *
  * Real: the Hono app, token auth, `createServerTransport` → `signedFetch`,
@@ -18,6 +18,9 @@
  * For the RPC-backed read tools the fake RPC answers with what Postgres
  * returns for the scenario, written out by hand below (not computed by the
  * analysis functions under test).
+ *
+ * The seven ride tools (AI-654) run on the empty scenario: Starkeep has no ride
+ * tables (decision 3), and the fake Supabase's ride tables are empty.
  */
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -250,8 +253,10 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Just enough PostgREST query builder for src/data/supabase.ts and api/mcp.ts. */
 class SbQuery implements PromiseLike<{ data: unknown; error: { message: string } | null }> {
   private filters: [string, unknown][] = [];
-  private orderBy?: { col: string; asc: boolean };
+  private bounds: [string, "gte" | "lte", unknown][] = [];
+  private orders: { col: string; asc: boolean }[] = [];
   private limitN?: number;
+  private rangeN?: [number, number];
   private mode: "list" | "single" | "maybeSingle" = "list";
   private castError?: string;
   constructor(
@@ -269,26 +274,42 @@ class SbQuery implements PromiseLike<{ data: unknown; error: { message: string }
     return this;
   }
   is(col: string, val: unknown) { this.filters.push([col, val]); return this; }
-  order(col: string, opts?: { ascending?: boolean }) { this.orderBy = { col, asc: opts?.ascending ?? true }; return this; }
+  gte(col: string, val: unknown) { this.bounds.push([col, "gte", val]); return this; }
+  lte(col: string, val: unknown) { this.bounds.push([col, "lte", val]); return this; }
+  /** Each call adds a sort key after the earlier ones, as PostgREST does. */
+  order(col: string, opts?: { ascending?: boolean }) { this.orders.push({ col, asc: opts?.ascending ?? true }); return this; }
   limit(n: number) { this.limitN = n; return this; }
+  /** Inclusive bounds; slices the rows, so readPages ends on an empty page. */
+  range(from: number, to: number) { this.rangeN = [from, to]; return this; }
   single() { this.mode = "single"; return this; }
   maybeSingle() { this.mode = "maybeSingle"; return this; }
 
   private matched(): AnyRow[] {
-    let out = sb.tables[this.table]!.filter((r) =>
-      this.filters.every(([c, v]) => (v === null ? r[c] == null : r[c] === v)),
+    let out = sb.tables[this.table]!.filter(
+      (r) =>
+        this.filters.every(([c, v]) => (v === null ? r[c] == null : r[c] === v)) &&
+        this.bounds.every(([c, op, v]) => {
+          const x = r[c] as string | number;
+          return op === "gte" ? x >= (v as string | number) : x <= (v as string | number);
+        }),
     );
-    if (this.orderBy) {
-      const { col, asc } = this.orderBy;
+    if (this.orders.length) {
       out = out.slice().sort((a, b) => {
-        const x = a[col];
-        const y = b[col];
-        // Postgres: ASC nulls last, DESC nulls first; text in en_US.
-        if (x == null || y == null) return x == null && y == null ? 0 : (x == null ? 1 : -1) * (asc ? 1 : -1);
-        const c = typeof x === "number" ? x - (y as number) : enUs.compare(String(x), String(y));
-        return asc ? c : -c;
+        for (const { col, asc } of this.orders) {
+          const x = a[col];
+          const y = b[col];
+          // Postgres: ASC nulls last, DESC nulls first; text in en_US.
+          if (x == null || y == null) {
+            if (x == null && y == null) continue;
+            return (x == null ? 1 : -1) * (asc ? 1 : -1);
+          }
+          const c = typeof x === "number" ? x - (y as number) : enUs.compare(String(x), String(y));
+          if (c !== 0) return asc ? c : -c;
+        }
+        return 0;
       });
     }
+    if (this.rangeN) out = out.slice(this.rangeN[0], this.rangeN[1] + 1);
     return this.limitN === undefined ? out : out.slice(0, this.limitN);
   }
 
@@ -375,8 +396,20 @@ function seedStarkeep(s: FakeTransport): void {
   }
 }
 
+/** The ride tables api/mcp.ts's ride tools read; empty in this scenario (Starkeep has none). */
+const RIDE_TABLES = [
+  "external_activities",
+  "activity_streams",
+  "body_weights",
+  "athlete_settings",
+  "ftp_history",
+  "daily_training_load",
+  "sync_state",
+];
+
 function seedSupabase(): void {
   sb.tables = structuredClone(SCENARIO) as unknown as Record<string, AnyRow[]>;
+  for (const t of RIDE_TABLES) sb.tables[t] = [];
   sb.ids = [...NEW_IDS];
 }
 
@@ -405,7 +438,7 @@ function toolCall(name: string, args?: Record<string, unknown>) {
   return JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method: "tools/call", params: { name, ...(args ? { arguments: args } : {}) } });
 }
 
-/** Every tool called through the Starkeep app in this file; the last test checks all 25. */
+/** Every tool called through the Starkeep app in this file; the last test checks all 32. */
 const called = new Set<string>();
 
 async function callStarkeep(name: string, args?: Record<string, unknown>, token = localToken): Promise<ToolReply> {
@@ -603,6 +636,74 @@ describe("read tools: same text as api/mcp.ts's RPCs", () => {
 });
 
 // ---- exercises ----------------------------------------------------------------
+
+describe("ride analytics tools (AI-654): same text on the empty scenario", () => {
+  // Pin the clock (Date only, at the real now so tokens stay valid) so both backends
+  // compute "today" from the same instant.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const today = () => new Date().toISOString().slice(0, 10);
+  const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+
+  it("list_activities", async () => {
+    const r = await parity("list_activities", { source: "peloton", limit: 5 });
+    expect(text(r)).toBe(json({ activities: [] }));
+  });
+
+  it("get_activity: unknown id is 'Activity not found' on both", async () => {
+    const r = await parity("get_activity", { activity_id: MISSING });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toBe("Activity not found");
+  });
+
+  it("get_activity: malformed id", async () => {
+    const r = await parity("get_activity", { activity_id: "ride-outdoor-1" });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toBe('get_activity failed: expected a UUID for activity_id, got "ride-outdoor-1".');
+  });
+
+  it("activity_stats", async () => {
+    const r = await parity("activity_stats");
+    const s = JSON.parse(text(r));
+    expect(s.as_of).toBe(today());
+    expect(s.all_time).toMatchObject({ from: null, count: 0, distance_m: 0 });
+    expect(s.best_efforts).toHaveLength(15);
+    expect(s.power_bests.map((p: { watts: unknown }) => p.watts)).toEqual([null, null, null, null, null]);
+  });
+
+  it("training_load", async () => {
+    const r = await parity("training_load", { days: 30 });
+    expect(text(r)).toBe(json({ days: [], today: null, ramp_rate: null, week_start: "monday", weekly_tss: [] }));
+  });
+
+  it("power_curve", async () => {
+    const r = await parity("power_curve", { window_days: 90 });
+    expect(text(r)).toBe(
+      json({ window_days: 90, points: [], eftp_w: null, ftp_w: null, ftp_source: null, weight_kg_7d: null, weight_lb_7d: null }),
+    );
+  });
+
+  it("weight_history", async () => {
+    const r = await parity("weight_history");
+    expect(JSON.parse(text(r))).toMatchObject({ weigh_ins: [], avg_7d_kg: null, w_per_kg: null, w_per_kg_band: null });
+  });
+
+  it("sync_status", async () => {
+    const r = await parity("sync_status");
+    expect(text(r)).toBe(json({ sources: [] }));
+  });
+
+  it("an input error reads the same on both", async () => {
+    const r = await parity("list_activities", { start_date: day(1), end_date: "yesterday" });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toBe('list_activities failed: end_date must be a date (YYYY-MM-DD), got "yesterday".');
+  });
+});
 
 describe("exercise tools", () => {
   it("list_exercises: live exercises in en_US name order, same as Supabase", async () => {
@@ -963,14 +1064,14 @@ describe("cloud mode", () => {
 
 // Runs last (vitest runs a file's tests in order): every tool was exercised.
 describe("coverage", () => {
-  it("every one of the 25 tools in tools/list was called through the Starkeep app above", async () => {
+  it("every one of the 32 tools in tools/list was called through the Starkeep app above", async () => {
     const res = await app.request("/mcp", {
       method: "POST",
       headers: mcpHeaders(localToken),
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
     });
     const names = ((await res.json()) as { result: { tools: { name: string }[] } }).result.tools.map((t) => t.name);
-    expect(names).toHaveLength(25);
+    expect(names).toHaveLength(32);
     expect(names.filter((n) => !called.has(n))).toEqual([]);
   });
 });

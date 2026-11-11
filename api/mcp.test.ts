@@ -5,6 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { sha256Hex } from "./mcp-login.js";
+import { createRideToolHandlers, RIDE_TOOL_NAMES } from "../src/analysis/rides/index.js";
+import { buildUuidRideFixtures, FIXTURE_NOW, fixtureReads } from "../src/analysis/rides/testFixtures.js";
+import type { RideFixtures } from "../src/rides/testing/fixtures.js";
+import { DEFAULT_ATHLETE_TIMEZONE } from "../src/metrics/dates.js";
 
 // Fake mcp_sessions store + GoTrue refresh + per-user RPC fixtures, keyed the same way
 // the real Supabase tables are: a session row maps a hashed bearer token to a
@@ -26,13 +30,25 @@ interface FakeRow {
   [key: string]: unknown;
 }
 
+// The ride tables (AI-654) are read-only here: the ride tools only select.
+const RIDE_TABLES = [
+  "external_activities",
+  "activity_streams",
+  "body_weights",
+  "athlete_settings",
+  "ftp_history",
+  "daily_training_load",
+  "sync_state",
+] as const;
+
 type FakeTableName =
   | "workout_days"
   | "exercises"
   | "workout_day_exercises"
   | "workout_day_exercise_scheme_history"
   | "programs"
-  | "session_sets";
+  | "session_sets"
+  | (typeof RIDE_TABLES)[number];
 
 const TABLES: Record<FakeTableName, FakeRow[]> = {
   workout_days: [],
@@ -41,7 +57,18 @@ const TABLES: Record<FakeTableName, FakeRow[]> = {
   workout_day_exercise_scheme_history: [],
   programs: [],
   session_sets: [],
+  external_activities: [],
+  activity_streams: [],
+  body_weights: [],
+  athlete_settings: [],
+  ftp_history: [],
+  daily_training_load: [],
+  sync_state: [],
 };
+/** Which access token each table read was made with (per-user scoping of the ride tools). */
+const tableReads: Array<{ table: string; accessToken: string }> = [];
+/** Every `range(from, to)` a select asked for, by table (how much a paged read fetched). */
+const rangeRequests: Array<{ table: string; from: number; to: number }> = [];
 let fakeRowSeq = 0;
 function nextFakeId(prefix: string): string {
   return `${prefix}-${++fakeRowSeq}`;
@@ -58,9 +85,11 @@ type FakeMode = "list" | "single" | "maybeSingle";
 // both already belong to that same caller (0003_harden_child_rls.sql).
 class FakeQuery implements PromiseLike<FakeResult> {
   private filters: Array<[string, unknown]> = [];
-  private orderCol?: string;
-  private orderAsc = true;
+  private bounds: Array<[string, "gte" | "lte", string | number]> = [];
+  private orders: Array<{ col: string; asc: boolean }> = [];
   private limitN?: number;
+  private rangeFrom?: number;
+  private rangeTo?: number;
   private mode: FakeMode = "list";
 
   constructor(
@@ -83,13 +112,28 @@ class FakeQuery implements PromiseLike<FakeResult> {
     this.filters.push([col, val]);
     return this;
   }
+  gte(col: string, val: string | number): this {
+    this.bounds.push([col, "gte", val]);
+    return this;
+  }
+  lte(col: string, val: string | number): this {
+    this.bounds.push([col, "lte", val]);
+    return this;
+  }
+  // Successive calls add sort keys, as PostgREST does (first call is the primary key).
   order(col: string, opts?: { ascending?: boolean }): this {
-    this.orderCol = col;
-    this.orderAsc = opts?.ascending ?? true;
+    this.orders.push({ col, asc: opts?.ascending ?? true });
     return this;
   }
   limit(n: number): this {
     this.limitN = n;
+    return this;
+  }
+  // Inclusive bounds; slices the matched rows, so readPages' paging ends on an empty page.
+  range(from: number, to: number): this {
+    rangeRequests.push({ table: this.tableName, from, to });
+    this.rangeFrom = from;
+    this.rangeTo = to;
     return this;
   }
   single(): this {
@@ -106,14 +150,27 @@ class FakeQuery implements PromiseLike<FakeResult> {
   }
 
   private matched(rows: FakeRow[]): FakeRow[] {
-    let out = rows.filter((r) =>
-      this.filters.every(([col, val]) => (val === null ? r[col] === null || r[col] === undefined : r[col] === val)),
+    let out = rows.filter(
+      (r) =>
+        this.filters.every(([col, val]) => (val === null ? r[col] === null || r[col] === undefined : r[col] === val)) &&
+        // Timestamps here are all UTC ISO strings of one shape, so they compare as text.
+        this.bounds.every(([col, op, val]) => {
+          const v = r[col] as string | number;
+          return op === "gte" ? v >= val : v <= val;
+        }),
     );
-    if (this.orderCol) {
-      const col = this.orderCol;
-      const dir = this.orderAsc ? 1 : -1;
-      out = out.slice().sort((a, b) => ((a[col] as number) - (b[col] as number)) * dir);
+    if (this.orders.length) {
+      out = out.slice().sort((a, b) => {
+        for (const { col, asc } of this.orders) {
+          const x = a[col] as string | number;
+          const y = b[col] as string | number;
+          const c = typeof x === "number" && typeof y === "number" ? x - y : x < y ? -1 : x > y ? 1 : 0;
+          if (c !== 0) return asc ? c : -c;
+        }
+        return 0;
+      });
     }
+    if (this.rangeFrom !== undefined) out = out.slice(this.rangeFrom, this.rangeTo! + 1);
     if (this.limitN !== undefined) out = out.slice(0, this.limitN);
     return out;
   }
@@ -191,8 +248,11 @@ function fakeFrom(tableName: FakeTableName, callerId: string | undefined) {
       delete: () => stub,
       eq: () => stub,
       is: () => stub,
+      gte: () => stub,
+      lte: () => stub,
       order: () => stub,
       limit: () => stub,
+      range: () => stub,
       single: () => stub,
       maybeSingle: () => stub,
       then: (res: (v: FakeResult) => unknown) => Promise.resolve(errResult).then(res),
@@ -324,7 +384,10 @@ function makeSupabaseClient(_url: string, _key: string, options?: any) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         return { data: (FIXTURES[userId] as any)[name], error: null };
       },
-      from: (tableName: FakeTableName) => fakeFrom(tableName, accessTokenOwner.get(accessToken)),
+      from: (tableName: FakeTableName) => {
+        tableReads.push({ table: tableName, accessToken });
+        return fakeFrom(tableName, accessTokenOwner.get(accessToken));
+      },
     };
   }
 
@@ -414,6 +477,9 @@ describe("api/mcp handler", () => {
     TABLES.programs.length = 0;
     TABLES.workout_day_exercise_scheme_history.length = 0;
     TABLES.session_sets.length = 0;
+    for (const t of RIDE_TABLES) TABLES[t].length = 0;
+    tableReads.length = 0;
+    rangeRequests.length = 0;
     fakeRowSeq = 0;
     forcedError = null;
     seedSession("user-a", "token-a");
@@ -450,6 +516,7 @@ describe("api/mcp handler", () => {
 
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
+      "activity_stats",
       "add_day_to_program",
       "add_exercise_to_day",
       "adherence_for_day",
@@ -459,9 +526,12 @@ describe("api/mcp handler", () => {
       "delete_day_template",
       "delete_exercise",
       "delete_program",
+      "get_activity",
       "get_day_templates",
       "get_workout_history",
+      "list_activities",
       "list_exercises",
+      "power_curve",
       "progression_for_exercise",
       "remove_day_from_program",
       "remove_exercise_from_day",
@@ -472,9 +542,12 @@ describe("api/mcp handler", () => {
       "scheme_history_for_day_exercise",
       "set_day_exercise_scheme",
       "sets_for_exercise",
+      "sync_status",
       "training_gaps",
+      "training_load",
       "update_exercise",
       "weekly_volume",
+      "weight_history",
     ]);
 
     await client.close();
@@ -495,6 +568,7 @@ describe("api/mcp handler", () => {
 
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
+      "activity_stats",
       "add_day_to_program",
       "add_exercise_to_day",
       "adherence_for_day",
@@ -504,9 +578,12 @@ describe("api/mcp handler", () => {
       "delete_day_template",
       "delete_exercise",
       "delete_program",
+      "get_activity",
       "get_day_templates",
       "get_workout_history",
+      "list_activities",
       "list_exercises",
+      "power_curve",
       "progression_for_exercise",
       "remove_day_from_program",
       "remove_exercise_from_day",
@@ -517,9 +594,12 @@ describe("api/mcp handler", () => {
       "scheme_history_for_day_exercise",
       "set_day_exercise_scheme",
       "sets_for_exercise",
+      "sync_status",
       "training_gaps",
+      "training_load",
       "update_exercise",
       "weekly_volume",
+      "weight_history",
     ]);
 
     await client.close();
@@ -1893,6 +1973,140 @@ describe("api/mcp handler", () => {
       ]);
       expect(TABLES.workout_days).toHaveLength(0);
 
+      await client.close();
+    });
+  });
+  describe("ride analytics tools (AI-654)", () => {
+    const snake = (k: string) => k.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+    const toRow = (userId: string, id: string, o: object): FakeRow => {
+      const row: FakeRow = { id, user_id: userId };
+      for (const [k, v] of Object.entries(o)) row[snake(k)] = v;
+      return row;
+    };
+
+    /** Loads `f` into the fake ride tables as `userId`'s rows, in column names. */
+    function seedRides(userId: string, f: RideFixtures): void {
+      for (const a of f.activities) TABLES.external_activities.push(toRow(userId, a.id, a));
+      f.streams.forEach((st, i) => TABLES.activity_streams.push(toRow(userId, `${userId}-stream-${i}`, st)));
+      for (const w of f.bodyWeights) TABLES.body_weights.push(toRow(userId, `${userId}-${w.id}`, w));
+      TABLES.athlete_settings.push(toRow(userId, `${userId}-settings`, f.settings));
+      for (const e of f.ftpHistory) TABLES.ftp_history.push(toRow(userId, `${userId}-${e.id}`, e));
+      for (const d of f.dailyLoad) TABLES.daily_training_load.push(toRow(userId, `${userId}-${d.date}`, d));
+      for (const st of f.syncState) TABLES.sync_state.push(toRow(userId, `${userId}-${st.source}`, st));
+    }
+
+    const ARGS: Record<(typeof RIDE_TOOL_NAMES)[number], Record<string, unknown>> = {
+      list_activities: { limit: 500 },
+      get_activity: {},
+      activity_stats: {},
+      training_load: {},
+      power_curve: {},
+      weight_history: {},
+      sync_status: {},
+    };
+
+    beforeEach(() => {
+      // Only Date: the HTTP round trip still needs real timers.
+      vi.useFakeTimers({ toFake: ["Date"], now: FIXTURE_NOW });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("answers all seven tools from the caller's own rows, as the shared handlers do over the same fixtures", async () => {
+      const a = buildUuidRideFixtures(FIXTURE_NOW);
+      seedRides("user-a", a.fixtures);
+      const expected = createRideToolHandlers((run) => run(fixtureReads(a.fixtures)), {
+        now: () => FIXTURE_NOW,
+        defaultTimeZone: process.env.SYNC_DEFAULT_TIMEZONE ?? DEFAULT_ATHLETE_TIMEZONE,
+      });
+      const client = await connectAs("token-a");
+
+      for (const name of RIDE_TOOL_NAMES) {
+        const args = name === "get_activity" ? { activity_id: a.ids.outdoor } : ARGS[name];
+        const result = await client.callTool({ name, arguments: args });
+        expect(result.isError, name).toBeFalsy();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const want = await (expected[name] as any)(args);
+        expect(result.content, name).toEqual(want.content);
+      }
+
+      const listed = await client.callTool({ name: "list_activities", arguments: {} });
+      const { activities } = JSON.parse((listed.content as [{ text: string }])[0].text);
+      expect(activities.length).toBeGreaterThan(0);
+      expect(activities.map((r: { id: string }) => r.id)).not.toContain(a.ids.fragment);
+      const sync = await client.callTool({ name: "sync_status", arguments: {} });
+      expect((sync.content as [{ text: string }])[0].text).not.toContain("cursor");
+
+      await client.close();
+    });
+
+    it("list_activities reads only the newest 2 × limit + 50 rows: one page of 250 for limit 100 over 3000", async () => {
+      const a = buildUuidRideFixtures(FIXTURE_NOW);
+      const template = a.fixtures.activities.find((x) => x.id === a.ids.outdoor)!;
+      const base = Date.parse("2026-11-01T12:00:00.000Z");
+      const many = Array.from({ length: 3000 }, (_, i) => ({
+        ...template,
+        id: `00000000-0000-4000-9000-${i.toString(16).padStart(12, "0")}`,
+        sourceId: `bulk-${i}`,
+        pairedActivityId: null,
+        startedAt: new Date(base - i * 3_600_000).toISOString(),
+      }));
+      seedRides("user-a", { ...a.fixtures, activities: many, streams: [], bodyWeights: [], ftpHistory: [], dailyLoad: [], syncState: [] });
+      const client = await connectAs("token-a");
+      rangeRequests.length = 0;
+
+      const listed = await client.callTool({ name: "list_activities", arguments: { limit: 100 } });
+      expect(JSON.parse((listed.content as [{ text: string }])[0].text).activities).toHaveLength(100);
+      expect(rangeRequests.filter((r) => r.table === "external_activities")).toEqual([{ table: "external_activities", from: 0, to: 249 }]);
+      await client.close();
+    });
+
+    it("get_activity: malformed id and unknown id", async () => {
+      seedRides("user-a", buildUuidRideFixtures(FIXTURE_NOW).fixtures);
+      const client = await connectAs("token-a");
+      expect((await client.callTool({ name: "get_activity", arguments: { activity_id: "ride-outdoor-1" } })).content).toEqual([
+        { type: "text", text: 'get_activity failed: expected a UUID for activity_id, got "ride-outdoor-1".' },
+      ]);
+      const missing = await client.callTool({ name: "get_activity", arguments: { activity_id: "f0000000-0000-4000-8000-00000000ffff" } });
+      expect(missing.isError).toBe(true);
+      expect(missing.content).toEqual([{ type: "text", text: "Activity not found" }]);
+      await client.close();
+    });
+
+    it("scopes every read to the caller: user B sees none of user A's rides, through B's own token", async () => {
+      const a = buildUuidRideFixtures(FIXTURE_NOW);
+      seedRides("user-a", a.fixtures);
+      const clientB = await connectAs("token-b");
+
+      const listed = await clientB.callTool({ name: "list_activities", arguments: {} });
+      expect(JSON.parse((listed.content as [{ text: string }])[0].text)).toEqual({ activities: [] });
+      const one = await clientB.callTool({ name: "get_activity", arguments: { activity_id: a.ids.outdoor } });
+      expect(one.content).toEqual([{ type: "text", text: "Activity not found" }]);
+      const sync = await clientB.callTool({ name: "sync_status", arguments: {} });
+      expect(JSON.parse((sync.content as [{ text: string }])[0].text)).toEqual({ sources: [] });
+
+      const rideReads = tableReads.filter((r) => (RIDE_TABLES as readonly string[]).includes(r.table));
+      expect(rideReads.length).toBeGreaterThan(0);
+      for (const r of rideReads) expect(accessTokenOwner.get(r.accessToken)).toBe("user-b");
+
+      await clientB.close();
+    });
+
+    it("a ride tool with an invalid bearer token is the identity error, with no table read", async () => {
+      const client = await connectAs("not-a-real-token");
+      const result = await client.callTool({ name: "training_load", arguments: {} });
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([{ type: "text", text: expect.stringContaining("Invalid bearer token") }]);
+      expect(tableReads.filter((r) => (RIDE_TABLES as readonly string[]).includes(r.table))).toEqual([]);
+      await client.close();
+    });
+
+    it("a failing table read is a '<tool> failed:' tool error", async () => {
+      const client = await connectAs("token-a");
+      forcedError = { table: "sync_state", op: "select", message: "permission denied for table sync_state" };
+      const result = await client.callTool({ name: "sync_status", arguments: {} });
+      expect(result.content).toEqual([{ type: "text", text: "sync_status failed: permission denied for table sync_state" }]);
       await client.close();
     });
   });

@@ -11,7 +11,7 @@ Starkeep-specific lives in `starkeep/`, `starkeep.manifest.json` and
 What works today: the SPA is served on both surfaces, `POST /mcp` is an MCP
 endpoint behind per-user bearer tokens that the MCP screen mints and revokes
 (`/api/mcp-login`, `/api/mcp-sessions`; see [MCP tokens](#mcp-tokens)), and
-`/api/local-data/*` is the browser's signing proxy to the app's tables. The endpoint serves the 25
+`/api/local-data/*` is the browser's signing proxy to the app's tables. The endpoint serves the 32
 tools pinned in `src/mcp/__fixtures__/tools-list.main.json`.
 
 ## Files
@@ -20,7 +20,7 @@ tools pinned in `src/mcp/__fixtures__/tools-list.main.json`.
 | --- | --- |
 | `starkeep.manifest.json` | App id `exercise`, tier `community`, targets `local` + `cloud`, the syncable tables, the `static` compute handler. |
 | `starkeep/server.ts` | The Hono app (`app.fetch`) both surfaces run: `POST /mcp`, `POST /api/mcp-login`, `/api/mcp-sessions`, `GET /starkeep-runtime-config`, `/api/session[/*]`, `/api/local-data/*`. |
-| `starkeep/mcp.ts` | `createExerciseMcpServer(deps)`, serving the 25 tools pinned in `src/mcp/__fixtures__/tools-list.main.json`, and the stateless JSON transport per request. `deps.context` is who the request acts for. |
+| `starkeep/mcp.ts` | `createExerciseMcpServer(deps)`, serving the 32 tools pinned in `src/mcp/__fixtures__/tools-list.main.json`, and the stateless JSON transport per request. `deps.context` is who the request acts for. |
 | `starkeep/mcp-auth.ts` | `POST /mcp` gate: unseals the bearer token, mints and caches the user's ID token (cloud), checks the `mcp_tokens` row, resolves `{ sub, userToken, tokenId }`. |
 | `starkeep/mcp-login.ts`, `starkeep/mcp-sessions.ts` | Mint, list and revoke MCP tokens from the browser session; same JSON as `api/mcp-login.ts` / `api/mcp-sessions.ts`. |
 | `starkeep/token.ts` | The `exr_` sealed token: AES-256-GCM under an HKDF key from the app's HMAC secret. |
@@ -135,7 +135,7 @@ The script runs `vite build` with `VITE_DATA_BACKEND=starkeep` into a staging
      -H "authorization: Bearer $TOKEN" \
      -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
-   # → a JSON-RPC result whose "tools" array lists the 25 tools
+   # → a JSON-RPC result whose "tools" array lists the 32 tools
    ```
 
 You can also run the server without admin-web:
