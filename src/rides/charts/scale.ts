@@ -27,20 +27,30 @@ export function logScale(domain: [number, number], range: [number, number]): Sca
   return s;
 }
 
-/** About `count` round tick values covering [min, max] (1, 2, 2.5 or 5 × 10^k steps). */
+/** Replaces -0 with 0 so no tick label ever prints "-0". */
+export const noNegZero = (v: number): number => (Object.is(v, -0) ? 0 : v);
+
+/**
+ * About `count` round tick values covering [min, max] (1, 2, 2.5 or 5 × 10^k steps). The [0, 1]
+ * domain is the empty/all-zero placeholder from `niceDomain`; it gets just its ends, [0, 1].
+ */
 export function niceTicks(min: number, max: number, count = 4): number[] {
   if (!Number.isFinite(min) || !Number.isFinite(max)) return [];
-  if (min === max) return [min];
+  if (min === max) return [noNegZero(min)];
+  if (min === 0 && max === 1) return [0, 1];
   const raw = Math.abs(max - min) / Math.max(count, 1);
   const mag = 10 ** Math.floor(Math.log10(raw));
   const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw) ?? 10 * mag;
   const lo = Math.ceil(Math.min(min, max) / step - 1e-9) * step;
   const out: number[] = [];
-  for (let v = lo; v <= Math.max(min, max) + step * 1e-9; v += step) out.push(Number(v.toFixed(10)));
+  for (let v = lo; v <= Math.max(min, max) + step * 1e-9; v += step) out.push(noNegZero(Number(v.toFixed(10))));
   return out;
 }
 
-/** [min, max] of the finite values, padded to round ticks; `fallback` when there are none. */
+/**
+ * [min, max] of the finite values, padded to round ticks; `fallback` (default [0, 1]) when there
+ * are none, and [0, 1] when every value is 0 (not a domain symmetric around zero).
+ */
 export function niceDomain(values: readonly (number | null | undefined)[], opts: { zero?: boolean; fallback?: [number, number] } = {}): [number, number] {
   const finite = values.filter((v): v is number => typeof v === "number" && Number.isFinite(v));
   if (finite.length === 0) return opts.fallback ?? [0, 1];
@@ -50,6 +60,7 @@ export function niceDomain(values: readonly (number | null | undefined)[], opts:
     lo = Math.min(lo, 0);
     hi = Math.max(hi, 0);
   }
+  if (lo === 0 && hi === 0) return [0, 1];
   if (lo === hi) {
     lo -= 1;
     hi += 1;

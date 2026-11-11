@@ -16,7 +16,7 @@ import {
   zoneColors,
   SERIES,
 } from ".";
-import { nearestIndex, viewBoxX } from "./scale";
+import { nearestIndex, noNegZero, viewBoxX } from "./scale";
 
 describe("scales", () => {
   test("linear and log", () => {
@@ -36,6 +36,29 @@ describe("scales", () => {
     expect(niceDomain([null, undefined])).toEqual([0, 1]);
     expect(niceDomain([4, 4])).toEqual([3, 5]);
     expect(niceDomain([10, 20], { zero: true })[0]).toBe(0);
+  });
+  test("an all-zero or all-null series gets the domain [0, 1] with ticks [0, 1] (AI-672)", () => {
+    expect(niceDomain([0, 0, 0])).toEqual([0, 1]);
+    expect(niceDomain([0, 0, 0], { zero: true })).toEqual([0, 1]);
+    expect(niceDomain([0, null, 0], { zero: true })).toEqual([0, 1]);
+    expect(niceDomain([null, null], { zero: true })).toEqual([0, 1]);
+    expect(niceTicks(0, 1, 4)).toEqual([0, 1]);
+    // Non-zero constant series keep their padded domain.
+    expect(niceDomain([4, 4])).toEqual([3, 5]);
+  });
+  test("ticks never contain -0 (AI-672)", () => {
+    expect(Object.is(noNegZero(-0), 0)).toBe(true);
+    expect(noNegZero(-1)).toBe(-1);
+    for (const [lo, hi] of [[-1, 1], [-0.3, 0.3], [-30, 25], [-0, 0], [-0.1 - 0.2, 0.3]] as const) {
+      for (const t of niceTicks(lo, hi, 4)) expect(Object.is(t, -0)).toBe(false);
+    }
+  });
+  test("StackedBars over all-zero totals labels the y axis 0 and 1 only (AI-672)", () => {
+    const { container } = render(
+      <StackedBars ariaLabel="Volume" categories={["a", "b", "c"]} series={[{ name: "Volume", values: [0, 0, 0] }]} yFormat={(v) => Math.round(v).toLocaleString("en-US")} />,
+    );
+    const labels = [...container.querySelectorAll('[data-axis="left"] text')].map((t) => t.textContent);
+    expect(labels).toEqual(["0", "1"]);
   });
   test("helpers", () => {
     expect(durationTick(5)).toBe("5s");

@@ -46,6 +46,10 @@ test("both curves, the dashed eFTP line and the solid manual FTP line", async ()
   const ftp = chart.querySelector('g[data-reference="FTP 250 W (manual)"]');
   expect(ftp).not.toBeNull();
   expect(ftp!.querySelector("line")?.getAttribute("stroke-dasharray")).toBeNull();
+  // AI-672: the FTP label always sits above its line and the eFTP label below its own, so close values never overprint.
+  const labelOffset = (g: Element) => Number(g.querySelector("text")!.getAttribute("y")) - Number(g.querySelector("line")!.getAttribute("y1"));
+  expect(labelOffset(ftp!)).toBeLessThan(0);
+  expect(labelOffset(eLine!)).toBeGreaterThan(0);
 });
 
 test("no manual FTP: only the eFTP line", async () => {
