@@ -31,11 +31,12 @@ From the repo root:
 ```bash
 supabase login
 supabase link --project-ref <ref>
-supabase db push
+supabase db push --remote
 ```
 
-`supabase db push` applies every file in `supabase/migrations/` that the
-project has not recorded yet. After the first deploy, CI does this for you on
+`supabase db push --remote` applies every file in `supabase/migrations/` that
+the project has not recorded yet. The flag is for CLI 3.x, where `db push`
+targets a local stack by default (CLI 2.x spelled it `--linked`). After the first deploy, CI does this for you on
 every merge to `main`; see [How migrations reach production](#how-migrations-reach-production).
 
 ## 3. Create the Vercel project
@@ -88,8 +89,8 @@ The `migrate` job:
 - runs `node scripts/check-migration-versions.mjs supabase/migrations`, which
   fails if two migration files share a version prefix;
 - then runs `supabase link --project-ref "$SUPABASE_PROJECT_REF"` and
-  `supabase db push`, authenticated with the `SUPABASE_ACCESS_TOKEN`
-  repository secret;
+  `supabase db push --remote` with a pinned CLI version, authenticated with
+  the `SUPABASE_ACCESS_TOKEN` repository secret;
 - logs a `::warning::` and exits 0 without applying anything if
   `SUPABASE_ACCESS_TOKEN` is unset, rather than failing `main`.
 

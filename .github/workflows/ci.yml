@@ -50,9 +50,12 @@ jobs:
             exit 1
           fi
 
+      # Pinned: `latest` moved to CLI 3.x on 2026-11-09, where `db push` targets
+      # the local stack unless told otherwise and `--linked` no longer exists,
+      # which broke this job (AI-602). Bump deliberately, with the flags below.
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 3.1.0
 
       # Two migration files can end up with the same version prefix when two
       # PRs are authored independently (neither PR's own CI run ever sees the
@@ -75,4 +78,4 @@ jobs:
             exit 0
           fi
           supabase link --project-ref "$SUPABASE_PROJECT_REF"
-          supabase db push
+          supabase db push --remote
