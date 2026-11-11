@@ -1,6 +1,6 @@
-import { baseTypeOf } from "./baseTypes";
-import { fitCrc } from "./crc";
-import { FitError } from "./errors";
+import { baseTypeOf } from "./baseTypes.js";
+import { fitCrc } from "./crc.js";
+import { FitError } from "./errors.js";
 import {
   MESG_EVENT,
   MESG_LAP,
@@ -10,8 +10,8 @@ import {
   PROFILE,
   TEMPLATES,
   applyProfile,
-} from "./profile";
-import type { FitEvent, FitLap, FitMessages, FitRecord, FitSession, FitSet } from "./types";
+} from "./profile.js";
+import type { FitEvent, FitLap, FitMessages, FitRecord, FitSession, FitSet } from "./types.js";
 
 interface FieldDef {
   num: number;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { decodeFit, FitError } from "./index";
-import { fitCrc } from "./crc";
-import { BT, chain, data, def, encodeFit, type FitItem } from "./testing/encodeFit";
+import { decodeFit, FitError } from "./index.js";
+import { fitCrc } from "./crc.js";
+import { BT, chain, data, def, encodeFit, type FitItem } from "./testing/encodeFit.js";
 
 // FIT seconds 1_000_000_000 = Unix 1_631_065_600 = 2021-09-08T01:46:40Z.
 const T0 = 1_000_000_000;

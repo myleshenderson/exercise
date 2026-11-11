@@ -1,5 +1,5 @@
-import { FitError } from "./errors";
-import type { ChannelName, FitActivity, FitMessages, FitRecord } from "./types";
+import { FitError } from "./errors.js";
+import type { ChannelName, FitActivity, FitMessages, FitRecord } from "./types.js";
 
 /** Longest activity laid out at 1 Hz (7 days); guards against a stray timestamp. */
 export const MAX_SPAN_SECONDS = 7 * 24 * 3600;

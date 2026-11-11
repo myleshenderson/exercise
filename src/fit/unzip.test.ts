@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { zipSync } from "fflate";
-import { decodeFit, fitFromZip, FitError } from "./index";
-import { MAX_FIT_BYTES } from "./unzip";
-import { BT, data, def, encodeFit } from "./testing/encodeFit";
+import { decodeFit, fitFromZip, FitError } from "./index.js";
+import { MAX_FIT_BYTES } from "./unzip.js";
+import { BT, data, def, encodeFit } from "./testing/encodeFit.js";
 
 const fit = encodeFit([def(0, 20, [{ num: 253, baseType: BT.uint32 }]), data(0, [1_000_000_000])]);
 

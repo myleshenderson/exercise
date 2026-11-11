@@ -1,6 +1,6 @@
 // Test-only FIT encoder: builds synthetic FIT bytes so no real activity file
 // enters the repo. Not exported from src/fit/index.ts.
-import { fitCrc } from "../crc";
+import { fitCrc } from "../crc.js";
 
 /** FIT base type bytes (with the endian-ability bit where the spec sets it). */
 export const BT = {
