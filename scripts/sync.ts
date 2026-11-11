@@ -9,7 +9,7 @@ import { SyncLockBusyError, withSyncLock } from "../src/sync/lock.js";
 import { createNodeSyncDeps, createServiceClient } from "../src/sync/nodeDeps.js";
 import { seedPelotonCredential } from "../src/sync/peloton/index.js";
 import { recomputeAll } from "../src/sync/recompute.js";
-import { SyncLoadError, readSyncEnv, runSync, todayIn } from "../src/sync/runner.js";
+import { SyncLoadError, SyncLockLostError, readSyncEnv, runSync, todayIn } from "../src/sync/runner.js";
 import type { SyncRunResult } from "../src/sync/types.js";
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
@@ -34,7 +34,7 @@ async function main(): Promise<number> {
   // Read at each recompute: a six-hour backfill can cross midnight.
   const today = () => todayIn(env.SYNC_DEFAULT_TIMEZONE, now());
 
-  return withSyncLock(client, async () => {
+  return withSyncLock(client, async ({ lost }) => {
     if (args.reseedPelotonToken) {
       await seedPelotonCredential(deps.store, deps.box, env.PELOTON_REFRESH_TOKEN!, now);
       console.log("peloton: credential reseeded from PELOTON_REFRESH_TOKEN");
@@ -42,10 +42,11 @@ async function main(): Promise<number> {
 
     // --recompute-all rebuilds the daily load from the first ride, so the range recompute is skipped.
     const deadlineMs = now() + SIX_HOURS_MS;
-    const results = await runSync(deps, { sources, mode: args.mode, deadlineMs, now, today, skipDailyLoadRecompute: args.recomputeAll });
+    const results = await runSync(deps, { sources, mode: args.mode, deadlineMs, now, today, skipDailyLoadRecompute: args.recomputeAll, lost });
     print(results);
 
     if (args.recomputeAll) {
+      if (lost()) throw new SyncLockLostError(results);
       const r = await recomputeAll(deps.store, { defaultTimeZone: env.SYNC_DEFAULT_TIMEZONE, today: today() });
       console.log(`recompute-all: ${r.activities} activities, ${r.days} days, done ${r.done}`);
     }
@@ -60,7 +61,7 @@ main().then(
       console.error(e.message); // "sync already running"
       process.exit(1);
     }
-    if (e instanceof SyncLoadError) print(e.results);
+    if (e instanceof SyncLoadError || e instanceof SyncLockLostError) print(e.results);
     console.error(e instanceof SyncUsageError ? e.message : `sync failed: ${e instanceof Error ? e.message : String(e)}`);
     process.exit(e instanceof SyncUsageError ? 2 : 1);
   },

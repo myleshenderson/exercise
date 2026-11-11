@@ -8,16 +8,20 @@
  * recomputes every activity's TSS and the daily load instead, in budgeted passes the client
  * repeats with `offset=nextOffset` until `done`. CRON_SECRET is never accepted on POST.
  *
- * Both sync paths run inside `withSyncLock` (AI-659): while another run (cron, owner or
- * `npm run sync`) holds the lease the answer is 409 `{ "error": "sync already running" }`.
+ * Every POST and GET that does work (sync or recompute) runs inside `withSyncLock` (AI-659): while
+ * another run (cron, owner or `npm run sync`) holds the lease the answer is 409
+ * `{ "error": "sync already running" }`. The lease TTL here is 120 s (Vercel kills the function at
+ * 60 s), so a killed run blocks the next one for 2 minutes at most. A run that loses its lease
+ * ends with 500 `sync lock lost`.
  */
 import { timingSafeEqual } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { SyncLockBusyError, withSyncLock } from "../src/sync/lock.js";
+import { SyncLockBusyError, withSyncLock, type SyncLease } from "../src/sync/lock.js";
 import { createNodeSyncDeps, createServiceClient } from "../src/sync/nodeDeps.js";
 import { recomputeAll } from "../src/sync/recompute.js";
 import {
   SyncLoadError,
+  SyncLockLostError,
   readSyncEnv,
   runSync,
   todayIn,
@@ -43,20 +47,28 @@ export const CRON_SOURCES: SyncProvider[] = ["garmin", "peloton"];
 /** Leaves 10 s of the 60 s limit for the daily-load recompute and the response. */
 export const CRON_BUDGET_MS = 50_000;
 
-export interface HandleSyncDeps {
+/** Lease TTL for both HTTP paths: twice the 60 s `maxDuration` in vercel.json. */
+export const HTTP_SYNC_LOCK_TTL_MS = 120_000;
+
+/** `withSyncLock` on the request's client; throws `SyncLockBusyError` when another run holds the lease. */
+export type WithSyncLock<Client> = <T>(client: Client, fn: (lease: SyncLease) => Promise<T>) => Promise<T>;
+
+export interface HandleSyncDeps<Client = SupabaseClient> {
   cronSecret: string;
   now: () => number;
-  /** Builds the runner deps; called only once the request is authorised. */
-  makeDeps: () => SyncDeps;
+  /** Builds the service client and the runner deps on it; called only once the request is authorised. */
+  makeDeps: () => { deps: SyncDeps; client: Client };
   runSync: (deps: SyncDeps, opts: SyncOptions) => Promise<SyncRunResult[]>;
-  /** `withSyncLock` on the client `makeDeps` built; throws `SyncLockBusyError` when held. */
-  withSyncLock: <T>(fn: () => Promise<T>) => Promise<T>;
+  withSyncLock: WithSyncLock<Client>;
 }
 
 const SYNC_BUSY = { status: 409, body: { error: "sync already running" } } as const;
 
 /** Runs `fn` under the lease; `null` when another run holds it (the caller answers 409). */
-async function lockedOrBusy<T>(lock: (fn: () => Promise<T>) => Promise<T>, fn: () => Promise<T>): Promise<T | null> {
+async function lockedOrBusy<T>(
+  lock: (fn: (lease: SyncLease) => Promise<T>) => Promise<T>,
+  fn: (lease: SyncLease) => Promise<T>,
+): Promise<T | null> {
   try {
     return await lock(fn);
   } catch (e) {
@@ -75,25 +87,27 @@ export function bearerMatches(authorization: string | undefined, secret: string)
   return given.length === expected.length && timingSafeEqual(given, expected);
 }
 
-export async function handleSync(
+export async function handleSync<Client>(
   input: { authorization: string | undefined; method: string | undefined },
-  deps: HandleSyncDeps,
+  deps: HandleSyncDeps<Client>,
 ): Promise<HandleSyncResult> {
   if (input.method !== "GET") return { status: 405, body: { error: "Method not allowed" } };
   if (!bearerMatches(input.authorization, deps.cronSecret)) return { status: 401, body: { error: "Unauthorized" } };
 
   const start = deps.now();
-  const syncDeps = deps.makeDeps();
-  const results = await lockedOrBusy(deps.withSyncLock, () =>
-    deps.runSync(syncDeps, budgetedSyncOptions(syncDeps.env, start, deps.now)),
+  const { deps: syncDeps, client } = deps.makeDeps();
+  const results = await lockedOrBusy<SyncRunResult[]>(
+    (fn) => deps.withSyncLock(client, fn),
+    (lease) => deps.runSync(syncDeps, budgetedSyncOptions(syncDeps.env, start, deps.now, lease.lost)),
   );
   if (results === null) return SYNC_BUSY;
   return { status: 200, body: results };
 }
 
 /** The cron's run, shared by GET and the owner's POST: incremental, both providers, 50 s budget. */
-export function budgetedSyncOptions(env: SyncEnv, start: number, now: () => number): SyncOptions {
+export function budgetedSyncOptions(env: SyncEnv, start: number, now: () => number, lost?: () => boolean): SyncOptions {
   return {
+    lost,
     sources: CRON_SOURCES,
     mode: "incremental",
     deadlineMs: start + CRON_BUDGET_MS,
@@ -122,8 +136,7 @@ export interface HandleOwnerSyncDeps<Client = SupabaseClient> {
   /** Builds the runner deps on that client; called only once authorised. */
   makeDeps: (env: SyncEnv, client: Client) => SyncDeps;
   runSync: (deps: SyncDeps, opts: SyncOptions) => Promise<SyncRunResult[]>;
-  /** `withSyncLock` on that client; throws `SyncLockBusyError` when another run holds the lease. */
-  withSyncLock: <T>(client: Client, fn: () => Promise<T>) => Promise<T>;
+  withSyncLock: WithSyncLock<Client>;
   recomputeAll: typeof recomputeAll;
 }
 
@@ -192,13 +205,19 @@ export async function handleOwnerSync<Client>(
     if (!Number.isSafeInteger(offset)) return { status: 400, body: { error: "offset must be a non-negative integer" } };
     const syncDeps = deps.makeDeps(env, client);
     const tz = env.SYNC_DEFAULT_TIMEZONE;
-    const r = await deps.recomputeAll(syncDeps.store, {
-      defaultTimeZone: tz,
-      today: todayIn(tz, deps.now()),
-      deadlineMs: start + CRON_BUDGET_MS,
-      offset,
-      now: deps.now,
-    });
+    // Under the lease too: a concurrent runSync writes the same daily_training_load rows.
+    const r = await lockedOrBusy(
+      (fn) => deps.withSyncLock(client, fn),
+      () =>
+        deps.recomputeAll(syncDeps.store, {
+          defaultTimeZone: tz,
+          today: todayIn(tz, deps.now()),
+          deadlineMs: start + CRON_BUDGET_MS,
+          offset,
+          now: deps.now,
+        }),
+    );
+    if (r === null) return SYNC_BUSY;
     return {
       status: 200,
       body: { kind: "recompute", activities: r.activities, days: r.days, done: r.done, nextOffset: r.nextOffset },
@@ -206,9 +225,9 @@ export async function handleOwnerSync<Client>(
   }
 
   const syncDeps = deps.makeDeps(env, client);
-  const results = await lockedOrBusy(
+  const results = await lockedOrBusy<SyncRunResult[]>(
     (fn) => deps.withSyncLock(client, fn),
-    () => deps.runSync(syncDeps, budgetedSyncOptions(env, start, deps.now)),
+    (lease) => deps.runSync(syncDeps, budgetedSyncOptions(env, start, deps.now, lease.lost)),
   );
   if (results === null) return SYNC_BUSY;
   return { status: 200, body: { kind: "sync", results } };
@@ -254,7 +273,7 @@ async function ownerHandler(req: VercelLikeRequest, res: VercelLikeResponse, aut
         verifyUser: verifySupabaseUser,
         makeDeps: createNodeSyncDeps,
         runSync,
-        withSyncLock: (client, fn) => withSyncLock(client, fn, { label: "owner" }),
+        withSyncLock: (client, fn) => withSyncLock(client, fn, { label: "owner", ttlMs: HTTP_SYNC_LOCK_TTL_MS }),
         recomputeAll,
       },
     );
@@ -267,8 +286,9 @@ async function ownerHandler(req: VercelLikeRequest, res: VercelLikeResponse, aut
     // the runner, the store or getUser builds).
     const error = e instanceof Error ? e.message : String(e);
     console.error(`sync owner: ${error}`);
-    if (e instanceof SyncLoadError) logFailures(e.results, "sync owner");
-    res.status(500).json(e instanceof SyncLoadError ? { error, results: e.results } : { error });
+    const results = e instanceof SyncLoadError || e instanceof SyncLockLostError ? e.results : null;
+    if (results) logFailures(results, "sync owner");
+    res.status(500).json(results ? { error, results } : { error });
   }
 }
 
@@ -276,8 +296,6 @@ export default async function handler(req: VercelLikeRequest, res: VercelLikeRes
   const header = req.headers.authorization;
   const authorization = Array.isArray(header) ? header[0] : header;
   if (req.method === "POST") return ownerHandler(req, res, authorization);
-  // makeDeps builds the client once authorised; the lock runs on that same client.
-  let client: SupabaseClient | undefined;
   try {
     // An unset or empty CRON_SECRET refuses every bearer (401) and is never named to the caller.
     const result = await handleSync(
@@ -287,14 +305,11 @@ export default async function handler(req: VercelLikeRequest, res: VercelLikeRes
         now: () => Date.now(),
         makeDeps: () => {
           const env = readSyncEnv(process.env, CRON_SOURCES);
-          client = createServiceClient(env);
-          return createNodeSyncDeps(env, client);
+          const client = createServiceClient(env);
+          return { deps: createNodeSyncDeps(env, client), client };
         },
         runSync,
-        withSyncLock: (fn) => {
-          if (!client) throw new Error("sync lock: no client (makeDeps not called)");
-          return withSyncLock(client, fn, { label: "cron" });
-        },
+        withSyncLock: (client, fn) => withSyncLock(client, fn, { label: "cron", ttlMs: HTTP_SYNC_LOCK_TTL_MS }),
       },
     );
     if (result.status === 200) logFailures(result.body as SyncRunResult[]);
@@ -304,7 +319,8 @@ export default async function handler(req: VercelLikeRequest, res: VercelLikeRes
     // never puts a token in one), with the per-source results when the sources ran.
     const error = e instanceof Error ? e.message : String(e);
     console.error(`sync cron: ${error}`);
-    if (e instanceof SyncLoadError) logFailures(e.results);
-    res.status(500).json(e instanceof SyncLoadError ? { error, results: e.results } : { error });
+    const results = e instanceof SyncLoadError || e instanceof SyncLockLostError ? e.results : null;
+    if (results) logFailures(results);
+    res.status(500).json(results ? { error, results } : { error });
   }
 }

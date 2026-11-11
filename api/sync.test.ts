@@ -3,10 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemorySyncStore } from "../src/sync/testing/memoryStore.js";
 import type { SyncDeps } from "../src/sync/runner.js";
 import type { SyncRunResult } from "../src/sync/types.js";
-import { SyncLoadError } from "../src/sync/runner.js";
-import { SyncLockBusyError } from "../src/sync/lock.js";
+import { SyncLoadError, SyncLockLostError } from "../src/sync/runner.js";
+import { SyncLockBusyError, type SyncLease } from "../src/sync/lock.js";
 import handler, {
   CRON_BUDGET_MS,
+  HTTP_SYNC_LOCK_TTL_MS,
   bearerMatches,
   budgetedSyncOptions,
   verifySupabaseUser,
@@ -19,6 +20,10 @@ import handler, {
 
 const SECRET = "cron-secret-value";
 const START = Date.parse("2026-11-11T10:00:00.000Z");
+
+/** The lease every fake lock hands its fn (AI-659). */
+const LEASE: SyncLease = { lost: () => false };
+const CRON_CLIENT = { name: "cron service-role client" };
 
 const RESULT: SyncRunResult = {
   source: "garmin_activities",
@@ -50,10 +55,10 @@ function setup() {
   const deps = {
     cronSecret: SECRET,
     now: () => START,
-    makeDeps: vi.fn(() => syncDeps),
+    makeDeps: vi.fn(() => ({ deps: syncDeps, client: CRON_CLIENT })),
     runSync: vi.fn(async () => [RESULT]),
-    withSyncLock: vi.fn(<T,>(fn: () => Promise<T>) => fn()),
-  } satisfies HandleSyncDeps;
+    withSyncLock: vi.fn(<T,>(_client: typeof CRON_CLIENT, fn: (lease: SyncLease) => Promise<T>) => fn(LEASE)),
+  } satisfies HandleSyncDeps<typeof CRON_CLIENT>;
   return { deps, syncDeps };
 }
 
@@ -190,17 +195,19 @@ describe("handler", () => {
 });
 
 describe("handleSync lease (AI-659)", () => {
-  it("runs the sync inside withSyncLock", async () => {
+  it("runs the sync inside withSyncLock on the client makeDeps built, passing the lease's lost()", async () => {
     const { deps } = setup();
-    deps.withSyncLock.mockImplementation(async <T,>(fn: () => Promise<T>) => {
+    deps.withSyncLock.mockImplementation(async <T,>(client: typeof CRON_CLIENT, fn: (lease: SyncLease) => Promise<T>) => {
+      expect(client).toBe(CRON_CLIENT);
       expect(deps.runSync).not.toHaveBeenCalled();
-      const r = await fn();
+      const r = await fn(LEASE);
       expect(deps.runSync).toHaveBeenCalledTimes(1);
       return r;
     });
     const r = await handleSync({ authorization: `Bearer ${SECRET}`, method: "GET" }, deps);
     expect(r.status).toBe(200);
     expect(deps.withSyncLock).toHaveBeenCalledTimes(1);
+    expect((deps.runSync.mock.calls[0] as unknown as Parameters<HandleSyncDeps["runSync"]>)[1].lost).toBe(LEASE.lost);
   });
 
   it("answers 409 'sync already running' while another run holds the lease", async () => {
@@ -234,7 +241,7 @@ describe("handler logging", () => {
     const failed: SyncRunResult = { ...RESULT, source: "peloton", fetched: 4, upserted: 0, skipped: 1, done: false, error: "PelotonHttpError: 503" };
     vi.resetModules();
     const client = { name: "service-role client" };
-    const lock = vi.fn(<T,>(_client: unknown, fn: () => Promise<T>) => fn());
+    const lock = vi.fn(<T,>(_client: unknown, fn: (lease: SyncLease) => Promise<T>, _opts?: unknown) => fn(LEASE));
     vi.doMock("../src/sync/nodeDeps.js", () => ({ createNodeSyncDeps: () => syncDeps, createServiceClient: () => client }));
     vi.doMock("../src/sync/lock.js", async (orig) => ({
       ...(await orig<typeof import("../src/sync/lock.js")>()),
@@ -257,6 +264,8 @@ describe("handler logging", () => {
     // The cron run held the lease on the client makeDeps built (AI-659).
     expect(lock).toHaveBeenCalledTimes(1);
     expect(lock.mock.calls[0]![0]).toBe(client);
+    expect(lock.mock.calls[0]![2]).toEqual({ label: "cron", ttlMs: HTTP_SYNC_LOCK_TTL_MS });
+    expect(HTTP_SYNC_LOCK_TTL_MS).toBe(120_000);
     expect(log.mock.calls).toEqual([
       ["sync cron: peloton failed (fetched 4, upserted 0, skipped 1, done false): PelotonHttpError: 503"],
     ]);
@@ -278,7 +287,7 @@ function ownerSetup(user: VerifyUserResult = { kind: "user", id: OWNER }) {
     verifyUser: vi.fn(async (_client: typeof CLIENT, _token: string) => user),
     makeDeps: vi.fn((_env: unknown, _client: typeof CLIENT) => syncDeps),
     runSync: vi.fn(async () => [RESULT]),
-    withSyncLock: vi.fn(<T,>(_client: typeof CLIENT, fn: () => Promise<T>) => fn()),
+    withSyncLock: vi.fn(<T,>(_client: typeof CLIENT, fn: (lease: SyncLease) => Promise<T>) => fn(LEASE)),
     recomputeAll: vi.fn(async () => ({ activities: 12, days: 40, done: true, nextOffset: null })),
   } satisfies HandleOwnerSyncDeps<typeof CLIENT>;
   return { deps, syncDeps };
@@ -309,6 +318,29 @@ describe("handleOwnerSync lease (AI-659)", () => {
     const r = await handleOwnerSync(post(`Bearer ${TOKEN}`), deps);
     expect(r).toEqual({ status: 409, body: { error: "sync already running" } });
     expect(deps.runSync).not.toHaveBeenCalled();
+  });
+
+  it("runs ?recompute=all inside withSyncLock on the request's client", async () => {
+    const { deps } = ownerSetup();
+    deps.withSyncLock.mockImplementation(async <T,>(client: typeof CLIENT, fn: (lease: SyncLease) => Promise<T>) => {
+      expect(client).toBe(CLIENT);
+      expect(deps.recomputeAll).not.toHaveBeenCalled();
+      return fn(LEASE);
+    });
+    const r = await handleOwnerSync(post(`Bearer ${TOKEN}`, "/api/sync?recompute=all"), deps);
+    expect(r.status).toBe(200);
+    expect(deps.withSyncLock).toHaveBeenCalledTimes(1);
+    expect(deps.recomputeAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers 409 to ?recompute=all while another run holds the lease", async () => {
+    const { deps } = ownerSetup();
+    deps.withSyncLock.mockImplementation(async () => {
+      throw new SyncLockBusyError();
+    });
+    const r = await handleOwnerSync(post(`Bearer ${TOKEN}`, "/api/sync?recompute=all"), deps);
+    expect(r).toEqual({ status: 409, body: { error: "sync already running" } });
+    expect(deps.recomputeAll).not.toHaveBeenCalled();
   });
 
   it("does not take the lease for a non-owner", async () => {
@@ -496,7 +528,7 @@ describe("budgetedSyncOptions (AI-653)", () => {
     await handleSync({ authorization: `Bearer ${SECRET}`, method: "GET" }, cron.deps);
     const owner = ownerSetup();
     await handleOwnerSync(post(`Bearer ${TOKEN}`), owner.deps);
-    const expected = budgetedSyncOptions(cron.syncDeps.env, START, () => START);
+    const expected = budgetedSyncOptions(cron.syncDeps.env, START, () => START, LEASE.lost);
     for (const opts of [cron.deps.runSync.mock.calls[0], owner.deps.runSync.mock.calls[0]].map(
       (c) => (c as unknown as Parameters<HandleSyncDeps["runSync"]>)[1],
     )) {
@@ -551,11 +583,12 @@ describe("handler POST (AI-653)", () => {
 
   // After resetModules the handler's runner module (and SyncLoadError class) is a fresh copy.
   let LoadError: typeof SyncLoadError = SyncLoadError;
+  let LockLostError: typeof SyncLockLostError = SyncLockLostError;
   let createdClients: [string, string][] = [];
-  let lockCalls = 0;
+  let lockCalls: unknown[] = [];
   beforeEach(() => {
     createdClients = [];
-    lockCalls = 0;
+    lockCalls = [];
   });
 
   async function mockedHandler(
@@ -590,14 +623,14 @@ describe("handler POST (AI-653)", () => {
     // The lease itself is covered in src/sync/lock.test.ts; here it must wrap the run on this client.
     vi.doMock("../src/sync/lock.js", async (orig) => ({
       ...(await orig<typeof import("../src/sync/lock.js")>()),
-      withSyncLock: async <T,>(client: unknown, fn: () => Promise<T>) => {
+      withSyncLock: async <T,>(client: unknown, fn: (lease: SyncLease) => Promise<T>, opts: unknown) => {
         expect(client).toBe(fakeClient);
-        lockCalls++;
-        return fn();
+        lockCalls.push(opts);
+        return fn(LEASE);
       },
     }));
     const mod = await import("./sync.js");
-    LoadError = (await import("../src/sync/runner.js")).SyncLoadError;
+    ({ SyncLoadError: LoadError, SyncLockLostError: LockLostError } = await import("../src/sync/runner.js"));
     vi.doUnmock("../src/sync/nodeDeps.js");
     vi.doUnmock("../src/sync/runner.js");
     vi.doUnmock("../src/sync/recompute.js");
@@ -614,7 +647,7 @@ describe("handler POST (AI-653)", () => {
     await h({ method: "POST", url: "/api/sync", headers: { authorization: [`Bearer ${TOKEN}`, "Bearer other"] } }, res);
     expect(res.statusCode).toBe(200);
     expect(res.body).toEqual({ kind: "sync", results: [RESULT, failed] });
-    expect(lockCalls).toBe(1);
+    expect(lockCalls).toEqual([{ label: "owner", ttlMs: HTTP_SYNC_LOCK_TTL_MS }]);
     expect(log.mock.calls).toEqual([
       ["sync owner: peloton failed (fetched 2, upserted 1, skipped 1, done true): PelotonHttpError: 503"],
     ]);
@@ -627,6 +660,7 @@ describe("handler POST (AI-653)", () => {
     await h({ method: "POST", url: "/api/sync?recompute=all", headers: { authorization: `Bearer ${TOKEN}` } }, res);
     expect(res.statusCode).toBe(200);
     expect(res.body).toEqual({ kind: "recompute", activities: 3, days: 9, done: true, nextOffset: null });
+    expect(lockCalls).toEqual([{ label: "owner", ttlMs: HTTP_SYNC_LOCK_TTL_MS }]);
     expect(createdClients).toEqual([[ENV.SUPABASE_URL, ENV.SUPABASE_SERVICE_ROLE_KEY]]);
   });
 
@@ -674,6 +708,18 @@ describe("handler POST (AI-653)", () => {
       ["sync owner: garmin_weight failed (fetched 2, upserted 1, skipped 1, done true): GarminHttpError: 500"],
     ]);
     for (const s of SECRETS) expect(JSON.stringify([res.body, log.mock.calls])).not.toContain(s);
+  });
+
+  it("answers 500 'sync lock lost' with the results when the run lost its lease (AI-659)", async () => {
+    const h = await mockedHandler(async () => {
+      throw new LockLostError([RESULT]);
+    });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = fakeRes();
+    await h({ method: "POST", url: "/api/sync", headers: { authorization: `Bearer ${TOKEN}` } }, res);
+    expect(res.statusCode).toBe(500);
+    expect(res.body).toEqual({ error: "sync lock lost", results: [RESULT] });
+    expect(log.mock.calls).toEqual([["sync owner: sync lock lost"]]);
   });
 
   it("names no env var to an unauthenticated caller when the Supabase env is missing", async () => {

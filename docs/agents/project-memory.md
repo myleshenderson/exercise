@@ -50,3 +50,21 @@ source in either mode, so a cron run before the backfill ends chips at it 50 s a
 Added 2026-11-11 (AI-641).
 
 The strength-app tables from `0001_init.sql` grant nothing to `service_role` by default; any new service-role read of them (as the daily-load recompute's read of `sessions`) needs an explicit grant migration. Added 2026-11-11 (AI-664).
+
+## Sync lock
+
+Every sync entry point (cron GET and owner POST in `api/sync.ts`, including
+`POST /api/sync?recompute=all`, and `npm run sync`) runs under the `sync_lock` lease row via
+`withSyncLock` (`src/sync/lock.ts`, migration `20261111221500_sync_lock.sql`); a held lease
+answers 409 / exits 1 with `sync already running`. A run killed without releasing holds the
+lease until its TTL runs out: up to 120 s for an HTTP run (Vercel kills it at 60 s) and up to
+15 minutes for a killed CLI run (the CLI renews while alive). To free it sooner, run as
+service_role or in the SQL editor:
+
+```sql
+update sync_lock set lease_until = 'epoch', holder = null where name = 'sync';
+```
+
+The table and its `acquire_sync_lock` / `renew_sync_lock` functions must be applied by CI's
+`migrate` job before the first post-merge cron; until then every sync path fails with
+`sync lock acquire failed: …`. Added 2026-11-11 (AI-659).

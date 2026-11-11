@@ -4,9 +4,10 @@
 --
 -- A lease row rather than a Postgres advisory lock: advisory locks are session-scoped and
 -- unreliable through PostgREST's pooled connections. src/sync/lock.ts:
---   acquire  acquire_sync_lock(holder, ttl): one conditional update `where name = 'sync' and
---            lease_until < now()`, true when it took the row (a live lease elsewhere: false;
---            a lapsed one is taken over);
+--   acquire  acquire_sync_lock(holder, ttl): one upsert of the 'sync' row that writes only when
+--            the row is missing (it self-heals: a deleted row never means "busy" forever) or its
+--            lease_until < now() (a lapsed lease is taken over); true when it wrote the row, false
+--            when a live lease is held elsewhere;
 --   renew    renew_sync_lock(holder, ttl) while the run lasts, only while holder still matches;
 --   release  in `finally`, a plain update to lease_until = 'epoch', holder = null where holder
 --            still matches (clearing holder means a renewal landing late cannot revive it).
@@ -24,7 +25,7 @@ create table sync_lock (
 alter table sync_lock enable row level security;
 
 revoke all on sync_lock from anon, authenticated;
-grant select, update on sync_lock to service_role;
+grant select, insert, update on sync_lock to service_role;
 
 insert into sync_lock (name) values ('sync') on conflict (name) do nothing;
 
@@ -35,11 +36,12 @@ volatile
 set search_path = public
 as $$
   with taken as (
-    update sync_lock
-       set lease_until = now() + make_interval(secs => p_ttl_seconds),
-           holder = p_holder
-     where name = 'sync'
-       and lease_until < now()
+    insert into sync_lock (name, lease_until, holder)
+    values ('sync', now() + make_interval(secs => p_ttl_seconds), p_holder)
+    on conflict (name) do update
+       set lease_until = excluded.lease_until,
+           holder = excluded.holder
+     where sync_lock.lease_until < now()
     returning 1
   )
   select exists (select 1 from taken);

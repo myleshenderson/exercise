@@ -7,6 +7,7 @@ import { PELOTON_TOKEN_URL } from "./peloton/index.js";
 import {
   DEFAULT_SYNC_TIMEZONE,
   SyncLoadError,
+  SyncLockLostError,
   dailyLoadFrom,
   deadlineSleep,
   memoizeUntilRejected,
@@ -282,6 +283,29 @@ describe("runSync", () => {
     await runSync(s.deps, { ...s.opts, now, today: () => todayIn("Etc/GMT+1", now()), sources: ["garmin"] });
     const rows = s.upsertLoad.mock.calls[0]![0];
     expect(rows[rows.length - 1]!.date).toBe("2026-01-01");
+  });
+
+  it("a lost sync lease ends the run at the next item with 'sync lock lost' (AI-659)", async () => {
+    const s = setup("2026-06-05", "2026-05-28");
+    let lost = false;
+    const garmin = fakeGarmin({ search: pagedSearch(LIST_PAGE) });
+    // The lease is lost while the first ride's detail is fetched.
+    const fetch = async (url: string, init?: RequestInit) => {
+      if (new URL(url).pathname.startsWith("/activity-service/")) lost = true;
+      return garmin.fetch(url, init);
+    };
+    const err = await runSync(
+      { ...s.deps, fetch },
+      { ...s.opts, sources: ["garmin", "peloton"], lost: () => lost },
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SyncLockLostError);
+    expect((err as SyncLockLostError).message).toBe("sync lock lost");
+    // The ride in hand finishes; no further ride, no later source and no daily-load recompute.
+    expect((err as SyncLockLostError).results).toEqual([
+      expect.objectContaining({ source: "garmin_activities", upserted: 1, done: false }),
+    ]);
+    expect(s.store.state.activities.size).toBe(1);
+    expect(s.upsertLoad).not.toHaveBeenCalled();
   });
 
   it("skipDailyLoadRecompute leaves daily_training_load to the caller", async () => {

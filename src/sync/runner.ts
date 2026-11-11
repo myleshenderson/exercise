@@ -78,6 +78,12 @@ export interface SyncOptions {
   today: () => string;
   /** Skip the closing daily-load recompute (the CLI's `--recompute-all` does a full one after). */
   skipDailyLoadRecompute?: boolean;
+  /**
+   * The sync lease's `lost()` (AI-659, src/sync/lock.ts). Once true, the deadline reads as past,
+   * so the running source stops at its next item and no later source starts, and the run throws
+   * `SyncLockLostError` instead of recomputing.
+   */
+  lost?: () => boolean;
 }
 
 /** Moved to src/metrics/dates.ts (shared with the ride MCP tools); re-exported for sync's callers. */
@@ -127,6 +133,14 @@ export class SyncLoadError extends Error {
   ) {
     super(`daily load recompute failed: ${message}`);
     this.name = "SyncLoadError";
+  }
+}
+
+/** The run lost its sync lease mid-run (AI-659); `results` keeps what the sources did. */
+export class SyncLockLostError extends Error {
+  constructor(readonly results: SyncRunResult[]) {
+    super("sync lock lost");
+    this.name = "SyncLockLostError";
   }
 }
 
@@ -183,10 +197,20 @@ export async function runSync(deps: SyncDeps, opts: SyncOptions): Promise<SyncRu
   const { mode, now } = opts;
   /** The running source's deadline; the guarded sleep and the adapters read it. */
   let jobDeadline = opts.deadlineMs;
-  const sleep = deadlineSleep(deps.sleep, () => jobDeadline, now);
+  const lost = opts.lost ?? (() => false);
+  // A lost lease reads as a deadline already past: the adapters' between-item checks end the run.
+  const deadline = () => (lost() ? -Infinity : jobDeadline);
+  const sleep = deadlineSleep(deps.sleep, deadline, now);
 
   const ingestContext = memoizeUntilRejected(() => buildIngestContext(store));
-  const runOpts = () => ({ mode, deadlineMs: jobDeadline, now, ingestContext });
+  const runOpts = () => ({
+    mode,
+    get deadlineMs() {
+      return deadline();
+    },
+    now,
+    ingestContext,
+  });
 
   const jobs: [SyncSource, () => Promise<SyncRunResult>][] = [];
   if (opts.sources.includes("garmin")) {
@@ -218,6 +242,7 @@ export async function runSync(deps: SyncDeps, opts: SyncOptions): Promise<SyncRu
 
   const results: SyncRunResult[] = [];
   for (const [i, [source, run]] of jobs.entries()) {
+    if (lost()) break;
     const start = now();
     jobDeadline = Math.min(opts.deadlineMs, start + Math.max(0, opts.deadlineMs - start) / (jobs.length - i));
     try {
@@ -233,6 +258,7 @@ export async function runSync(deps: SyncDeps, opts: SyncOptions): Promise<SyncRu
     }
   }
 
+  if (lost()) throw new SyncLockLostError(results);
   if (opts.skipDailyLoadRecompute) return results;
   try {
     const today = opts.today();
