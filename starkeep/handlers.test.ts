@@ -29,6 +29,7 @@ import manifest from "../starkeep.manifest.json" with { type: "json" };
 import { createFakeTransport, type FakeTable, type FakeTransport } from "../src/data/starkeep/fakeTransport.js";
 import { FakeDataPlane, fakeJwt, mcpHeaders, TEST_CREDS } from "./test-support.js";
 import type { Transport } from "./serverTransport.js";
+import { DEFAULT_ATHLETE_TIMEZONE, todayIn } from "../src/metrics/dates.js";
 
 // ---- module stubs -------------------------------------------------------------
 
@@ -647,7 +648,8 @@ describe("ride analytics tools (AI-654): same text on the empty scenario", () =>
     vi.useRealTimers();
   });
 
-  const today = () => new Date().toISOString().slice(0, 10);
+  // as_of is the athlete-zone date (AI-670), not the UTC one.
+  const today = () => todayIn(DEFAULT_ATHLETE_TIMEZONE, Date.now());
   const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
 
   it("list_activities", async () => {
@@ -674,6 +676,12 @@ describe("ride analytics tools (AI-654): same text on the empty scenario", () =>
     expect(s.all_time).toMatchObject({ from: null, count: 0, distance_m: 0 });
     expect(s.best_efforts).toHaveLength(15);
     expect(s.power_bests.map((p: { watts: unknown }) => p.watts)).toEqual([null, null, null, null, null]);
+  });
+
+  it("activity_stats: between 00:00Z and New York midnight as_of is the New York date (AI-670)", async () => {
+    vi.setSystemTime(new Date("2026-11-12T02:00:00Z"));
+    const r = await parity("activity_stats");
+    expect(JSON.parse(text(r)).as_of).toBe("2026-11-11");
   });
 
   it("training_load", async () => {
