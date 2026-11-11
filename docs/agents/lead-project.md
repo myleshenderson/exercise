@@ -51,6 +51,14 @@ the session-end docs). Sections follow `.claude/skills/lead/PROFILE-TEMPLATE.md`
   Done about ten minutes after the merge (AI-622 on 2026-11-10: merged, In Progress at
   01:04, Done at 01:09); wait fifteen minutes before setting Done by hand, and set it by
   hand only for a PR Myles merged himself (#69).
+- **Monitor key is unverified.** PR #79 (branch `AI-627-probes`, title `AI-628: ...`, `auto-merge`
+  on AI-628) sat CLEAN for 9 h unmerged on 2026-11-11 until Myles merged it by hand; #80 (branch
+  `AI-627-garmin-openapi`, under the epic) likewise. Until Myles says what the monitor keys on,
+  name a lead PR's branch after the issue that carries the label (`AI-634-docs`, `AI-629-to-main`).
+- **A PR based on another open PR's branch strands its commits** when the base PR merges first:
+  #81 merged into `AI-627-probes` 27 s after #79 took that branch to main (2026-11-11 13:13Z), so
+  PR #82 had to carry the same two commits again. Base every PR on main, as the skill says, even
+  when the files only exist on the other branch (cherry-pick instead).
 - `needs-input` label: blocked on a decision from Myles; leave the issue in Todo or
   Backlog with the questions in a comment.
 - Runner quirks seen here: an agent may skip a decided item in the AC (PR #55 left out
@@ -106,7 +114,7 @@ into the pending issues' ACs before they dispatch.
   the browser. `/repo/node_modules` is stale against the lockfile (no `@starkeep/*`);
   verifiers run `npm ci` in their worktree rather than symlinking it.
   Known stale ones: `wt-main`, `wt-55` to `wt-61`, `wt-lead`, `wt-lead2`, `wt-verify`
-  (earlier sessions), `wt-starkeep`, `wt-verify2`, `wt-lead3` (2026-11-10) and `wt-lead4`
+  (earlier sessions), `wt-starkeep`, `wt-verify2`, `wt-lead3` (2026-11-10), `wt-lead4` and `wt-lead5` (2026-11-11)
   (2026-11-11).
 - Scratch work goes under the session scratchpad directory, never the checkout.
   Starkeep source for research is cloned there (`starkeep-core`, `starkeep-apps`).
