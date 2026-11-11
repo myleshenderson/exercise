@@ -750,10 +750,11 @@ describe("Supabase DataLayer contract", () => {
       expect(stub.queries[2].steps).toEqual([
         { method: "select", args: ["id, workout_day_id, session_sets!inner(id)"] },
         { method: "not", args: ["workout_day_id", "is", null] },
+        { method: "limit", args: [1, { referencedTable: "session_sets" }] },
         { method: "order", args: ["id"] },
         { method: "range", args: [0, 999] },
       ]);
-      expect(stub.queries[3].steps[3]).toEqual({ method: "range", args: [1, 1000] });
+      expect(stub.queries[3].steps[4]).toEqual({ method: "range", args: [1, 1000] });
     });
 
     test("getWorkoutDays reads completion past 1000 sessions: a day done only on the second page is unavailable", async () => {
@@ -1384,11 +1385,15 @@ describe("Supabase DataLayer contract", () => {
       expect(stub.queries.map((q) => q.op)).toEqual(["delete", "delete", "insert"]);
     });
 
-    test("getExerciseHistory reads the exercise's sets with their whole sessions embedded, each session once, newest first", async () => {
+    test("getExerciseHistory scans the sessions that logged the exercise, each with all of its sets, in listSessions' order", async () => {
       const { db, stub } = setup();
-      const s1 = { ...sessionRow("s-1", "day-1", "2026-11-01"), session_sets: [setRow("ex-2", 1, 20, 12), setRow("ex-1", 2, 52.5, 8), setRow("ex-1", 1, "50", 10)] };
-      const s2 = { ...sessionRow("s-2", "day-1", "2026-11-05"), session_sets: [setRow("ex-1", 1, 55, 10)] };
-      stub.reply({ data: [{ id: "ss-1", sessions: s1 }, { id: "ss-2", sessions: s1 }, { id: "ss-3", sessions: s2 }] }, { data: [] });
+      const s1 = {
+        ...sessionRow("s-1", "day-1", "2026-11-01"),
+        session_sets: [setRow("ex-2", 1, 20, 12), setRow("ex-1", 2, 52.5, 8), setRow("ex-1", 1, "50", 10)],
+        probe: [{ id: "ss-1" }, { id: "ss-2" }],
+      };
+      const s2 = { ...sessionRow("s-2", "day-1", "2026-11-05"), session_sets: [setRow("ex-1", 1, 55, 10)], probe: [{ id: "ss-3" }] };
+      stub.reply({ data: [s2, s1] }, { data: [] });
       expect(await db.getExerciseHistory("ex-1")).toEqual([
         { id: "s-2", workoutDayId: "day-1", performedOn: "2026-11-05", exercises: [{ exerciseId: "ex-1", sets: [{ setNumber: 1, weight: 55, reps: 10 }] }] },
         {
@@ -1402,10 +1407,15 @@ describe("Supabase DataLayer contract", () => {
         },
       ]);
       expect(stub.queries).toHaveLength(2);
-      expect(stub.queries[0].table).toBe("session_sets");
+      expect(stub.queries[0].table).toBe("sessions");
       expect(stub.queries[0].steps).toEqual([
-        { method: "select", args: ["id, sessions!inner(id, workout_day_id, performed_on, session_sets(exercise_id, set_number, weight, reps))"] },
-        { method: "eq", args: ["exercise_id", "ex-1"] },
+        {
+          method: "select",
+          args: ["id, workout_day_id, performed_on, created_at, session_sets(exercise_id, set_number, weight, reps), probe:session_sets!inner(id)"],
+        },
+        { method: "eq", args: ["probe.exercise_id", "ex-1"] },
+        { method: "order", args: ["performed_on", { ascending: false }] },
+        { method: "order", args: ["created_at", { ascending: false }] },
         { method: "order", args: ["id"] },
         { method: "range", args: [0, 999] },
       ]);
@@ -1439,7 +1449,7 @@ describe("Supabase DataLayer contract", () => {
       expect(stub.queries).toHaveLength(2);
       expect(stub.queries[0].table).toBe("sessions");
       expect(stub.queries[0].steps).toEqual([
-        { method: "select", args: ["id, workout_day_id, performed_on, session_sets(exercise_id, set_number, weight, reps)"] },
+        { method: "select", args: ["id, workout_day_id, performed_on, created_at, session_sets(exercise_id, set_number, weight, reps)"] },
         { method: "order", args: ["performed_on", { ascending: false }] },
         { method: "order", args: ["created_at", { ascending: false }] },
         { method: "order", args: ["id"] },
@@ -1480,15 +1490,14 @@ describe("Supabase DataLayer contract", () => {
 
       test("getExerciseHistory returns all 1200 sessions logged with the exercise from three requests", async () => {
         const { db, stub } = setup();
-        stub.reply(...pagesOf(ids.map((id, i) => ({ id: `ss-${i}`, sessions: withSets(id) }))));
+        stub.reply(...pagesOf(ids.map((id, i) => ({ ...withSets(id), probe: [{ id: `ss-${i}` }] }))));
         const out = await db.getExerciseHistory("ex-1");
-        expect(out).toHaveLength(ROWS);
-        expect(new Set(out.map((s) => s.id))).toEqual(new Set(ids));
+        expect(out.map((s) => s.id)).toEqual(ids);
         expect(stub.queries).toHaveLength(3);
-        expectTwoPages(stub, "session_sets");
+        expectTwoPages(stub, "sessions");
         const [first, second] = stub.queries;
         expect(second.steps.slice(0, -1)).toEqual(first.steps.slice(0, -1));
-        expect(stub.filters(second)).toEqual([["eq", "exercise_id", "ex-1"]]);
+        expect(stub.filters(second)).toEqual([["eq", "probe.exercise_id", "ex-1"]]);
       });
 
       test("listSessions keeps the first copy of a session read twice across pages", async () => {
@@ -1509,7 +1518,7 @@ describe("Supabase DataLayer contract", () => {
         await expect(db.listSessions()).resolves.toEqual([]);
       });
 
-      test("getExerciseHistory returns [] when the session_sets read fails", async () => {
+      test("getExerciseHistory returns [] when the sessions read fails", async () => {
         const { db, stub } = setup();
         stub.reply({ error: FAIL });
         await expect(db.getExerciseHistory("ex-1")).resolves.toEqual([]);
@@ -1520,6 +1529,14 @@ describe("Supabase DataLayer contract", () => {
         stub.reply({ error: FAIL });
         await expect(db.getLastSetsForExercise("ex-1", "2026-11-08")).resolves.toEqual([]);
         expect(stub.queries).toHaveLength(1);
+      });
+
+      test("getLastSetsForExercise returns [] when its follow-up read fails", async () => {
+        const { db, stub } = setup();
+        const full = Array.from({ length: 200 }, (_, i) => ({ session_id: "s-1", set_number: i + 1, weight: 50, reps: 5 }));
+        stub.reply({ data: full }, { error: FAIL });
+        await expect(db.getLastSetsForExercise("ex-1", "2026-11-08")).resolves.toEqual([]);
+        expect(stub.queries).toHaveLength(2);
       });
     });
 
@@ -2456,11 +2473,28 @@ describe("bounded strength reads (AI-667)", () => {
       expect(await db.listSessions()).toEqual(expected);
     });
 
-    test.each(["ex-a", "ex-b", "ex-c", "ex-never"])("getExerciseHistory(%s)", async (exerciseId) => {
+    // The old comparator never returned 0, so its same-date order was engine
+    // dependent; the new read uses listSessions' order (performed_on desc,
+    // created_at desc, id), so the expectation is listSessions narrowed to the
+    // sessions that logged the exercise, and the old read must agree on the set.
+    test.each(["ex-a", "ex-b", "ex-c", "ex-never"])("getExerciseHistory(%s) in listSessions' order", async (exerciseId) => {
       const { db, stub } = setupTables(twentySessions());
-      const expected = await oracle(stub.client).getExerciseHistory(exerciseId);
+      const old = oracle(stub.client);
+      const expected = (await old.listSessions()).filter((s) => s.exercises.some((e) => e.exerciseId === exerciseId));
       if (exerciseId !== "ex-never") expect(expected.length).toBeGreaterThan(5);
-      expect(await db.getExerciseHistory(exerciseId)).toEqual(expected);
+      const out = await db.getExerciseHistory(exerciseId);
+      expect(out).toEqual(expected);
+      const byId = (xs: Session[]) => [...xs].sort((a, b) => a.id.localeCompare(b.id));
+      expect(byId(out)).toEqual(byId(await old.getExerciseHistory(exerciseId)));
+    });
+
+    test("getExerciseHistory orders same-date sessions by created_at desc, then id", async () => {
+      const { db } = setupTables(twentySessions());
+      const out = await db.getExerciseHistory("ex-c");
+      // 2026-10-03 holds two ex-c sessions with the same created_at, so id decides.
+      expect(out.filter((s) => s.performedOn === "2026-10-03").map((s) => s.id)).toEqual(["sess-08", "sess-15"]);
+      // 2026-10-06 holds two with different created_at: the later (and higher id) comes first.
+      expect(out.filter((s) => s.performedOn === "2026-10-06").map((s) => s.id)).toEqual(["sess-17", "sess-10"]);
     });
 
     test("getLastSetsForExercise for every exercise and every cut-off date", async () => {
@@ -2500,12 +2534,46 @@ describe("bounded strength reads (AI-667)", () => {
       expect(stub.queries).toHaveLength(3);
     });
 
-    test(`getExerciseHistory reads all 1200 in at most ceil(sets/1000)+1 requests`, async () => {
+    test(`getExerciseHistory reads all 1200 in ceil(sessions/1000)+1 requests`, async () => {
       const { db, stub } = setupTables(tables);
       const out = await db.getExerciseHistory("ex-1");
       expect(out).toHaveLength(1200);
+      expect(out[0].id).toBe("s-1199");
       expect(out[0].exercises).toHaveLength(2);
+      expect(stub.queries).toHaveLength(Math.ceil(tables.sessions.length / 1000) + 1);
       expect(stub.queries.length).toBeLessThanOrEqual(Math.ceil(exSets / 1000) + 1);
+    });
+
+    test("getLastSetsForExercise makes one follow-up read when the newest session fills the 200-row window", async () => {
+      for (const [count, requests] of [[199, 1], [200, 2], [250, 2]]) {
+        const sessions = [
+          { id: "s-old", workout_day_id: null, performed_on: "2026-11-01", created_at: "2026-11-01T08:00:00Z" },
+          { id: "s-big", workout_day_id: null, performed_on: "2026-11-05", created_at: "2026-11-05T08:00:00Z" },
+        ];
+        const session_sets = [
+          ...[1, 2, 3].map((n) => ({ id: `old-${n}`, session_id: "s-old", exercise_id: "ex-1", set_number: n, weight: 40, reps: 10 })),
+          { id: "other", session_id: "s-big", exercise_id: "ex-2", set_number: 1, weight: 10, reps: 10 },
+          ...Array.from({ length: count }, (_, i) => ({
+            id: `big-${String(i).padStart(3, "0")}`,
+            session_id: "s-big",
+            exercise_id: "ex-1",
+            set_number: count - i,
+            weight: 60,
+            reps: 5,
+          })),
+        ];
+        const { db, stub } = setupTables({ sessions, session_sets });
+        const out = await db.getLastSetsForExercise("ex-1", "2026-11-08");
+        expect([count, out.map((s) => s.setNumber)]).toEqual([count, Array.from({ length: count }, (_, i) => i + 1)]);
+        expect([count, stub.queries.length]).toEqual([count, requests]);
+        if (requests === 2) {
+          expect(stub.queries[1].table).toBe("session_sets");
+          expect(stub.filters(stub.queries[1])).toEqual([
+            ["eq", "session_id", "s-big"],
+            ["eq", "exercise_id", "ex-1"],
+          ]);
+        }
+      }
     });
 
     test("the per-session implementation it replaces cost a request pair per session", async () => {
@@ -2582,6 +2650,42 @@ describe("bounded strength reads (AI-667)", () => {
       expect((await capped.from("sessions").select("id").order("id").range(0, 999)).data).toEqual([{ id: "s-1" }, { id: "s-2" }]);
     });
 
+    test("an unfiltered !inner embed drops parents with no related rows; a plain embed keeps them with []", async () => {
+      const t: Tables = { sessions: [...tables.sessions, { id: "s-5" }], session_sets: tables.session_sets };
+      const c = createSupabaseStub({ tables: t, foreignKeys: SESSION_FKS }).client;
+      expect((await c.from("sessions").select("id, session_sets!inner(id)").order("id")).data).toEqual([
+        { id: "s-1", session_sets: [{ id: "a" }] },
+        { id: "s-2", session_sets: [{ id: "b" }, { id: "c" }] },
+        { id: "s-3", session_sets: [{ id: "d" }] },
+        { id: "s-4", session_sets: [{ id: "e" }] },
+      ]);
+      expect((await c.from("sessions").select("id, session_sets(id)").eq("id", "s-5")).data).toEqual([{ id: "s-5", session_sets: [] }]);
+    });
+
+    test("an aliased inner embed filters the parents while the unaliased embed of the same table keeps every row", async () => {
+      const t: Tables = {
+        sessions: [{ id: "s-1" }, { id: "s-2" }],
+        session_sets: [
+          { id: "a", session_id: "s-1", exercise_id: "ex-1" },
+          { id: "b", session_id: "s-1", exercise_id: "ex-2" },
+          { id: "c", session_id: "s-2", exercise_id: "ex-2" },
+        ],
+      };
+      const c = createSupabaseStub({ tables: t, foreignKeys: SESSION_FKS }).client;
+      const { data } = await c.from("sessions").select("id, session_sets(id), probe:session_sets!inner(id)").eq("probe.exercise_id", "ex-1");
+      expect(data).toEqual([{ id: "s-1", session_sets: [{ id: "a" }, { id: "b" }], probe: [{ id: "a" }] }]);
+    });
+
+    test("limit with referencedTable caps each parent's embedded rows, not the top level", async () => {
+      const { data } = await client().from("sessions").select("id, session_sets!inner(id)").limit(1, { referencedTable: "session_sets" }).order("id");
+      expect(data).toEqual([
+        { id: "s-1", session_sets: [{ id: "a" }] },
+        { id: "s-2", session_sets: [{ id: "b" }] },
+        { id: "s-3", session_sets: [{ id: "d" }] },
+        { id: "s-4", session_sets: [{ id: "e" }] },
+      ]);
+    });
+
     test("a queued reply still wins over the tables", async () => {
       const stub = createSupabaseStub({ tables, foreignKeys: SESSION_FKS });
       stub.reply({ data: [{ id: "canned" }] });
@@ -2591,6 +2695,17 @@ describe("bounded strength reads (AI-667)", () => {
     test("syntax it does not model fails loudly", () => {
       expect(() => client().from("sessions").select("id, other(id)").then(() => undefined)).toThrow(/no foreign key/);
       expect(() => parseSelect("id, count()::int")).toThrow(/unsupported select item/);
+      expect(() => parseSelect("id, session_sets(id), session_sets(set_number)")).toThrow(/appears twice/);
+      const run = (q: PromiseLike<unknown>) => () => q.then(() => undefined);
+      const c = client();
+      expect(
+        run(c.from("session_sets").select("id, sessions!inner(id, session_sets(id))").eq("sessions.session_sets.exercise_id", "ex-1")),
+      ).toThrow(/nested embed path/);
+      expect(run(c.from("sessions").select("id").order("id", { nullsFirst: true }))).toThrow(/nullsFirst/);
+      expect(run(c.from("sessions").select("id, session_sets(id)").range(0, 1, { referencedTable: "session_sets" }))).toThrow(/range/);
+      expect(run(c.from("sessions").select("id, session_sets(id)").limit(1, { foreignTable: "session_sets" }))).toThrow(/foreignTable/);
+      expect(run(c.from("session_sets").select("id, sessions(id)").limit(1, { referencedTable: "sessions" }))).toThrow(/to-one/);
+      expect(run(c.from("sessions").select("id").limit(1, { referencedTable: "session_sets" }))).toThrow(/not embedded/);
     });
   });
 
@@ -2627,10 +2742,24 @@ describe("bounded strength reads (AI-667)", () => {
     test("getExerciseHistory", async () => {
       const { db, urls, params } = realClient();
       await db.getExerciseHistory("ex-1");
-      expect(urls[0].pathname).toBe("/rest/v1/session_sets");
+      expect(urls[0].pathname).toBe("/rest/v1/sessions");
       expect(params(0)).toEqual({
-        select: "id,sessions!inner(id,workout_day_id,performed_on,session_sets(exercise_id,set_number,weight,reps))",
-        exercise_id: "eq.ex-1",
+        select: "id,workout_day_id,performed_on,created_at,session_sets(exercise_id,set_number,weight,reps),probe:session_sets!inner(id)",
+        "probe.exercise_id": "eq.ex-1",
+        order: "performed_on.desc,created_at.desc,id.asc",
+        offset: "0",
+        limit: "1000",
+      });
+    });
+
+    test("the getWorkoutDays completion read", async () => {
+      const { db, urls, params } = realClient();
+      await db.getWorkoutDays();
+      const i = urls.findIndex((u) => u.pathname === "/rest/v1/sessions");
+      expect(params(i)).toEqual({
+        select: "id,workout_day_id,session_sets!inner(id)",
+        workout_day_id: "not.is.null",
+        "session_sets.limit": "1",
         order: "id.asc",
         offset: "0",
         limit: "1000",
@@ -2642,7 +2771,7 @@ describe("bounded strength reads (AI-667)", () => {
       await db.listSessions();
       expect(urls[0].pathname).toBe("/rest/v1/sessions");
       expect(params(0)).toEqual({
-        select: "id,workout_day_id,performed_on,session_sets(exercise_id,set_number,weight,reps)",
+        select: "id,workout_day_id,performed_on,created_at,session_sets(exercise_id,set_number,weight,reps)",
         order: "performed_on.desc,created_at.desc,id.asc",
         offset: "0",
         limit: "1000",
