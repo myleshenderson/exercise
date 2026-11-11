@@ -3,7 +3,7 @@
  * and `api/sync.ts` (the daily Vercel cron). Pure: the caller injects env, fetch, sleep, the
  * store and the SecretBox, so nothing here reads process.env or imports node:*.
  */
-import { localDate, type EftpRide } from "../metrics/index.js";
+import type { EftpRide } from "../metrics/index.js";
 import type { SyncSource } from "../types.js";
 import { createGarminClient, runGarminActivities, runGarminWeight } from "./garmin/index.js";
 import { errorMessage } from "./garmin/runShared.js";
@@ -80,10 +80,8 @@ export interface SyncOptions {
   skipDailyLoadRecompute?: boolean;
 }
 
-/** `YYYY-MM-DD` of an instant in `timeZone` (UTC when the zone is unknown). */
-export function todayIn(timeZone: string, nowMs: number): string {
-  return localDate(new Date(nowMs).toISOString(), timeZone) ?? new Date(nowMs).toISOString().slice(0, 10);
-}
+/** Moved to src/metrics/dates.ts (shared with the ride MCP tools); re-exported for sync's callers. */
+export { todayIn } from "../metrics/index.js";
 
 function shiftDate(date: string, days: number): string {
   const shifted = addDays(date, days);

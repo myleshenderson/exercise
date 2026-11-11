@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-// The 25 MCP tools exposed by every backend (the Vercel/Supabase server in
+// The 32 MCP tools exposed by every backend (the Vercel/Supabase server in
 // api/mcp.ts today, Starkeep next): name, title, description and zod input shape.
 // Data access lives in each backend's McpToolHandlers (see ./handlers.ts); nothing
 // here may import from api/, src/data/ or @supabase/*.
@@ -205,6 +205,69 @@ export const TOOL_DEFINITIONS = [
     description:
       "Rewrites a program's day order for the authenticated user. day_ids must be exactly the program's current membership (same members, any order); membership changes must go through add_day_to_program/remove_day_from_program instead.",
     inputSchema: { program_id: z.string(), day_ids: z.array(z.string()) },
+  },
+  {
+    name: "list_activities",
+    title: "List activities",
+    description:
+      "Rides and other cardio activities (Garmin, Peloton, Strava archive), newest first: time, distance (m and mi), elevation (m and ft), power, intensity, TSS (tss_estimated when no power) and heart rate. Garmin fragments under 60 s are hidden and a Garmin recording of a Peloton class is folded into the Peloton row as paired_with. Optionally filter by UTC date range (start_date/end_date), environment and source, for the authenticated user.",
+    inputSchema: {
+      start_date: z.string().optional().describe("Only include activities started on or after this UTC day (YYYY-MM-DD)."),
+      end_date: z.string().optional().describe("Only include activities started on or before this UTC day (YYYY-MM-DD)."),
+      environment: z.enum(["indoor", "outdoor"]).optional().describe("Only include indoor or only outdoor activities."),
+      source: z.enum(["garmin", "peloton", "strava_export"]).optional().describe("Only include activities from this source."),
+      limit: z.number().optional().describe("Maximum number of activities to return, an integer from 1 to 500 (default 100)."),
+    },
+  },
+  {
+    name: "get_activity",
+    title: "Get activity",
+    description:
+      "One activity in full, targeted by id (from list_activities): its stored metrics, the FTP used, time in each power zone (Coggan, % FTP) and heart-rate zone (Friel % LTHR, else % max HR), each distance best effort with the outdoor record time and whether it is the record, the biggest climb and any paired recording, for the authenticated user.",
+    inputSchema: { activity_id: z.string() },
+  },
+  {
+    name: "activity_stats",
+    title: "Activity stats",
+    description:
+      "Ride totals (count, moving time, distance with its indoor part, elevation, TSS, work) for the last 4 weeks, year to date, the previous year to the same day of year and all time; the 15 personal-record rows (longest ride, biggest climb, most elevation and 12 distance best efforts, outdoor rides only); and the 5 s, 1 min, 5 min, 20 min and 1 h power bests, as of a day (as_of, default today in the athlete's time zone), for the authenticated user.",
+    inputSchema: {
+      as_of: z.string().optional().describe("The day (YYYY-MM-DD) the totals and records are taken at, each ride counted on its local day; default today in the athlete's time zone."),
+    },
+  },
+  {
+    name: "training_load",
+    title: "Training load",
+    description:
+      "Daily TSS (total and by source) with fitness (CTL), fatigue (ATL) and form (TSB) for the last `days` days, the latest stored day's form with its band (overreaching, productive, grey, fresh, transition), the CTL ramp rate over the last 7 days, and TSS by source for each of the last 12 weeks, for the authenticated user.",
+    inputSchema: {
+      days: z.number().optional().describe("How many days of daily rows to return, an integer from 7 to 730 (default 90)."),
+    },
+  },
+  {
+    name: "power_curve",
+    title: "Power curve",
+    description:
+      "Best power for every stored duration (watts, W/kg at the 7-day average weight, and the activity it came from) over the last `window_days` days or all time, with the estimated FTP (95% of the best 20-minute power in the last 90 days) and the FTP in use with its source (the manual FTP when set, else the latest FTP history entry such as a Peloton FTP test, else the estimate), for the authenticated user.",
+    inputSchema: {
+      window_days: z.number().optional().describe("Only use activities from the last this many days, an integer from 1 to 3650; omit for all time."),
+    },
+  },
+  {
+    name: "weight_history",
+    title: "Weight history",
+    description:
+      "Weigh-ins (kg and lb) for the last `days` days, the 7-day average, the change over 4 weeks and the rate per week (kg and lb), and W/kg (the FTP in use, as power_curve reports it, over the 7-day average) with its rating band, for the authenticated user.",
+    inputSchema: {
+      days: z.number().optional().describe("How many days of weigh-ins to return, an integer from 7 to 3650 (default 90)."),
+    },
+  },
+  {
+    name: "sync_status",
+    title: "Sync status",
+    description:
+      "One row per data source (Garmin activities, Garmin weight, Peloton): when it last ran and last succeeded, items fetched and stored on the last run, the last error, whether the history backfill is complete, and whether the connection needs reconnecting, for the authenticated user.",
+    inputSchema: undefined,
   },
 ] as const satisfies readonly ToolDefinition[];
 
