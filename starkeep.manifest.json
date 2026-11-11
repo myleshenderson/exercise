@@ -124,6 +124,7 @@
           "auth": "session",
           "publicPaths": [
             "/",
+            "/sign-in",
             "/days",
             "/workouts",
             "/mcp-login",
@@ -135,6 +136,7 @@
           ],
           "staticAssetPaths": [
             "/",
+            "/sign-in",
             "/days",
             "/workouts",
             "/mcp-login",

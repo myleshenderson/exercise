@@ -14,6 +14,9 @@
  */
 export const CLIENT_ROUTES = [
   "/",
+  // Where the cloud's CloudFront function sends a signed-out browser navigation.
+  // It must be public and served, or the redirect ends in the gateway's 401.
+  "/sign-in",
   "/days",
   "/workouts",
   "/mcp-login",

@@ -30,7 +30,7 @@ tools pinned in `src/mcp/__fixtures__/tools-list.main.json`.
 | `starkeep/mcpTokens.ts` | The `mcp_tokens` row calls (find, list, insert, delete, touch). |
 | `starkeep/serve.ts` | Local entry (`localRun`): Node server on loopback, Hono for server paths, `dist/` for the rest. |
 | `starkeep/handler.ts` | Cloud Lambda entry: `createWebAppHandler` + `honoUpstream`. |
-| `starkeep/client-routes.ts` | The SPA's client routes, used as cloud `shellPaths`. |
+| `starkeep/client-routes.ts` | The SPA's client routes, used as cloud `shellPaths`. Includes `/sign-in`, where the cloud's CloudFront function sends a signed-out browser; it must stay public and served (see `docs/agents/project-memory.md`). |
 | `starkeep/build-bundle.ts` | `npm run bundle` / `pnpm bundle`: writes `dist.zip`. |
 | `starkeep/spa-build.ts` | The Starkeep `vite build` both of the above use: forces `VITE_DATA_BACKEND=starkeep`, checks the main chunk, and decides when the local `dist/` needs a rebuild. |
 | `starkeep/validate-manifest.ts` | `npm run starkeep:validate`. |

@@ -76,6 +76,15 @@ describe("starkeep.manifest.json", () => {
     expect(JSON.stringify(result.manifest)).not.toContain("STARKEEP_MCP_TOKEN");
   });
 
+  it("declares the platform's sign-in redirect target as a public client route", () => {
+    // The cloud's CloudFront function sends a signed-out browser navigation to
+    // /apps/exercise/sign-in. Undeclared, that path is behind the gateway's
+    // session authorizer and answers {"message":"Unauthorized"} (AI-626).
+    const shell = result.manifest!.infraRequirements.compute.handlers.find((h) => h.name === "static")!;
+    expect(CLIENT_ROUTES).toContain("/sign-in");
+    expect(shell.publicPaths).toContain("/sign-in");
+  });
+
   it("serves exactly the SPA client routes and the immutable prefix from disk", () => {
     const shell = result.manifest!.infraRequirements.compute.handlers.find((h) => h.name === "static")!;
     expect([...shell.staticAssetPaths].sort()).toEqual([...CLIENT_ROUTES, IMMUTABLE_PREFIX].sort());
