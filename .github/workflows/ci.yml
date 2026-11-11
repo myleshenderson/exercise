@@ -78,4 +78,4 @@ jobs:
             exit 0
           fi
           supabase link --project-ref "$SUPABASE_PROJECT_REF"
-          supabase db push --remote
+          supabase db push --remote --yes
