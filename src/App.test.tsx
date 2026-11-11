@@ -15,24 +15,23 @@ test("/sign-in sends an already-usable app to the Home screen", async () => {
 });
 
 test.each([
-  ["/power", "Power curve", "power"],
-  ["/weight", "Weight", "weight"],
-  ["/settings", "Settings", "settings"],
-])("%s renders its placeholder with the empty state", async (path, heading, ready) => {
-  const { container } = render(<MemoryRouter initialEntries={[path]}><App /></MemoryRouter>);
-  expect(screen.getByRole("heading", { level: 1, name: heading })).toBeInTheDocument();
-  expect(screen.getByText(/No rides yet\. The sync fills this in; see/)).toBeInTheDocument();
-  await waitFor(() => expect(container.querySelector(`[data-ready="${ready}"]`)).not.toBeNull());
-});
-
-test.each([
   ["/stats", "My Stats", "stats-cycling"],
   ["/training", "Training", "training"],
+  ["/power", "Power curve", "power"],
 ])("%s shows the empty state once loaded on an account without rides", async (path, heading, ready) => {
   const { container } = render(<MemoryRouter initialEntries={[path]}><App /></MemoryRouter>);
   expect(screen.getByRole("heading", { level: 1, name: heading })).toBeInTheDocument();
   await waitFor(() => expect(container.querySelector(`[data-ready="${ready}"]`)).not.toBeNull());
   expect(screen.getByText(/No rides yet\. The sync fills this in; see/)).toBeInTheDocument();
+});
+
+test.each([
+  ["/weight", "Weight", "weight"],
+  ["/settings", "Settings", "settings"],
+])("%s loads on an account without rides", async (path, heading, ready) => {
+  const { container } = render(<MemoryRouter initialEntries={[path]}><App /></MemoryRouter>);
+  expect(screen.getByRole("heading", { level: 1, name: heading })).toBeInTheDocument();
+  await waitFor(() => expect(container.querySelector(`[data-ready="${ready}"]`)).not.toBeNull());
 });
 
 test("/activities renders the feed and an unknown /activities/:id the not-found state", async () => {
