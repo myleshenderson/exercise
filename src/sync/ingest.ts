@@ -102,7 +102,16 @@ function bestEffortsOf(cumDistance: Stream): BestEffort[] {
   return out;
 }
 
-export function ingestActivity(a: ProviderActivity, channels: Channels | null, ctx: IngestContext): IngestResult {
+/**
+ * `streamStartOffsetS` is the seconds from `a.startedAt` to slot 0 of every channel; it is stored
+ * as each stream's start_offset_s.
+ */
+export function ingestActivity(
+  a: ProviderActivity,
+  channels: Channels | null,
+  ctx: IngestContext,
+  streamStartOffsetS = 0,
+): IngestResult {
   const ch: Channels = channels ?? {};
   const power = ch.power ?? null;
   const hasPower = streamHasPower(power);
@@ -121,7 +130,7 @@ export function ingestActivity(a: ProviderActivity, channels: Channels | null, c
 
   const streams: ActivityStreamInput[] = [];
   for (const [channel, values] of Object.entries(ch) as [StreamChannel, (number | null)[] | undefined][]) {
-    if (values && values.length > 0) streams.push({ channel, startOffsetS: 0, values });
+    if (values && values.length > 0) streams.push({ channel, startOffsetS: streamStartOffsetS, values });
   }
 
   return {

@@ -98,6 +98,16 @@ describe("ingestActivity", () => {
       { channel: "speed", startOffsetS: 0, values: [5, null] },
     ]);
   });
+
+  it("puts streamStartOffsetS on every stream without changing startedAt or the arrays", () => {
+    const channels = { power: [200, 210], heart_rate: [120, null] };
+    const { row, streams } = ingestActivity(activity(), channels, context(), 7);
+    expect(row.startedAt).toBe(activity().startedAt);
+    expect(streams).toEqual([
+      { channel: "power", startOffsetS: 7, values: [200, 210] },
+      { channel: "heart_rate", startOffsetS: 7, values: [120, null] },
+    ]);
+  });
 });
 
 describe("resolveFtp", () => {

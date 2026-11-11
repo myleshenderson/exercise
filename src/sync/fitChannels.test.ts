@@ -2,7 +2,7 @@ import { zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import { FitError } from "../fit/index.js";
 import { BT, data, def, encodeFit } from "../fit/testing/encodeFit.js";
-import { channelsFromFit } from "./fitChannels.js";
+import { channelsFromFit, channelsFromFitWithStart } from "./fitChannels.js";
 
 const T0 = 1_000_000_000; // FIT seconds
 
@@ -37,5 +37,18 @@ describe("channelsFromFit", () => {
   it("lets FitError propagate", () => {
     expect(() => channelsFromFit(new Uint8Array([1, 2, 3]), "fit")).toThrow(FitError);
     expect(() => channelsFromFit(zipSync({ "a.txt": new Uint8Array([1]) }), "zip")).toThrow(FitError);
+  });
+});
+
+describe("channelsFromFitWithStart", () => {
+  it("returns the channels and the first record's instant", () => {
+    const r = channelsFromFitWithStart(zipSync({ "1_ACTIVITY.fit": fit }), "zip");
+    expect(r.channels).toEqual(channelsFromFit(fit, "fit"));
+    expect(r.startTime).toBe("2021-09-08T01:46:40.000Z"); // FIT 1e9 s
+  });
+
+  it("gives a null start for a FIT without timed records", () => {
+    const empty = encodeFit([def(0, 20, [{ num: 7, baseType: BT.uint16 }]), data(0, [200])]);
+    expect(channelsFromFitWithStart(empty, "fit")).toEqual({ channels: {}, startTime: null });
   });
 });

@@ -30,6 +30,11 @@ export interface FinishArgs {
   error: unknown;
   /** True once a token exchange succeeded in this run. */
   tokenOk: boolean;
+  /**
+   * Non-fatal notes on items the run stored but flagged. With no error they become last_error
+   * (joined by "; ") and the result's `notes`; they do not fail the run.
+   */
+  notes?: string[];
   /** Epoch ms the run began; last_success_at records this, so nothing newer is assumed read. */
   startedMs: number;
   /** False keeps the stored last_success_at even without an error; see successAdvances. */
@@ -39,6 +44,8 @@ export interface FinishArgs {
 /** Writes the sync_state row for the run's end and builds its result. */
 export async function finishRun(store: SyncStore, now: () => number, a: FinishArgs): Promise<SyncRunResult> {
   const error = a.error === null ? null : errorMessage(a.error);
+  const notes = a.notes ?? [];
+  const lastError = error ?? (notes.length > 0 ? notes.join("; ") : null);
   const at = new Date(now()).toISOString();
   const authFailed = a.error instanceof GarminAuthError;
   await store.saveSyncState({
@@ -48,7 +55,7 @@ export async function finishRun(store: SyncStore, now: () => number, a: FinishAr
     lastRunAt: at,
     itemsFetched: a.fetched,
     itemsUpserted: a.upserted,
-    lastError: error,
+    lastError,
     ...(error === null && a.advanceSuccess ? { lastSuccessAt: new Date(a.startedMs).toISOString() } : {}),
     ...(authFailed ? { authStatus: "reconnect_required" as const } : a.tokenOk ? { authStatus: "ok" as const } : {}),
   });
@@ -60,6 +67,7 @@ export async function finishRun(store: SyncStore, now: () => number, a: FinishAr
     done: a.done && error === null,
     earliestAffected: a.earliestAffected,
     error,
+    ...(notes.length > 0 ? { notes } : {}),
   };
 }
 

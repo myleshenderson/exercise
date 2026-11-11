@@ -1,5 +1,5 @@
 /** Garmin rides: resumable newest-first backfill, then a daily incremental sync (AI-638). */
-import { channelsFromFit } from "../fitChannels.js";
+import { channelsFromFitWithStart } from "../fitChannels.js";
 import { SyncDeadlineError } from "../http.js";
 import { ingestActivity } from "../ingest.js";
 import { persistActivity } from "../persist.js";
@@ -19,6 +19,20 @@ export interface GarminRunOptions {
 }
 
 const SOURCE = "garmin_activities" as const;
+
+/** A FIT whose first record is further than this from beginTimestamp has a corrupt header (AI-645). */
+export const MAX_FIT_START_OFFSET_S = 3600;
+
+/**
+ * Seconds from the activity's start to the FIT's first record, floored; 0 without a FIT start.
+ * `ok` is false when the gap exceeds MAX_FIT_START_OFFSET_S (the offset is then 0).
+ */
+export function fitStartOffsetS(startedAt: string, fitStartTime: string | null): { offsetS: number; ok: boolean } {
+  if (fitStartTime === null) return { offsetS: 0, ok: true };
+  const offsetS = Math.floor((Date.parse(fitStartTime) - Date.parse(startedAt)) / 1000);
+  if (!Number.isFinite(offsetS) || Math.abs(offsetS) > MAX_FIT_START_OFFSET_S) return { offsetS: 0, ok: false };
+  return { offsetS, ok: true };
+}
 
 function readCursor(raw: unknown): GarminActivitiesCursor | null {
   if (!raw || typeof raw !== "object") return null;
@@ -55,6 +69,7 @@ export async function runGarminActivities(
   let skipped = 0;
   let earliest: string | null = null;
   let tokenOk = false;
+  const notes: string[] = [];
 
   const finish = (done: boolean, error: unknown) =>
     finishRun(store, opts.now, {
@@ -68,6 +83,7 @@ export async function runGarminActivities(
       earliestAffected: earliest,
       error,
       tokenOk,
+      notes,
       startedMs,
       advanceSuccess: successAdvances(backfill, done, state?.lastSuccessAt),
     });
@@ -81,8 +97,9 @@ export async function runGarminActivities(
     if (await store.hasActivity("garmin", String(id))) return;
     const detail = await client.activityDetail(id);
     let channels: Channels | null = null;
+    let fitStartTime: string | null = null;
     try {
-      channels = channelsFromFit(await client.activityFitZip(id), "zip");
+      ({ channels, startTime: fitStartTime } = channelsFromFitWithStart(await client.activityFitZip(id), "zip"));
     } catch (e) {
       // Auth and deadline refusals end the run: the ride stays unstored and the cursor stays on
       // this page, so the next run fetches it in full.
@@ -91,9 +108,19 @@ export async function runGarminActivities(
       skipped++;
     }
     const provider = garminToProvider(item, detail.timeZoneUnitDTO?.timeZone ?? null);
-    const result = ingestActivity(provider, channels, await opts.ingestContext());
+    // Slot 0 of the channels is the FIT's first record, which can trail beginTimestamp (GPS lock,
+    // auto-start). The streams keep startedAt and carry the gap as start_offset_s.
+    const offset = fitStartOffsetS(provider.startedAt, fitStartTime);
+    const result = ingestActivity(provider, channels, await opts.ingestContext(), offset.offsetS);
     await persistActivity(store, result);
     upserted++;
+    if (!offset.ok) {
+      // A corrupt FIT header: the streams are stored at offset 0 and the ride is flagged.
+      skipped++;
+      notes.push(
+        `activity ${id}: FIT start ${fitStartTime} is more than ${MAX_FIT_START_OFFSET_S} s from ${provider.startedAt}; streams stored at offset 0`,
+      );
+    }
     if (earliest === null || Date.parse(provider.startedAt) < Date.parse(earliest)) earliest = provider.startedAt;
   }
 
