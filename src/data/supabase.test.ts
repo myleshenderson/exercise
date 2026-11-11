@@ -1634,6 +1634,20 @@ describe("Supabase DataLayer contract: ride analytics", () => {
       stub.reply({ error: FAIL });
       await expect(upsertExternalActivities(stub.client, [{ ...input, sourceId: "p-3", startedAt: NOW }])).rejects.toBe(FAIL);
     });
+
+    test("upsertExternalActivities refuses a row without providerPayload before any query", async () => {
+      const stub = createSupabaseStub();
+      const ok = { source: "garmin" as const, sport: "cycling", environment: "outdoor" as const, startedAt: NOW, providerPayload: {} };
+      for (const bad of [undefined, null]) {
+        await expect(
+          upsertExternalActivities(stub.client, [
+            { ...ok, sourceId: "g-1" },
+            { ...ok, sourceId: "g-2", providerPayload: bad },
+          ]),
+        ).rejects.toThrow("external activity garmin/g-2 has no providerPayload");
+      }
+      expect(stub.queries).toHaveLength(0);
+    });
   });
 
   test("bulk upserts collapse rows sharing a conflict key to the last one; ftp_used_w is rounded", async () => {
@@ -1653,15 +1667,16 @@ describe("Supabase DataLayer contract: ride analytics", () => {
     ]);
 
     await replaceActivityStreams(stub.client, "a-1", [{ channel: "power", values: [1] }, { channel: "power", values: [2] }]);
-    expect((stub.queries[1].payload as Record<string, unknown>[]).map((r) => r.values)).toEqual([[2]]);
+    // queries[1] is the delete of dropped channels; [2] the upsert.
+    expect((stub.queries[2].payload as Record<string, unknown>[]).map((r) => r.values)).toEqual([[2]]);
 
     const w = { source: "garmin" as const, sourceId: "9", measuredAt: NOW, providerPayload: {} };
     await upsertBodyWeights(stub.client, [{ ...w, weightKg: 80 }, { ...w, weightKg: 81 }]);
-    expect((stub.queries[2].payload as Record<string, unknown>[]).map((r) => r.weight_kg)).toEqual([81]);
+    expect((stub.queries[3].payload as Record<string, unknown>[]).map((r) => r.weight_kg)).toEqual([81]);
 
     const d = { date: "2026-11-01", tssBySource: {}, ctl: 1, atl: 1, tsb: 0 };
     await upsertDailyTrainingLoad(stub.client, [{ ...d, tssTotal: 1 }, { ...d, date: "2026-11-02", tssTotal: 5 }, { ...d, tssTotal: 2 }]);
-    expect((stub.queries[3].payload as Record<string, unknown>[]).map((r) => [r.date, r.tss_total])).toEqual([["2026-11-01", 2], ["2026-11-02", 5]]);
+    expect((stub.queries[4].payload as Record<string, unknown>[]).map((r) => [r.date, r.tss_total])).toEqual([["2026-11-01", 2], ["2026-11-02", 5]]);
   });
 
   describe("activity_streams", () => {
@@ -1692,6 +1707,15 @@ describe("Supabase DataLayer contract: ride analytics", () => {
       expect(stub.queries).toEqual([
         {
           table: "activity_streams",
+          op: "delete",
+          steps: [
+            { method: "delete", args: [] },
+            { method: "eq", args: ["activity_id", "a-1"] },
+            { method: "not", args: ["channel", "in", "(power,heart_rate)"] },
+          ],
+        },
+        {
+          table: "activity_streams",
           op: "upsert",
           payload: [
             { activity_id: "a-1", channel: "power", start_offset_s: 0, values: [1, 2], updated_at: NOW },
@@ -1702,14 +1726,23 @@ describe("Supabase DataLayer contract: ride analytics", () => {
       ]);
     });
 
-    test("replaceActivityStreams stamps a userId, skips an empty list and throws errors", async () => {
+    test("replaceActivityStreams stamps a userId, deletes every channel for an empty list and throws errors", async () => {
       const stub = createSupabaseStub();
       await replaceActivityStreams(stub.client, "a-1", [{ channel: "cadence", values: [90] }], USER);
-      expect((stub.queries[0].payload as Record<string, unknown>[])[0].user_id).toBe(USER);
+      expect(stub.filters(stub.queries[0])).toEqual([["eq", "activity_id", "a-1"], ["not", "channel", "in", "(cadence)"]]);
+      expect((stub.queries[1].payload as Record<string, unknown>[])[0].user_id).toBe(USER);
+      // Empty set: one unfiltered-by-channel delete, no upsert.
       await replaceActivityStreams(stub.client, "a-1", []);
-      expect(stub.queries).toHaveLength(1);
+      expect(stub.queries).toHaveLength(3);
+      expect(stub.queries[2].op).toBe("delete");
+      expect(stub.filters(stub.queries[2])).toEqual([["eq", "activity_id", "a-1"]]);
+      // A failed delete stops before the upsert; a failed upsert throws too.
       stub.reply({ error: FAIL });
       await expect(replaceActivityStreams(stub.client, "a-1", [{ channel: "speed", values: [] }])).rejects.toBe(FAIL);
+      expect(stub.queries).toHaveLength(4);
+      stub.reply({}, { error: FAIL });
+      await expect(replaceActivityStreams(stub.client, "a-1", [{ channel: "speed", values: [] }])).rejects.toBe(FAIL);
+      expect(stub.queries.slice(4).map((q) => q.op)).toEqual(["delete", "upsert"]);
     });
   });
 

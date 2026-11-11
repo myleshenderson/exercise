@@ -99,10 +99,12 @@ export interface DataLayer {
   listExternalActivities(f: ExternalActivityFilter): Promise<ExternalActivity[]>; // newest first
   getExternalActivity(id: string): Promise<ExternalActivity | null>;
   // Upserts on (user, source, sourceId); every column is replaced, omitted
-  // optional fields become null/false. Returns the stored rows.
+  // optional fields become null/false. Returns the stored rows. Throws when a
+  // row's providerPayload is null or undefined (the column is not null).
   upsertExternalActivities(rows: ExternalActivityInput[]): Promise<ExternalActivity[]>;
   getActivityStreams(activityId: string): Promise<ActivityStream[]>; // ordered by channel
-  // Upserts each channel on (activityId, channel). Channels not passed are left as they are.
+  // Replaces the activity's streams: channels not passed are deleted (an empty
+  // list deletes them all), the rest upsert on (activityId, channel).
   replaceActivityStreams(activityId: string, streams: ActivityStreamInput[]): Promise<void>;
   listBodyWeights(from: string, to: string): Promise<BodyWeight[]>; // measuredAt in [from, to], oldest first
   upsertBodyWeights(rows: BodyWeightInput[]): Promise<void>; // on (user, source, sourceId)
@@ -114,4 +116,17 @@ export interface DataLayer {
   listDailyTrainingLoad(from: string, to: string): Promise<DailyTrainingLoad[]>; // date in [from, to], oldest first
   upsertDailyTrainingLoad(rows: DailyTrainingLoad[]): Promise<void>; // on (user, date)
   listSyncState(): Promise<SyncState[]>; // ordered by source
+}
+
+/**
+ * provider_payload is `not null`, and PostgREST rejects a whole bulk upsert
+ * (PGRST102) when one row omits a key the others carry, so a missing payload is
+ * refused up front with a message that names the row.
+ */
+export function assertProviderPayloads(rows: readonly ExternalActivityInput[]): void {
+  for (const r of rows) {
+    if (r.providerPayload === undefined || r.providerPayload === null) {
+      throw new Error(`external activity ${r.source}/${r.sourceId} has no providerPayload; it is required (provider_payload is not null)`);
+    }
+  }
 }

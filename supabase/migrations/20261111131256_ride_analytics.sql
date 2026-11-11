@@ -9,7 +9,12 @@
 -- service_role is granted too because the wave 2 sync writes through the
 -- service-role client: bypassing RLS does not skip the table-level GRANT check.
 --
--- updated_at has no trigger; the DataLayer write helpers stamp it.
+-- updated_at: every table that has it gets a moddatetime BEFORE UPDATE
+-- trigger, so an update through any client (including the wave 2 service-role
+-- sync) moves it. moddatetime is a Supabase-shipped contrib extension and
+-- lives in the extensions schema, Supabase's convention for extensions.
+
+create extension if not exists moddatetime with schema extensions;
 
 -- ---------------------------------------------------------------------------
 -- external_activities: one row per provider activity (a ride).
@@ -75,16 +80,38 @@ grant select, insert, update, delete on external_activities to authenticated;
 grant select, insert, update, delete on external_activities to service_role;
 
 create policy "own_select" on external_activities for select using (user_id = auth.uid());
-create policy "own_insert" on external_activities for insert with check (user_id = auth.uid());
-create policy "own_update" on external_activities for update using (user_id = auth.uid()) with check (user_id = auth.uid());
+-- paired_activity_id is nullable; if set, it must be the caller's own
+-- activity (the 0003_harden_child_rls.sql pattern).
+create policy "own_insert" on external_activities for insert
+  with check (
+    user_id = auth.uid()
+    and (
+      paired_activity_id is null
+      or exists (select 1 from external_activities p where p.id = paired_activity_id and p.user_id = auth.uid())
+    )
+  );
+create policy "own_update" on external_activities for update
+  using (user_id = auth.uid())
+  with check (
+    user_id = auth.uid()
+    and (
+      paired_activity_id is null
+      or exists (select 1 from external_activities p where p.id = paired_activity_id and p.user_id = auth.uid())
+    )
+  );
 create policy "own_delete" on external_activities for delete using (user_id = auth.uid());
+
+create trigger set_updated_at before update on external_activities
+  for each row execute function extensions.moddatetime(updated_at);
 
 -- ---------------------------------------------------------------------------
 -- activity_streams: one row per (activity, channel). values[i] is second i
 -- after started_at + start_offset_s at 1 Hz; a missing second is a SQL NULL
--- element. real[] rather than jsonb: 4 bytes per sample with native NULL
--- gaps, TOAST-compressed, and PostgREST returns it as a plain JSON array,
--- where jsonb would store every number as numeric at several times the size.
+-- element. double precision[] rather than jsonb: 8 bytes per sample with
+-- native NULL gaps, TOAST-compressed, and PostgREST returns it as a plain JSON
+-- array, where jsonb would store every number as numeric at several times the
+-- size. Not real[]: float32 loses about a metre on lat/lng; with one user's
+-- data the doubled storage is accepted.
 -- "values" is quoted because VALUES is a reserved word; PostgREST quotes it
 -- itself, so clients still use the plain name.
 -- ---------------------------------------------------------------------------
@@ -94,7 +121,7 @@ create table activity_streams (
   activity_id uuid not null references external_activities(id) on delete cascade,
   channel text not null check (channel in ('power', 'heart_rate', 'cadence', 'speed', 'distance', 'altitude', 'lat', 'lng', 'temperature', 'resistance')),
   start_offset_s integer not null default 0,
-  "values" real[] not null,
+  "values" double precision[] not null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (activity_id, channel)
@@ -106,9 +133,23 @@ grant select, insert, update, delete on activity_streams to authenticated;
 grant select, insert, update, delete on activity_streams to service_role;
 
 create policy "own_select" on activity_streams for select using (user_id = auth.uid());
-create policy "own_insert" on activity_streams for insert with check (user_id = auth.uid());
-create policy "own_update" on activity_streams for update using (user_id = auth.uid()) with check (user_id = auth.uid());
+-- activity_id must be the caller's own activity (the 0003_harden_child_rls.sql
+-- pattern), not just the row stamped with the caller's user_id.
+create policy "own_insert" on activity_streams for insert
+  with check (
+    user_id = auth.uid()
+    and exists (select 1 from external_activities ea where ea.id = activity_id and ea.user_id = auth.uid())
+  );
+create policy "own_update" on activity_streams for update
+  using (user_id = auth.uid())
+  with check (
+    user_id = auth.uid()
+    and exists (select 1 from external_activities ea where ea.id = activity_id and ea.user_id = auth.uid())
+  );
 create policy "own_delete" on activity_streams for delete using (user_id = auth.uid());
+
+create trigger set_updated_at before update on activity_streams
+  for each row execute function extensions.moddatetime(updated_at);
 
 -- ---------------------------------------------------------------------------
 -- body_weights: Garmin weigh-ins. source_id is Garmin's samplePk.
@@ -150,6 +191,9 @@ create policy "own_insert" on body_weights for insert with check (user_id = auth
 create policy "own_update" on body_weights for update using (user_id = auth.uid()) with check (user_id = auth.uid());
 create policy "own_delete" on body_weights for delete using (user_id = auth.uid());
 
+create trigger set_updated_at before update on body_weights
+  for each row execute function extensions.moddatetime(updated_at);
+
 -- ---------------------------------------------------------------------------
 -- athlete_settings: one row per user, keyed by user_id (no id column). A
 -- missing row means every column default applies.
@@ -182,6 +226,9 @@ create policy "own_insert" on athlete_settings for insert with check (user_id = 
 create policy "own_update" on athlete_settings for update using (user_id = auth.uid()) with check (user_id = auth.uid());
 create policy "own_delete" on athlete_settings for delete using (user_id = auth.uid());
 
+create trigger set_updated_at before update on athlete_settings
+  for each row execute function extensions.moddatetime(updated_at);
+
 -- ---------------------------------------------------------------------------
 -- ftp_history: every FTP value and when it took effect.
 -- Peloton mapping (applied by the wave 2 ingester):
@@ -210,6 +257,9 @@ create policy "own_select" on ftp_history for select using (user_id = auth.uid()
 create policy "own_insert" on ftp_history for insert with check (user_id = auth.uid());
 create policy "own_update" on ftp_history for update using (user_id = auth.uid()) with check (user_id = auth.uid());
 create policy "own_delete" on ftp_history for delete using (user_id = auth.uid());
+
+create trigger set_updated_at before update on ftp_history
+  for each row execute function extensions.moddatetime(updated_at);
 
 -- ---------------------------------------------------------------------------
 -- daily_training_load: one row per user per local calendar day.
@@ -243,6 +293,9 @@ create policy "own_insert" on daily_training_load for insert with check (user_id
 create policy "own_update" on daily_training_load for update using (user_id = auth.uid()) with check (user_id = auth.uid());
 create policy "own_delete" on daily_training_load for delete using (user_id = auth.uid());
 
+create trigger set_updated_at before update on daily_training_load
+  for each row execute function extensions.moddatetime(updated_at);
+
 -- ---------------------------------------------------------------------------
 -- sync_state: per-user, per-feed sync bookkeeping. Clients only read it
 -- (Settings shows status and the reconnect prompt); the wave 2 sync writes
@@ -272,6 +325,9 @@ grant select, insert, update on sync_state to service_role;
 
 create policy "own_select" on sync_state for select using (user_id = auth.uid());
 
+create trigger set_updated_at before update on sync_state
+  for each row execute function extensions.moddatetime(updated_at);
+
 -- ---------------------------------------------------------------------------
 -- provider_credentials: encrypted provider tokens (Peloton Auth0 tokens).
 -- Same shape of protection as mcp_sessions (0004/0009): RLS on with NO
@@ -300,5 +356,8 @@ create table provider_credentials (
 alter table provider_credentials enable row level security;
 
 grant select, insert, update, delete on provider_credentials to service_role;
+
+create trigger set_updated_at before update on provider_credentials
+  for each row execute function extensions.moddatetime(updated_at);
 
 notify pgrst, 'reload schema';

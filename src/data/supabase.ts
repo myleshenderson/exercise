@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { DEFAULT_ATHLETE_SETTINGS, type DataLayer, type DayLookup, type ExternalActivityFilter } from "./DataLayer.js";
+import { DEFAULT_ATHLETE_SETTINGS, assertProviderPayloads, type DataLayer, type DayLookup, type ExternalActivityFilter } from "./DataLayer.js";
 import type {
   Exercise,
   WorkoutDay,
@@ -481,6 +481,7 @@ export async function upsertExternalActivities(
   userId?: string,
 ): Promise<ExternalActivity[]> {
   if (rows.length === 0) return [];
+  assertProviderPayloads(rows);
   const now = new Date().toISOString();
   const { data, error } = await client
     .from("external_activities")
@@ -514,6 +515,14 @@ export async function replaceActivityStreams(
   streams: ActivityStreamInput[],
   userId?: string,
 ): Promise<void> {
+  // Replace, not merge: first drop the channels absent from the new set (all of
+  // them when the set is empty), then upsert the rest. Channel names come from
+  // a fixed enum, so the PostgREST in-list needs no quoting.
+  const channels = [...new Set(streams.map((s) => s.channel))];
+  let del = client.from("activity_streams").delete().eq("activity_id", activityId);
+  if (channels.length > 0) del = del.not("channel", "in", `(${channels.join(",")})`);
+  const { error: deleteError } = await del;
+  if (deleteError) throw deleteError;
   if (streams.length === 0) return;
   const now = new Date().toISOString();
   const { error } = await client.from("activity_streams").upsert(

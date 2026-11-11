@@ -82,17 +82,59 @@ describe("external activities", () => {
 
 test("streams: upsert per (activity, channel), ordered by channel, start offset defaults to 0", async () => {
   const db = createMockDataLayer({ seed: false });
-  await db.replaceActivityStreams("a-1", [
+  const [a1, a2] = await db.upsertExternalActivities([ride("g-1", NOW), ride("g-2", NOW)]);
+  await db.replaceActivityStreams(a1.id, [
     { channel: "power", values: [100, null] },
     { channel: "cadence", startOffsetS: 2, values: [90] },
   ]);
-  await db.replaceActivityStreams("a-1", [{ channel: "power", values: [200] }]);
-  await db.replaceActivityStreams("a-2", [{ channel: "speed", values: [5] }]);
-  expect(await db.getActivityStreams("a-1")).toEqual([
-    { activityId: "a-1", channel: "cadence", startOffsetS: 2, values: [90] },
-    { activityId: "a-1", channel: "power", startOffsetS: 0, values: [200] },
+  await db.replaceActivityStreams(a1.id, [
+    { channel: "power", values: [200] },
+    { channel: "cadence", startOffsetS: 2, values: [90] },
+  ]);
+  await db.replaceActivityStreams(a2.id, [{ channel: "speed", values: [5] }]);
+  expect(await db.getActivityStreams(a1.id)).toEqual([
+    { activityId: a1.id, channel: "cadence", startOffsetS: 2, values: [90] },
+    { activityId: a1.id, channel: "power", startOffsetS: 0, values: [200] },
   ]);
   expect(await db.getActivityStreams("missing")).toEqual([]);
+});
+
+test("streams: replace drops channels absent from the new set, leaving other activities alone", async () => {
+  const db = createMockDataLayer({ seed: false });
+  const [a1, a2] = await db.upsertExternalActivities([ride("g-1", NOW), ride("g-2", NOW)]);
+  await db.replaceActivityStreams(a1.id, [
+    { channel: "power", values: [100] },
+    { channel: "heart_rate", values: [140] },
+  ]);
+  await db.replaceActivityStreams(a2.id, [{ channel: "heart_rate", values: [150] }]);
+  await db.replaceActivityStreams(a1.id, [{ channel: "power", values: [110] }]);
+  expect((await db.getActivityStreams(a1.id)).map((s) => s.channel)).toEqual(["power"]);
+  expect((await db.getActivityStreams(a2.id)).map((s) => s.channel)).toEqual(["heart_rate"]);
+  await db.replaceActivityStreams(a1.id, []);
+  expect(await db.getActivityStreams(a1.id)).toEqual([]);
+});
+
+test("streams: replacing streams of an unknown activity throws (the activity_id foreign key)", async () => {
+  const db = createMockDataLayer({ seed: false });
+  await expect(db.replaceActivityStreams("nope", [{ channel: "power", values: [1] }])).rejects.toThrow("External activity nope not found");
+});
+
+test("upsert refuses a row without providerPayload and stores nothing", async () => {
+  const db = createMockDataLayer({ seed: false });
+  for (const bad of [undefined, null]) {
+    await expect(db.upsertExternalActivities([ride("g-1", NOW), ride("g-2", NOW, { providerPayload: bad })])).rejects.toThrow(
+      "external activity garmin/g-2 has no providerPayload",
+    );
+  }
+  expect(await db.listExternalActivities({})).toEqual([]);
+});
+
+test("time filters accept Postgres-style timestamptz literals and reject garbage", async () => {
+  const db = createMockDataLayer({ seed: false });
+  await db.upsertExternalActivities([ride("g-1", "2026-11-01 10:00:00+00"), ride("g-2", "2026-11-01T09:00:00Z")]);
+  expect((await db.listExternalActivities({ from: "2026-11-01 10:00:00+00" })).map((a) => a.sourceId)).toEqual(["g-1"]);
+  expect((await db.listExternalActivities({})).map((a) => a.sourceId)).toEqual(["g-1", "g-2"]);
+  await expect(db.listExternalActivities({ from: "not a time" })).rejects.toThrow("invalid timestamptz");
 });
 
 test("body weights: upsert on (source, sourceId), list inclusive and oldest first", async () => {

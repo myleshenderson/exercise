@@ -1,4 +1,4 @@
-import { DEFAULT_ATHLETE_SETTINGS, type DataLayer } from "./DataLayer";
+import { DEFAULT_ATHLETE_SETTINGS, assertProviderPayloads, type DataLayer } from "./DataLayer";
 import type {
   Exercise,
   WorkoutDay,
@@ -15,7 +15,7 @@ import type {
 import { seedExercises, seedDays, seedSessions } from "./seed";
 import { findLastSetsForExercise } from "../lib/lastSession";
 import { nextAvailablePositionByProgram, isDayAvailable } from "../lib/programAvailability";
-import { compareText } from "../analysis/sqlSemantics";
+import { compareText, timestampMicros } from "../analysis/sqlSemantics";
 
 type StoredDay = Omit<WorkoutDay, "programName" | "isAvailable">;
 
@@ -39,7 +39,11 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
   let athleteSettings: AthleteSettings | null = null;
   const ftpHistory: FtpHistoryEntry[] = [];
   const trainingLoad = new Map<string, DailyTrainingLoad>();
-  const instant = (iso: string) => Date.parse(iso);
+  // Exact timestamptz instants (microseconds, bigint) that accept Postgres-style
+  // literals such as "2026-11-01 10:00:00+00" and throw on garbage rather than
+  // comparing NaN silently.
+  const instant = (ts: string) => timestampMicros(ts);
+  const byInstant = (x: string, y: string) => Number(instant(x) - instant(y));
 
   return {
     async claimSeed() {
@@ -264,7 +268,7 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
             (f.source === undefined || a.source === f.source) &&
             (f.environment === undefined || a.environment === f.environment),
         )
-        .sort((a, b) => instant(b.startedAt) - instant(a.startedAt))
+        .sort((a, b) => byInstant(b.startedAt, a.startedAt))
         .map((a) => structuredClone(a));
       return f.limit === undefined ? out : out.slice(0, f.limit);
     },
@@ -273,6 +277,7 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
       return a ? structuredClone(a) : null;
     },
     async upsertExternalActivities(rows) {
+      assertProviderPayloads(rows);
       const now = new Date().toISOString();
       // supabase.ts collapses rows sharing (source, sourceId) to the last one.
       const unique = [...new Map(rows.map((r) => [`${r.source}\u0000${r.sourceId}`, r])).values()];
@@ -328,6 +333,13 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
         .map((s) => structuredClone(s));
     },
     async replaceActivityStreams(activityId, input) {
+      // activity_id references external_activities(id): mirror the FK.
+      if (!activities.some((a) => a.id === activityId)) throw new Error(`External activity ${activityId} not found`);
+      // Replace: channels absent from the new set are dropped, as supabase.ts deletes them.
+      const keep = new Set(input.map((s) => s.channel));
+      for (let i = streams.length - 1; i >= 0; i--) {
+        if (streams[i].activityId === activityId && !keep.has(streams[i].channel)) streams.splice(i, 1);
+      }
       for (const s of input) {
         const row: ActivityStream = { activityId, channel: s.channel, startOffsetS: s.startOffsetS ?? 0, values: s.values.slice() };
         const idx = streams.findIndex((x) => x.activityId === activityId && x.channel === s.channel);
@@ -338,7 +350,7 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
     async listBodyWeights(from, to) {
       return bodyWeights
         .filter((w) => instant(w.measuredAt) >= instant(from) && instant(w.measuredAt) <= instant(to))
-        .sort((a, b) => instant(a.measuredAt) - instant(b.measuredAt))
+        .sort((a, b) => byInstant(a.measuredAt, b.measuredAt))
         .map((w) => ({ ...w }));
     },
     async upsertBodyWeights(rows) {
@@ -375,7 +387,7 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
       // Stable sort keeps insertion (created_at) order among equal effectiveFrom.
       return ftpHistory
         .slice()
-        .sort((a, b) => instant(a.effectiveFrom) - instant(b.effectiveFrom))
+        .sort((a, b) => byInstant(a.effectiveFrom, b.effectiveFrom))
         .map((e) => ({ ...e }));
     },
     async addFtpHistoryEntry(entry) {
