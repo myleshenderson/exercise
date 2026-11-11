@@ -67,6 +67,7 @@ export async function runPeloton(client: PelotonClient, store: SyncStore, opts: 
   let upserted = 0;
   let skipped = 0;
   let earliest: string | null = null;
+  const notes: string[] = [];
 
   let ctx: IngestContext | null = null;
   const context = async (): Promise<IngestContext> => {
@@ -122,8 +123,34 @@ export async function runPeloton(client: PelotonClient, store: SyncStore, opts: 
     }
   }
 
+  /** Test workouts fetched by id in this run (id → start_time ISO), and the ids that could not be. */
+  const testStarts = new Map<string, string>();
+  const testMisses = new Set<string>();
+
+  /**
+   * Starts that date a test-derived FTP: the known ones, plus the test workout fetched once when it
+   * is not known yet (it sits on a later backfill page). A failed fetch falls back to the ride start.
+   */
+  async function ftpStarts(detail: PelotonWorkoutDetail): Promise<Map<string, string>> {
+    const known = await knownStarts();
+    const ref = detail.ftp_info?.ftp_workout_id;
+    if (typeof ref !== "string" || ref === "" || known.has(ref) || testStarts.has(ref) || testMisses.has(ref)) {
+      return testStarts.size > 0 ? new Map([...testStarts, ...known]) : known;
+    }
+    try {
+      const test = await client.workout(ref);
+      fetched++;
+      if (Number.isFinite(test.start_time)) testStarts.set(ref, new Date(test.start_time * 1000).toISOString());
+      else testMisses.add(ref);
+    } catch (e) {
+      if (!recoverable(e)) throw e;
+      testMisses.add(ref);
+    }
+    return new Map([...testStarts, ...known]);
+  }
+
   async function recordFtp(detail: PelotonWorkoutDetail, startedAt: string, c: IngestContext): Promise<void> {
-    const entry = ftpFromWorkout(detail, startedAt, await knownStarts());
+    const entry = ftpFromWorkout(detail, startedAt, await ftpStarts(detail));
     if (!entry) return;
     // The history entry in force at the ride (manualFtpW deliberately ignored: this is history only).
     if (ftpAt(startedAt, { manualFtpW: null, history: c.ftpHistory }) === entry.ftpW) return;
@@ -187,6 +214,31 @@ export async function runPeloton(client: PelotonClient, store: SyncStore, opts: 
     return true;
   }
 
+  /**
+   * After the backfill: newest-first ingestion leaves one Peloton entry per ride whose FTP was not
+   * in force yet. Walking oldest first, a Peloton entry is deleted when the previous kept entry (of
+   * any source) has the same ftpW and source, so the FTP in force at every instant is unchanged.
+   */
+  async function collapseFtpHistory(): Promise<void> {
+    const history = [...(await store.listFtpHistory())].sort((a, b) => Date.parse(a.effectiveFrom) - Date.parse(b.effectiveFrom));
+    const doomed: string[] = [];
+    let kept: FtpHistoryEntry | null = null;
+    for (const h of history) {
+      const peloton = h.source === "peloton_test" || h.source === "peloton_manual";
+      if (peloton && kept !== null && kept.ftpW === h.ftpW && kept.source === h.source) {
+        doomed.push(h.id);
+        continue;
+      }
+      kept = h;
+    }
+    const deleted = doomed.length > 0 ? await store.deleteFtpHistoryEntries(doomed) : 0;
+    if (ctx && doomed.length > 0) {
+      const gone = new Set(doomed);
+      ctx.ftpHistory = ctx.ftpHistory.filter((h) => !gone.has(h.id));
+    }
+    notes.push(`ftp_history collapsed: ${deleted}`);
+  }
+
   async function finish(done: boolean, error: string | null): Promise<SyncRunResult> {
     const cursor: PelotonCursor = backfillComplete
       ? { mode: "incremental", retry: [...retry] }
@@ -202,7 +254,7 @@ export async function runPeloton(client: PelotonClient, store: SyncStore, opts: 
       backfillComplete,
       ...(error === null ? { lastSuccessAt: at, authStatus: "ok" as const } : {}),
     });
-    return { source: SOURCE, fetched, upserted, skipped, done, earliestAffected: earliest, error };
+    return { source: SOURCE, fetched, upserted, skipped, done, earliestAffected: earliest, error, ...(notes.length > 0 ? { notes } : {}) };
   }
 
   try {
@@ -231,6 +283,7 @@ export async function runPeloton(client: PelotonClient, store: SyncStore, opts: 
         if (items.length === 0 || page >= list.page_count - 1) {
           backfillComplete = true;
           page = 0;
+          await collapseFtpHistory();
           break;
         }
         page++;
