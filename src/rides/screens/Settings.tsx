@@ -159,6 +159,11 @@ export default function Settings({ now, syncClient }: { now?: Date; syncClient?:
     if (history.status === "ready") setHistoryRows(history.data);
   }, [history]);
 
+  // Sync and recompute are owner-only on the server; the owner's sync_state rows exist after the
+  // first backfill and another account sees none under RLS, so rows mark the owner (AI-669).
+  // Until the read answers (or if it fails) the controls stay hidden.
+  const owner = syncRows !== null && syncRows.length > 0;
+
   // Ready once every read has answered, an error included, so the error state can be captured too.
   const ready =
     loaded && (historyRows !== null || history.status === "error") && (syncRows !== null || sync.status === "error") && eftpState.status !== "loading";
@@ -172,6 +177,7 @@ export default function Settings({ now, syncClient }: { now?: Date; syncClient?:
           settings={settings}
           eftpW={eftpW}
           client={client}
+          owner={owner}
           save={save}
           addFtp={async (ftpW) => {
             await db.addFtpHistoryEntry({ effectiveFrom: new Date(now?.getTime() ?? Date.now()).toISOString(), ftpW, source: "manual", sourceRef: null });
@@ -190,6 +196,7 @@ export default function Settings({ now, syncClient }: { now?: Date; syncClient?:
         loadError={sync.status === "error" ? sync.message : null}
         nowMs={nowMs}
         client={client}
+        owner={owner}
         onSynced={() => setSyncKey((k) => k + 1)}
       />
     </div>
@@ -210,12 +217,15 @@ function SettingsForm({
   settings,
   eftpW,
   client,
+  owner,
   save,
   addFtp,
 }: {
   settings: AthleteSettings;
   eftpW: number | null;
   client: SyncClient | null;
+  /** The account owns the sync (has sync_state rows); only then does a save recompute. */
+  owner: boolean;
   save(patch: Partial<AthleteSettings>): Promise<AthleteSettings>;
   addFtp(ftpW: number): Promise<void>;
 }) {
@@ -266,6 +276,8 @@ function SettingsForm({
       setRecompute({ status: "manual" });
       return;
     }
+    // Another account: the server refuses the recompute, so none is attempted.
+    if (!owner) return;
     setRecompute({ status: "running" });
     try {
       setRecompute({ status: "done", value: await client.recompute() });
@@ -308,7 +320,7 @@ function SettingsForm({
         {numeric("lthrBpm", "Threshold HR", "bpm")}
         {numeric("maxHrBpm", "Max HR", "bpm")}
         {numeric("strengthSessionTss", "Strength session TSS", "TSS", "Default 50")}
-        {numeric("noPowerTssPerHour", "No-power TSS per hour", "TSS/h", "Default 55")}
+        {numeric("noPowerTssPerHour", "No-power TSS per hour", "TSS/h", "Default 55. Rides without power or heart rate get an estimated TSS at this rate. They show an est. chip.")}
         <Field label="Units">
           <select aria-label="Units" value={form.units} onChange={(e) => set("units", e.target.value as FormState["units"])} className="rounded-md border px-2 py-1">
             <option value="imperial">Imperial</option>
@@ -379,12 +391,15 @@ function SyncSection({
   loadError,
   nowMs,
   client,
+  owner,
   onSynced,
 }: {
   rows: SyncState[] | null;
   loadError: string | null;
   nowMs: number;
   client: SyncClient | null;
+  /** Sync now shows only for the owner account (it has sync_state rows). */
+  owner: boolean;
   onSynced(): void;
 }) {
   const [run, setRun] = useState<Run<SyncRunResult[]>>({ status: "idle" });
@@ -408,7 +423,8 @@ function SyncSection({
     <Card
       title="Sync"
       action={
-        client && (
+        client &&
+        owner && (
           <button
             type="button"
             onClick={() => void syncNow()}

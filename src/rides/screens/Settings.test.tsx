@@ -286,3 +286,58 @@ test("mock build: Sync now answers the fixture counts", async () => {
   const result = await screen.findByTestId("sync-result", {}, { timeout: 2000 });
   expect(result).toHaveTextContent("Garmin activities: 4 fetched, 4 upserted");
 });
+
+test("owner (sync state present): Sync now shows and a save recomputes", async () => {
+  const fetch = vi.fn().mockResolvedValue(json(200, { kind: "recompute", activities: 1, days: 1, done: true, nextOffset: null }));
+  renderSettings(createRideFixtureDb(NOW), fetchClient(fetch));
+  await ready();
+  expect(screen.getByRole("button", { name: "Sync now" })).toBeInTheDocument();
+  change("Threshold HR", "170");
+  save();
+  await screen.findByText("Recomputed 1 ride, 1 day");
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+test("another account (empty sync state): no Sync now and no recompute", async () => {
+  const fetch = vi.fn();
+  renderSettings(createMockDataLayer({ rides: { ...buildRideFixtures(NOW), syncState: [] } }), fetchClient(fetch));
+  await ready();
+  expect(screen.queryByRole("button", { name: "Sync now" })).toBeNull();
+  expect(screen.queryByText("Sync runs on the Vercel deployment only")).toBeNull();
+  change("Threshold HR", "170");
+  save();
+  await screen.findByText("Saved");
+  expect(screen.queryByText("Recomputing…")).toBeNull();
+  expect(screen.queryByText("Stored TSS updates when a recompute runs on the Vercel deployment.")).toBeNull();
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+test("while the sync-state read is pending, the sync controls are not rendered", async () => {
+  const db = createRideFixtureDb(NOW);
+  let answer!: (rows: Awaited<ReturnType<DataLayer["listSyncState"]>>) => void;
+  const original = db.listSyncState.bind(db);
+  db.listSyncState = () => new Promise((r) => (answer = r));
+  renderSettings(db, fetchClient(vi.fn()));
+  await screen.findByRole("button", { name: "Save" });
+  expect(screen.queryByRole("button", { name: "Sync now" })).toBeNull();
+  const rows = await original();
+  await act(async () => answer(rows));
+  await ready();
+  expect(screen.getByRole("button", { name: "Sync now" })).toBeInTheDocument();
+});
+
+test("a failed sync-state read hides Sync now", async () => {
+  const db = createRideFixtureDb(NOW);
+  db.listSyncState = () => Promise.reject(new Error("no table"));
+  renderSettings(db, fetchClient(vi.fn()));
+  await ready();
+  expect(screen.queryByRole("button", { name: "Sync now" })).toBeNull();
+});
+
+test("the no-power TSS field explains the estimated TSS and the est. chip", async () => {
+  renderSettings(createRideFixtureDb(NOW), null);
+  await ready();
+  expect(
+    screen.getByText(/Rides without power or heart rate get an estimated TSS at this rate\. They show an est\. chip\./),
+  ).toBeInTheDocument();
+});
