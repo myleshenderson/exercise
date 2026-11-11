@@ -10,6 +10,8 @@ Garmin rides and weight and Peloton workouts reach `external_activities`, `activ
   (`vercel.json`; about 05:00 or 06:00 in New York, as Hobby allows daily crons only). It runs an
   incremental Garmin + Peloton sync with a 50 s budget inside the 60 s function limit, and
   answers with counts and error strings only.
+- **Settings** `api/sync.ts` (`POST /api/sync`): the owner's "Sync now" and recompute, signed
+  in with his own Supabase session (see below).
 
 Both write `sync_state` (one row per `garmin_activities`, `garmin_weight` and `peloton`: the
 resumable cursor, last success, last error and auth status) and then recompute
@@ -75,6 +77,46 @@ all of them. A missing variable fails the run with one error naming every missin
    ```bash
    npm run sync -- --source peloton --incremental --reseed-peloton-token
    ```
+
+## Sync now and recompute from Settings
+
+`POST /api/sync` (AI-653) is the Settings screen's path into the same runner. It is
+authenticated by the caller's own Supabase session, never by `CRON_SECRET` (which must not
+reach a browser and is refused on `POST` with 401):
+
+```http
+POST /api/sync                  Authorization: Bearer <Supabase access token>
+POST /api/sync?recompute=all    Authorization: Bearer <Supabase access token>
+```
+
+- **Who may call it:** only the user whose id is `SYNC_OWNER_USER_ID`. The token is checked
+  with the stateless `auth.getUser(token)` on a service-role client (as `api/mcp-login.ts`
+  does). A missing or malformed bearer gets 401 `Unauthorized`, an unknown or expired token
+  401 `Invalid session`, any other signed-in user 403 `Sync is limited to the owner account`.
+- **Sync now** (no query) runs exactly what the cron runs: an incremental Garmin + Peloton
+  sync with the 50 s budget. Answer: `200 {"kind":"sync","results":[...]}`, one result per
+  source with the same counts and error strings as the cron.
+- **Recompute** (`?recompute=all`, after an FTP, flat-rate or strength-TSS change) is the CLI's
+  `--recompute-all`: every activity's TSS, then the daily load. It needs no provider
+  variables. Answer: `200 {"kind":"recompute","activities":n,"days":n}`. Any other
+  `recompute` value gets 400.
+- **Errors** after the owner check answer 500 `{"error":"..."}` (plus `results` when only the
+  daily-load step failed) and are logged as `sync owner: ...`; no body or log carries a token
+  or key. A missing `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` or `SYNC_OWNER_USER_ID` answers
+  500 `Sync is not configured` (the log names the variables; the caller is not yet
+  authenticated). Other methods than `GET` and `POST` get 405.
+- **The 60 s limit:** both run inside the function's `maxDuration: 60`. A sync stops at its
+  50 s budget and resumes on the next call. A recompute does not resume: if the full history
+  ever takes longer than 60 s, Vercel cuts it off; rerun it from the CLI
+  (`npm run sync -- --source garmin --incremental --recompute-all`) instead.
+
+To try it after deploy, copy the access token from a signed-in browser session
+(`supabase.auth.getSession()`):
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $ACCESS_TOKEN" https://<production-host>/api/sync
+curl -s -X POST -H "Authorization: Bearer $ACCESS_TOKEN" "https://<production-host>/api/sync?recompute=all"
+```
 
 ## CLI reference
 
