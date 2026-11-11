@@ -14,8 +14,29 @@ export function utcDate(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
+/**
+ * A readable message for anything thrown. Supabase rethrows `PostgrestError` values, which are
+ * plain objects (not `Error` instances), so their fields are spelled out rather than letting
+ * `String(e)` render `[object Object]` (AI-660).
+ */
 export function errorMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
+  if (e instanceof Error) return e.message;
+  if (typeof e === "object" && e !== null && typeof (e as { message?: unknown }).message === "string") {
+    const { message, code, details, hint } = e as { message: string; code?: unknown; details?: unknown; hint?: unknown };
+    let out = message;
+    if (typeof code === "string" && code !== "") out += ` (code ${code})`;
+    if (typeof details === "string" && details !== "") out += `: ${details}`;
+    if (typeof hint === "string" && hint !== "") out += `. ${hint}`;
+    return out;
+  }
+  try {
+    const json = JSON.stringify(e);
+    // JSON.stringify returns undefined for undefined, functions and symbols.
+    if (typeof json === "string") return json;
+  } catch {
+    // Circular structures and BigInt throw; fall through.
+  }
+  return String(e);
 }
 
 export interface FinishArgs {
