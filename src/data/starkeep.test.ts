@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import manifest from "../../starkeep.manifest.json";
 import type { DataLayer } from "./DataLayer";
-import { createStarkeepDataLayer, ExerciseInUseError, SEED_CLAIM_PREFIX } from "./starkeep";
+import { createStarkeepDataLayer, ExerciseInUseError, RIDE_ANALYTICS_UNAVAILABLE, SEED_CLAIM_PREFIX } from "./starkeep";
+import { DEFAULT_ATHLETE_SETTINGS } from "./DataLayer";
 import { createFakeTransport, type FakeTransport } from "./starkeep/fakeTransport";
 import { ensureSeeded } from "./ensureSeeded";
 import { compareText } from "../analysis/sqlSemantics";
@@ -475,5 +476,38 @@ describe("sessions", () => {
     expect(fake.tables.session_sets.map((r) => r.session_id)).toEqual([keep.id]);
     expect((await db.listSessions()).map((x) => x.id)).toEqual([keep.id]);
     expectNoForbiddenColumns(fake);
+  });
+});
+
+describe("ride analytics (not declared on Starkeep yet)", () => {
+  test("reads answer empty and writes reject, all without a transport request", async () => {
+    const { db, fake } = setup();
+    expect(await db.listExternalActivities({})).toEqual([]);
+    expect(await db.getExternalActivity("a-1")).toBeNull();
+    expect(await db.getActivityStreams("a-1")).toEqual([]);
+    expect(await db.listBodyWeights("2026-01-01T00:00:00Z", "2026-12-31T00:00:00Z")).toEqual([]);
+    expect(await db.getAthleteSettings()).toEqual(DEFAULT_ATHLETE_SETTINGS);
+    expect(await db.listFtpHistory()).toEqual([]);
+    expect(await db.listDailyTrainingLoad("2026-01-01", "2026-12-31")).toEqual([]);
+    expect(await db.listSyncState()).toEqual([]);
+
+    const writes = [
+      db.upsertExternalActivities([{ source: "garmin", sourceId: "g", startedAt: "2026-11-01T00:00:00Z", sport: "cycling", environment: "outdoor", providerPayload: {} }]),
+      db.replaceActivityStreams("a-1", [{ channel: "power", values: [1] }]),
+      db.upsertBodyWeights([{ source: "garmin", sourceId: "1", measuredAt: "2026-11-01T00:00:00Z", weightKg: 80, providerPayload: {} }]),
+      db.saveAthleteSettings({ units: "metric" }),
+      db.addFtpHistoryEntry({ effectiveFrom: "2026-11-01T00:00:00Z", ftpW: 250, source: "manual", sourceRef: null }),
+      db.upsertDailyTrainingLoad([{ date: "2026-11-01", tssTotal: 0, tssBySource: {}, ctl: 0, atl: 0, tsb: 0 }]),
+    ];
+    for (const w of writes) await expect(w).rejects.toThrow(RIDE_ANALYTICS_UNAVAILABLE);
+    expect(RIDE_ANALYTICS_UNAVAILABLE).toBe("ride analytics is not available on Starkeep yet");
+    expect(fake.requests).toEqual([]);
+  });
+
+  test("getAthleteSettings hands out a copy, not the shared defaults", async () => {
+    const { db } = setup();
+    const s = await db.getAthleteSettings();
+    s.units = "metric";
+    expect((await db.getAthleteSettings()).units).toBe("imperial");
   });
 });

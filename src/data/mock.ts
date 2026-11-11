@@ -1,8 +1,21 @@
-import type { DataLayer } from "./DataLayer";
-import type { Exercise, WorkoutDay, Session, SetEntry, Program } from "../types";
+import { DEFAULT_ATHLETE_SETTINGS, type DataLayer } from "./DataLayer";
+import type {
+  Exercise,
+  WorkoutDay,
+  Session,
+  SetEntry,
+  Program,
+  ExternalActivity,
+  ActivityStream,
+  BodyWeight,
+  AthleteSettings,
+  FtpHistoryEntry,
+  DailyTrainingLoad,
+} from "../types";
 import { seedExercises, seedDays, seedSessions } from "./seed";
 import { findLastSetsForExercise } from "../lib/lastSession";
 import { nextAvailablePositionByProgram, isDayAvailable } from "../lib/programAvailability";
+import { compareText } from "../analysis/sqlSemantics";
 
 type StoredDay = Omit<WorkoutDay, "programName" | "isAvailable">;
 
@@ -17,6 +30,16 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
   let counter = 0;
   const nextId = (prefix: string) => `${prefix}-${++counter}`;
   let seedClaimed = false;
+
+  // Ride analytics (AI-631): same keys, defaults and ordering as supabase.ts.
+  // Provider payloads are write-only there, so the mock does not keep them.
+  const activities: ExternalActivity[] = [];
+  const streams: ActivityStream[] = [];
+  const bodyWeights: BodyWeight[] = [];
+  let athleteSettings: AthleteSettings | null = null;
+  const ftpHistory: FtpHistoryEntry[] = [];
+  const trainingLoad = new Map<string, DailyTrainingLoad>();
+  const instant = (iso: string) => Date.parse(iso);
 
   return {
     async claimSeed() {
@@ -230,6 +253,152 @@ export function createMockDataLayer(opts?: { seed?: boolean }): DataLayer {
     async deleteSession(id) {
       const idx = sessions.findIndex((s) => s.id === id);
       if (idx !== -1) sessions.splice(idx, 1);
+    },
+
+    async listExternalActivities(f) {
+      const out = activities
+        .filter(
+          (a) =>
+            (f.from === undefined || instant(a.startedAt) >= instant(f.from)) &&
+            (f.to === undefined || instant(a.startedAt) <= instant(f.to)) &&
+            (f.source === undefined || a.source === f.source) &&
+            (f.environment === undefined || a.environment === f.environment),
+        )
+        .sort((a, b) => instant(b.startedAt) - instant(a.startedAt))
+        .map((a) => structuredClone(a));
+      return f.limit === undefined ? out : out.slice(0, f.limit);
+    },
+    async getExternalActivity(id) {
+      const a = activities.find((x) => x.id === id);
+      return a ? structuredClone(a) : null;
+    },
+    async upsertExternalActivities(rows) {
+      const now = new Date().toISOString();
+      // supabase.ts collapses rows sharing (source, sourceId) to the last one.
+      const unique = [...new Map(rows.map((r) => [`${r.source}\u0000${r.sourceId}`, r])).values()];
+      return unique.map((input) => {
+        const { providerPayload: _payload, ...fields } = input;
+        const existing = activities.find((a) => a.source === input.source && a.sourceId === input.sourceId);
+        const row: ExternalActivity = {
+          id: existing?.id ?? nextId("act"),
+          source: fields.source,
+          sourceId: fields.sourceId,
+          startedAt: fields.startedAt,
+          timezone: fields.timezone ?? null,
+          sport: fields.sport,
+          subType: fields.subType ?? null,
+          environment: fields.environment,
+          title: fields.title ?? null,
+          elapsedS: fields.elapsedS ?? null,
+          movingS: fields.movingS ?? null,
+          distanceM: fields.distanceM ?? null,
+          elevationGainM: fields.elevationGainM ?? null,
+          avgSpeedMps: fields.avgSpeedMps ?? null,
+          maxSpeedMps: fields.maxSpeedMps ?? null,
+          avgPowerW: fields.avgPowerW ?? null,
+          maxPowerW: fields.maxPowerW ?? null,
+          normalizedPowerW: fields.normalizedPowerW ?? null,
+          intensityFactor: fields.intensityFactor ?? null,
+          tss: fields.tss ?? null,
+          workKj: fields.workKj ?? null,
+          calories: fields.calories ?? null,
+          avgHrBpm: fields.avgHrBpm ?? null,
+          maxHrBpm: fields.maxHrBpm ?? null,
+          avgCadenceRpm: fields.avgCadenceRpm ?? null,
+          biggestClimbM: fields.biggestClimbM ?? null,
+          tssSource: fields.tssSource ?? null,
+          ftpUsedW: fields.ftpUsedW == null ? null : Math.round(fields.ftpUsedW), // integer column
+          ftpSource: fields.ftpSource ?? null,
+          hasPower: fields.hasPower ?? false,
+          hasHr: fields.hasHr ?? false,
+          powerCurve: structuredClone(fields.powerCurve ?? null),
+          bestEfforts: structuredClone(fields.bestEfforts ?? null),
+          pairedActivityId: fields.pairedActivityId ?? null,
+          syncedAt: now,
+        };
+        if (existing) activities[activities.indexOf(existing)] = row;
+        else activities.push(row);
+        return structuredClone(row);
+      });
+    },
+    async getActivityStreams(activityId) {
+      return streams
+        .filter((s) => s.activityId === activityId)
+        .sort((a, b) => compareText(a.channel, b.channel))
+        .map((s) => structuredClone(s));
+    },
+    async replaceActivityStreams(activityId, input) {
+      for (const s of input) {
+        const row: ActivityStream = { activityId, channel: s.channel, startOffsetS: s.startOffsetS ?? 0, values: s.values.slice() };
+        const idx = streams.findIndex((x) => x.activityId === activityId && x.channel === s.channel);
+        if (idx === -1) streams.push(row);
+        else streams[idx] = row;
+      }
+    },
+    async listBodyWeights(from, to) {
+      return bodyWeights
+        .filter((w) => instant(w.measuredAt) >= instant(from) && instant(w.measuredAt) <= instant(to))
+        .sort((a, b) => instant(a.measuredAt) - instant(b.measuredAt))
+        .map((w) => ({ ...w }));
+    },
+    async upsertBodyWeights(rows) {
+      for (const w of rows) {
+        const existing = bodyWeights.find((x) => x.source === w.source && x.sourceId === w.sourceId);
+        const row: BodyWeight = {
+          id: existing?.id ?? nextId("bw"),
+          source: w.source,
+          sourceId: w.sourceId,
+          measuredAt: w.measuredAt,
+          weightKg: w.weightKg,
+          bmi: w.bmi ?? null,
+          bodyFatPct: w.bodyFatPct ?? null,
+          bodyWaterPct: w.bodyWaterPct ?? null,
+          muscleMassKg: w.muscleMassKg ?? null,
+          boneMassKg: w.boneMassKg ?? null,
+        };
+        if (existing) bodyWeights[bodyWeights.indexOf(existing)] = row;
+        else bodyWeights.push(row);
+      }
+    },
+    async getAthleteSettings() {
+      return { ...(athleteSettings ?? DEFAULT_ATHLETE_SETTINGS) };
+    },
+    async saveAthleteSettings(patch) {
+      const next: AthleteSettings = { ...(athleteSettings ?? DEFAULT_ATHLETE_SETTINGS) };
+      for (const [key, value] of Object.entries(patch) as [keyof AthleteSettings, never][]) {
+        if (value !== undefined) next[key] = value;
+      }
+      athleteSettings = next;
+      return { ...next };
+    },
+    async listFtpHistory() {
+      // Stable sort keeps insertion (created_at) order among equal effectiveFrom.
+      return ftpHistory
+        .slice()
+        .sort((a, b) => instant(a.effectiveFrom) - instant(b.effectiveFrom))
+        .map((e) => ({ ...e }));
+    },
+    async addFtpHistoryEntry(entry) {
+      if (!(Number.isInteger(entry.ftpW) && entry.ftpW > 0)) throw new Error(`ftpW must be a positive integer, got ${entry.ftpW}`);
+      if (ftpHistory.some((e) => instant(e.effectiveFrom) === instant(entry.effectiveFrom) && e.source === entry.source)) {
+        throw new Error(`An FTP entry from ${entry.source} at ${entry.effectiveFrom} already exists`);
+      }
+      const row: FtpHistoryEntry = { id: nextId("ftp"), effectiveFrom: entry.effectiveFrom, ftpW: entry.ftpW, source: entry.source, sourceRef: entry.sourceRef ?? null };
+      ftpHistory.push(row);
+      return { ...row };
+    },
+    async listDailyTrainingLoad(from, to) {
+      return [...trainingLoad.values()]
+        .filter((d) => d.date >= from && d.date <= to)
+        .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+        .map((d) => structuredClone(d));
+    },
+    async upsertDailyTrainingLoad(rows) {
+      for (const d of rows) trainingLoad.set(d.date, structuredClone(d));
+    },
+    async listSyncState() {
+      // Only the service-role sync writes sync_state; the mock has no sync.
+      return [];
     },
   };
 }

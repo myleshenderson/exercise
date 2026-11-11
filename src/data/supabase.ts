@@ -1,6 +1,26 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { DataLayer, DayLookup } from "./DataLayer.js";
-import type { Exercise, WorkoutDay, Session, SetEntry, Program } from "../types.js";
+import { DEFAULT_ATHLETE_SETTINGS, type DataLayer, type DayLookup, type ExternalActivityFilter } from "./DataLayer.js";
+import type {
+  Exercise,
+  WorkoutDay,
+  Session,
+  SetEntry,
+  Program,
+  ActivitySource,
+  ExternalActivity,
+  ExternalActivityInput,
+  ActivityStream,
+  ActivityStreamInput,
+  StreamChannel,
+  BodyWeight,
+  BodyWeightInput,
+  AthleteSettings,
+  FtpHistoryEntry,
+  FtpSource,
+  DailyTrainingLoad,
+  SyncState,
+  SyncSource,
+} from "../types.js";
 import { getSupabase } from "./supabaseClient.js";
 import { nextAvailablePositionByProgram, isDayAvailable } from "../lib/programAvailability.js";
 
@@ -310,6 +330,415 @@ export async function findProgramByName(client: SupabaseClient, name: string): P
   return data ? { id: data.id, name: data.name } : null;
 }
 
+// ---------------------------------------------------------------------------
+// Ride analytics (AI-631). Each function takes the client first (the
+// claimSeed pattern). Under the service role auth.uid() is null, so the column
+// default cannot fill user_id: the write helpers the wave 2 sync uses
+// (upsertExternalActivities, replaceActivityStreams, upsertBodyWeights,
+// addFtpHistoryEntry, upsertDailyTrainingLoad, upsertSyncState) take a userId
+// and stamp it on every row; the DataLayer passes none and the default (the
+// signed-in user) applies. The reads and saveAthleteSettings filter on no
+// user and rely on RLS, so they are for a user's client only: under the
+// service role they would see every user's rows.
+//
+// Bulk upserts collapse rows sharing a conflict key (last one wins) before
+// sending: Postgres rejects a whole INSERT ... ON CONFLICT DO UPDATE batch
+// that touches the same row twice.
+// ---------------------------------------------------------------------------
+
+/** Every external_activities column except provider_payload, which reads never return. */
+export const EXTERNAL_ACTIVITY_COLUMNS = [
+  "id", "source", "source_id", "started_at", "timezone", "sport", "sub_type", "environment", "title",
+  "elapsed_s", "moving_s", "distance_m", "elevation_gain_m", "avg_speed_mps", "max_speed_mps",
+  "avg_power_w", "max_power_w", "normalized_power_w", "intensity_factor", "tss", "work_kj", "calories",
+  "avg_hr_bpm", "max_hr_bpm", "avg_cadence_rpm", "biggest_climb_m", "tss_source", "ftp_used_w", "ftp_source",
+  "has_power", "has_hr", "power_curve", "best_efforts", "paired_activity_id", "synced_at",
+].join(", ");
+
+const BODY_WEIGHT_COLUMNS =
+  "id, source, source_id, measured_at, weight_kg, bmi, body_fat_pct, body_water_pct, muscle_mass_kg, bone_mass_kg";
+const ATHLETE_SETTINGS_COLUMNS =
+  "manual_ftp_w, lthr_bpm, max_hr_bpm, resting_hr_bpm, strength_session_tss, no_power_tss_per_hour, units, week_start";
+const FTP_HISTORY_COLUMNS = "id, effective_from, ftp_w, source, source_ref";
+const DAILY_TRAINING_LOAD_COLUMNS = "date, tss_total, tss_by_source, ctl, atl, tsb";
+const SYNC_STATE_COLUMNS =
+  "source, cursor, last_run_at, last_success_at, items_fetched, items_upserted, last_error, backfill_complete, auth_status";
+
+type DbRow = Record<string, unknown>;
+
+const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
+const nullable = <T>(v: T | undefined): T | null => (v === undefined ? null : v);
+const withUser = (row: DbRow, userId: string | undefined): DbRow => (userId === undefined ? row : { ...row, user_id: userId });
+
+/** `rows` with one row per key, the last one for each key, in first-appearance order. */
+function lastByKey<T>(rows: T[], key: (row: T) => string): T[] {
+  const byKey = new Map<string, T>();
+  for (const row of rows) byKey.set(key(row), row);
+  return [...byKey.values()];
+}
+
+// [camelCase field, snake_case column] for every nullable double precision activity column.
+const ACTIVITY_METRICS: [keyof ExternalActivity & keyof ExternalActivityInput, string][] = [
+  ["elapsedS", "elapsed_s"], ["movingS", "moving_s"], ["distanceM", "distance_m"],
+  ["elevationGainM", "elevation_gain_m"], ["avgSpeedMps", "avg_speed_mps"], ["maxSpeedMps", "max_speed_mps"],
+  ["avgPowerW", "avg_power_w"], ["maxPowerW", "max_power_w"], ["normalizedPowerW", "normalized_power_w"],
+  ["intensityFactor", "intensity_factor"], ["tss", "tss"], ["workKj", "work_kj"], ["calories", "calories"],
+  ["avgHrBpm", "avg_hr_bpm"], ["maxHrBpm", "max_hr_bpm"], ["avgCadenceRpm", "avg_cadence_rpm"],
+  ["biggestClimbM", "biggest_climb_m"],
+];
+
+export function toExternalActivity(r: DbRow): ExternalActivity {
+  return {
+    id: r.id as string,
+    source: r.source as ActivitySource,
+    sourceId: r.source_id as string,
+    startedAt: r.started_at as string,
+    timezone: (r.timezone as string | null) ?? null,
+    sport: r.sport as string,
+    subType: (r.sub_type as string | null) ?? null,
+    environment: r.environment as ExternalActivity["environment"],
+    title: (r.title as string | null) ?? null,
+    elapsedS: num(r.elapsed_s),
+    movingS: num(r.moving_s),
+    distanceM: num(r.distance_m),
+    elevationGainM: num(r.elevation_gain_m),
+    avgSpeedMps: num(r.avg_speed_mps),
+    maxSpeedMps: num(r.max_speed_mps),
+    avgPowerW: num(r.avg_power_w),
+    maxPowerW: num(r.max_power_w),
+    normalizedPowerW: num(r.normalized_power_w),
+    intensityFactor: num(r.intensity_factor),
+    tss: num(r.tss),
+    workKj: num(r.work_kj),
+    calories: num(r.calories),
+    avgHrBpm: num(r.avg_hr_bpm),
+    maxHrBpm: num(r.max_hr_bpm),
+    avgCadenceRpm: num(r.avg_cadence_rpm),
+    biggestClimbM: num(r.biggest_climb_m),
+    tssSource: (r.tss_source as ExternalActivity["tssSource"]) ?? null,
+    ftpUsedW: num(r.ftp_used_w),
+    ftpSource: (r.ftp_source as string | null) ?? null,
+    hasPower: r.has_power === true,
+    hasHr: r.has_hr === true,
+    powerCurve: r.power_curve ?? null,
+    bestEfforts: r.best_efforts ?? null,
+    pairedActivityId: (r.paired_activity_id as string | null) ?? null,
+    syncedAt: r.synced_at as string,
+  };
+}
+
+/** ftp_used_w is an integer column: whole watts. */
+const roundFtp = (w: number | null | undefined): number | null => (w === null || w === undefined ? null : Math.round(w));
+
+function fromExternalActivityInput(a: ExternalActivityInput, now: string): DbRow {
+  const row: DbRow = {
+    source: a.source,
+    source_id: a.sourceId,
+    started_at: a.startedAt,
+    timezone: nullable(a.timezone),
+    sport: a.sport,
+    sub_type: nullable(a.subType),
+    environment: a.environment,
+    title: nullable(a.title),
+    tss_source: nullable(a.tssSource),
+    ftp_used_w: roundFtp(a.ftpUsedW),
+    ftp_source: nullable(a.ftpSource),
+    has_power: a.hasPower ?? false,
+    has_hr: a.hasHr ?? false,
+    power_curve: nullable(a.powerCurve),
+    best_efforts: nullable(a.bestEfforts),
+    paired_activity_id: nullable(a.pairedActivityId),
+    provider_payload: a.providerPayload,
+    synced_at: now,
+    updated_at: now,
+  };
+  for (const [field, column] of ACTIVITY_METRICS) row[column] = nullable(a[field] as number | null | undefined);
+  return row;
+}
+
+export async function listExternalActivities(client: SupabaseClient, f: ExternalActivityFilter): Promise<ExternalActivity[]> {
+  let q = client.from("external_activities").select(EXTERNAL_ACTIVITY_COLUMNS);
+  if (f.from !== undefined) q = q.gte("started_at", f.from);
+  if (f.to !== undefined) q = q.lte("started_at", f.to);
+  if (f.source !== undefined) q = q.eq("source", f.source);
+  if (f.environment !== undefined) q = q.eq("environment", f.environment);
+  let ordered = q.order("started_at", { ascending: false });
+  if (f.limit !== undefined) ordered = ordered.limit(f.limit);
+  const { data, error } = await ordered;
+  if (error) throw error;
+  return ((data ?? []) as unknown as DbRow[]).map(toExternalActivity);
+}
+
+export async function getExternalActivity(client: SupabaseClient, id: string): Promise<ExternalActivity | null> {
+  const { data, error } = await client.from("external_activities").select(EXTERNAL_ACTIVITY_COLUMNS).eq("id", id).maybeSingle();
+  if (error) throw error;
+  return data ? toExternalActivity(data as unknown as DbRow) : null;
+}
+
+export async function upsertExternalActivities(
+  client: SupabaseClient,
+  rows: ExternalActivityInput[],
+  userId?: string,
+): Promise<ExternalActivity[]> {
+  if (rows.length === 0) return [];
+  const now = new Date().toISOString();
+  const { data, error } = await client
+    .from("external_activities")
+    .upsert(
+      lastByKey(rows, (r) => `${r.source}\u0000${r.sourceId}`).map((r) => withUser(fromExternalActivityInput(r, now), userId)),
+      { onConflict: "user_id,source,source_id" },
+    )
+    .select(EXTERNAL_ACTIVITY_COLUMNS);
+  if (error) throw error;
+  return ((data ?? []) as unknown as DbRow[]).map(toExternalActivity);
+}
+
+export async function getActivityStreams(client: SupabaseClient, activityId: string): Promise<ActivityStream[]> {
+  const { data, error } = await client
+    .from("activity_streams")
+    .select("activity_id, channel, start_offset_s, values")
+    .eq("activity_id", activityId)
+    .order("channel");
+  if (error) throw error;
+  return ((data ?? []) as DbRow[]).map((r) => ({
+    activityId: r.activity_id as string,
+    channel: r.channel as StreamChannel,
+    startOffsetS: Number(r.start_offset_s),
+    values: (r.values as (number | null)[]) ?? [],
+  }));
+}
+
+export async function replaceActivityStreams(
+  client: SupabaseClient,
+  activityId: string,
+  streams: ActivityStreamInput[],
+  userId?: string,
+): Promise<void> {
+  if (streams.length === 0) return;
+  const now = new Date().toISOString();
+  const { error } = await client.from("activity_streams").upsert(
+    lastByKey(streams, (s) => s.channel).map((s) =>
+      withUser(
+        { activity_id: activityId, channel: s.channel, start_offset_s: s.startOffsetS ?? 0, values: s.values, updated_at: now },
+        userId,
+      ),
+    ),
+    { onConflict: "activity_id,channel" },
+  );
+  if (error) throw error;
+}
+
+const toBodyWeight = (r: DbRow): BodyWeight => ({
+  id: r.id as string,
+  source: r.source as BodyWeight["source"],
+  sourceId: r.source_id as string,
+  measuredAt: r.measured_at as string,
+  weightKg: Number(r.weight_kg),
+  bmi: num(r.bmi),
+  bodyFatPct: num(r.body_fat_pct),
+  bodyWaterPct: num(r.body_water_pct),
+  muscleMassKg: num(r.muscle_mass_kg),
+  boneMassKg: num(r.bone_mass_kg),
+});
+
+export async function listBodyWeights(client: SupabaseClient, from: string, to: string): Promise<BodyWeight[]> {
+  const { data, error } = await client
+    .from("body_weights")
+    .select(BODY_WEIGHT_COLUMNS)
+    .gte("measured_at", from)
+    .lte("measured_at", to)
+    .order("measured_at");
+  if (error) throw error;
+  return ((data ?? []) as DbRow[]).map(toBodyWeight);
+}
+
+export async function upsertBodyWeights(client: SupabaseClient, rows: BodyWeightInput[], userId?: string): Promise<void> {
+  if (rows.length === 0) return;
+  const now = new Date().toISOString();
+  const { error } = await client.from("body_weights").upsert(
+    lastByKey(rows, (w) => `${w.source}\u0000${w.sourceId}`).map((w) =>
+      withUser(
+        {
+          source: w.source,
+          source_id: w.sourceId,
+          measured_at: w.measuredAt,
+          weight_kg: w.weightKg,
+          bmi: nullable(w.bmi),
+          body_fat_pct: nullable(w.bodyFatPct),
+          body_water_pct: nullable(w.bodyWaterPct),
+          muscle_mass_kg: nullable(w.muscleMassKg),
+          bone_mass_kg: nullable(w.boneMassKg),
+          provider_payload: w.providerPayload,
+          updated_at: now,
+        },
+        userId,
+      ),
+    ),
+    { onConflict: "user_id,source,source_id" },
+  );
+  if (error) throw error;
+}
+
+const toAthleteSettings = (r: DbRow): AthleteSettings => ({
+  manualFtpW: num(r.manual_ftp_w),
+  lthrBpm: num(r.lthr_bpm),
+  maxHrBpm: num(r.max_hr_bpm),
+  restingHrBpm: num(r.resting_hr_bpm),
+  strengthSessionTss: Number(r.strength_session_tss),
+  noPowerTssPerHour: Number(r.no_power_tss_per_hour),
+  units: r.units as AthleteSettings["units"],
+  weekStart: r.week_start as AthleteSettings["weekStart"],
+});
+
+const ATHLETE_SETTINGS_FIELDS: [keyof AthleteSettings, string][] = [
+  ["manualFtpW", "manual_ftp_w"], ["lthrBpm", "lthr_bpm"], ["maxHrBpm", "max_hr_bpm"],
+  ["restingHrBpm", "resting_hr_bpm"], ["strengthSessionTss", "strength_session_tss"],
+  ["noPowerTssPerHour", "no_power_tss_per_hour"], ["units", "units"], ["weekStart", "week_start"],
+];
+
+export async function getAthleteSettings(client: SupabaseClient): Promise<AthleteSettings> {
+  const { data, error } = await client.from("athlete_settings").select(ATHLETE_SETTINGS_COLUMNS).maybeSingle();
+  if (error) throw error;
+  return data ? toAthleteSettings(data as DbRow) : { ...DEFAULT_ATHLETE_SETTINGS };
+}
+
+/**
+ * Upserts the caller's settings row with only the defined fields of `patch`:
+ * on insert the other columns take their defaults, on conflict only the sent
+ * columns are updated. An empty patch writes nothing.
+ */
+export async function saveAthleteSettings(client: SupabaseClient, patch: Partial<AthleteSettings>): Promise<AthleteSettings> {
+  const row: DbRow = {};
+  for (const [field, column] of ATHLETE_SETTINGS_FIELDS) if (patch[field] !== undefined) row[column] = patch[field];
+  if (Object.keys(row).length === 0) return getAthleteSettings(client);
+  row.updated_at = new Date().toISOString();
+  const { data, error } = await client
+    .from("athlete_settings")
+    .upsert(row, { onConflict: "user_id" })
+    .select(ATHLETE_SETTINGS_COLUMNS)
+    .single();
+  if (error) throw error;
+  return toAthleteSettings(data as DbRow);
+}
+
+const toFtpHistoryEntry = (r: DbRow): FtpHistoryEntry => ({
+  id: r.id as string,
+  effectiveFrom: r.effective_from as string,
+  ftpW: Number(r.ftp_w),
+  source: r.source as FtpSource,
+  sourceRef: (r.source_ref as string | null) ?? null,
+});
+
+export async function listFtpHistory(client: SupabaseClient): Promise<FtpHistoryEntry[]> {
+  const { data, error } = await client
+    .from("ftp_history")
+    .select(FTP_HISTORY_COLUMNS)
+    .order("effective_from")
+    .order("created_at");
+  if (error) throw error;
+  return ((data ?? []) as DbRow[]).map(toFtpHistoryEntry);
+}
+
+export async function addFtpHistoryEntry(
+  client: SupabaseClient,
+  entry: Omit<FtpHistoryEntry, "id">,
+  userId?: string,
+): Promise<FtpHistoryEntry> {
+  const { data, error } = await client
+    .from("ftp_history")
+    .insert(
+      withUser(
+        { effective_from: entry.effectiveFrom, ftp_w: entry.ftpW, source: entry.source, source_ref: entry.sourceRef ?? null },
+        userId,
+      ),
+    )
+    .select(FTP_HISTORY_COLUMNS)
+    .single();
+  if (error) throw error;
+  return toFtpHistoryEntry(data as DbRow);
+}
+
+const toDailyTrainingLoad = (r: DbRow): DailyTrainingLoad => ({
+  date: r.date as string,
+  tssTotal: Number(r.tss_total),
+  tssBySource: (r.tss_by_source as DailyTrainingLoad["tssBySource"]) ?? {},
+  ctl: Number(r.ctl),
+  atl: Number(r.atl),
+  tsb: Number(r.tsb),
+});
+
+export async function listDailyTrainingLoad(client: SupabaseClient, from: string, to: string): Promise<DailyTrainingLoad[]> {
+  const { data, error } = await client
+    .from("daily_training_load")
+    .select(DAILY_TRAINING_LOAD_COLUMNS)
+    .gte("date", from)
+    .lte("date", to)
+    .order("date");
+  if (error) throw error;
+  return ((data ?? []) as DbRow[]).map(toDailyTrainingLoad);
+}
+
+export async function upsertDailyTrainingLoad(client: SupabaseClient, rows: DailyTrainingLoad[], userId?: string): Promise<void> {
+  if (rows.length === 0) return;
+  const now = new Date().toISOString();
+  const { error } = await client.from("daily_training_load").upsert(
+    lastByKey(rows, (d) => d.date).map((d) =>
+      withUser(
+        { date: d.date, tss_total: d.tssTotal, tss_by_source: d.tssBySource, ctl: d.ctl, atl: d.atl, tsb: d.tsb, updated_at: now },
+        userId,
+      ),
+    ),
+    { onConflict: "user_id,date" },
+  );
+  if (error) throw error;
+}
+
+const toSyncState = (r: DbRow): SyncState => ({
+  source: r.source as SyncSource,
+  cursor: r.cursor ?? null,
+  lastRunAt: (r.last_run_at as string | null) ?? null,
+  lastSuccessAt: (r.last_success_at as string | null) ?? null,
+  itemsFetched: Number(r.items_fetched),
+  itemsUpserted: Number(r.items_upserted),
+  lastError: (r.last_error as string | null) ?? null,
+  backfillComplete: r.backfill_complete === true,
+  authStatus: r.auth_status as SyncState["authStatus"],
+});
+
+export async function listSyncState(client: SupabaseClient): Promise<SyncState[]> {
+  const { data, error } = await client.from("sync_state").select(SYNC_STATE_COLUMNS).order("source");
+  if (error) throw error;
+  return ((data ?? []) as DbRow[]).map(toSyncState);
+}
+
+const SYNC_STATE_FIELDS: [Exclude<keyof SyncState, "source">, string][] = [
+  ["cursor", "cursor"], ["lastRunAt", "last_run_at"], ["lastSuccessAt", "last_success_at"],
+  ["itemsFetched", "items_fetched"], ["itemsUpserted", "items_upserted"], ["lastError", "last_error"],
+  ["backfillComplete", "backfill_complete"], ["authStatus", "auth_status"],
+];
+
+/**
+ * Service-role only (clients have select on sync_state, nothing else), so
+ * not on the DataLayer: the wave 2 sync records a run with it. Upserts on
+ * (user_id, source); only the defined fields of `row` change.
+ */
+export async function upsertSyncState(
+  client: SupabaseClient,
+  row: Pick<SyncState, "source"> & Partial<Omit<SyncState, "source">>,
+  userId: string,
+): Promise<SyncState> {
+  const payload: DbRow = { user_id: userId, source: row.source };
+  for (const [field, column] of SYNC_STATE_FIELDS) if (row[field] !== undefined) payload[column] = row[field];
+  payload.updated_at = new Date().toISOString();
+  const { data, error } = await client
+    .from("sync_state")
+    .upsert(payload, { onConflict: "user_id,source" })
+    .select(SYNC_STATE_COLUMNS)
+    .single();
+  if (error) throw error;
+  return toSyncState(data as DbRow);
+}
+
 export function createSupabaseDataLayer(): DataLayer {
   const supabase = getSupabase();
 
@@ -533,5 +962,19 @@ export function createSupabaseDataLayer(): DataLayer {
       const { error } = await supabase.from("sessions").delete().eq("id", id);
       if (error) throw error;
     },
+    listExternalActivities: (f) => listExternalActivities(supabase, f),
+    getExternalActivity: (id) => getExternalActivity(supabase, id),
+    upsertExternalActivities: (rows) => upsertExternalActivities(supabase, rows),
+    getActivityStreams: (activityId) => getActivityStreams(supabase, activityId),
+    replaceActivityStreams: (activityId, streams) => replaceActivityStreams(supabase, activityId, streams),
+    listBodyWeights: (from, to) => listBodyWeights(supabase, from, to),
+    upsertBodyWeights: (rows) => upsertBodyWeights(supabase, rows),
+    getAthleteSettings: () => getAthleteSettings(supabase),
+    saveAthleteSettings: (patch) => saveAthleteSettings(supabase, patch),
+    listFtpHistory: () => listFtpHistory(supabase),
+    addFtpHistoryEntry: (entry) => addFtpHistoryEntry(supabase, entry),
+    listDailyTrainingLoad: (from, to) => listDailyTrainingLoad(supabase, from, to),
+    upsertDailyTrainingLoad: (rows) => upsertDailyTrainingLoad(supabase, rows),
+    listSyncState: () => listSyncState(supabase),
   };
 }

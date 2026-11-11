@@ -15,6 +15,10 @@ const METHODS: Record<keyof DataLayer, true> = {
   getLastSetsForExercise: true, startSession: true, getSession: true, getLastSessionForDay: true,
   getSessionForDayAndDate: true, logExercise: true, getExerciseHistory: true, listSessions: true,
   deleteSession: true,
+  listExternalActivities: true, getExternalActivity: true, upsertExternalActivities: true, getActivityStreams: true,
+  replaceActivityStreams: true, listBodyWeights: true, upsertBodyWeights: true, getAthleteSettings: true,
+  saveAthleteSettings: true, listFtpHistory: true, addFtpHistoryEntry: true, listDailyTrainingLoad: true,
+  upsertDailyTrainingLoad: true, listSyncState: true,
 };
 
 // Supabase is loaded with a dynamic import() on first use, so a mock or

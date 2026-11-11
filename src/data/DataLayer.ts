@@ -1,4 +1,42 @@
-import type { Exercise, WorkoutDay, Session, SetEntry, Program } from "../types.js";
+import type {
+  Exercise,
+  WorkoutDay,
+  Session,
+  SetEntry,
+  Program,
+  ActivitySource,
+  ActivityEnvironment,
+  ExternalActivity,
+  ExternalActivityInput,
+  ActivityStream,
+  ActivityStreamInput,
+  BodyWeight,
+  BodyWeightInput,
+  AthleteSettings,
+  FtpHistoryEntry,
+  DailyTrainingLoad,
+  SyncState,
+} from "../types.js";
+
+/** athlete_settings' column defaults: what getAthleteSettings() returns when the user has no row. */
+export const DEFAULT_ATHLETE_SETTINGS: Readonly<AthleteSettings> = Object.freeze({
+  manualFtpW: null,
+  lthrBpm: null,
+  maxHrBpm: null,
+  restingHrBpm: null,
+  strengthSessionTss: 50,
+  noPowerTssPerHour: 55,
+  units: "imperial",
+  weekStart: "monday",
+});
+
+export interface ExternalActivityFilter {
+  from?: string; // inclusive lower bound on startedAt (ISO instant)
+  to?: string; // inclusive upper bound on startedAt (ISO instant)
+  source?: ActivitySource;
+  environment?: ActivityEnvironment;
+  limit?: number;
+}
 
 /** A live (not soft-deleted) workout day as the name lookups return it. */
 export type DayLookup = Pick<WorkoutDay, "id" | "name" | "position" | "programId" | "programPosition">;
@@ -56,4 +94,24 @@ export interface DataLayer {
   getExerciseHistory(exerciseId: string): Promise<Session[]>;
   listSessions(): Promise<Session[]>;
   deleteSession(id: string): Promise<void>;
+
+  // Ride analytics (AI-631). Activities never carry providerPayload on reads.
+  listExternalActivities(f: ExternalActivityFilter): Promise<ExternalActivity[]>; // newest first
+  getExternalActivity(id: string): Promise<ExternalActivity | null>;
+  // Upserts on (user, source, sourceId); every column is replaced, omitted
+  // optional fields become null/false. Returns the stored rows.
+  upsertExternalActivities(rows: ExternalActivityInput[]): Promise<ExternalActivity[]>;
+  getActivityStreams(activityId: string): Promise<ActivityStream[]>; // ordered by channel
+  // Upserts each channel on (activityId, channel). Channels not passed are left as they are.
+  replaceActivityStreams(activityId: string, streams: ActivityStreamInput[]): Promise<void>;
+  listBodyWeights(from: string, to: string): Promise<BodyWeight[]>; // measuredAt in [from, to], oldest first
+  upsertBodyWeights(rows: BodyWeightInput[]): Promise<void>; // on (user, source, sourceId)
+  getAthleteSettings(): Promise<AthleteSettings>; // DEFAULT_ATHLETE_SETTINGS when no row exists
+  saveAthleteSettings(patch: Partial<AthleteSettings>): Promise<AthleteSettings>; // only defined fields change
+  listFtpHistory(): Promise<FtpHistoryEntry[]>; // oldest effectiveFrom first
+  // Inserts; a second entry with the same (effectiveFrom, source) is rejected.
+  addFtpHistoryEntry(entry: Omit<FtpHistoryEntry, "id">): Promise<FtpHistoryEntry>;
+  listDailyTrainingLoad(from: string, to: string): Promise<DailyTrainingLoad[]>; // date in [from, to], oldest first
+  upsertDailyTrainingLoad(rows: DailyTrainingLoad[]): Promise<void>; // on (user, date)
+  listSyncState(): Promise<SyncState[]>; // ordered by source
 }

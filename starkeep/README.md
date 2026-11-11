@@ -330,6 +330,8 @@ Every application table from `supabase/migrations/` is declared under
 column names are unchanged, except that soft delete's `deleted_at` becomes
 `archived_at` (below).
 
+**Not declared yet:** the ride analytics tables (AI-631); on Starkeep their DataLayer reads return empty or default results and writes reject.
+
 **Dropped:**
 
 - Every `user_id` column. Starkeep data is per install, not per row.
