@@ -56,7 +56,10 @@ all of them. A missing variable fails the run with one error naming every missin
 3. **Set the Vercel env vars** (Production): `SYNC_OWNER_USER_ID`, `GARMIN_API_KEY`,
    `PELOTON_AUTH0_CLIENT_ID`, `CREDENTIALS_KEY` (same value as `.env.local`), `CRON_SECRET`,
    and optionally `SYNC_DEFAULT_TIMEZONE`. `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`
-   are already set for the MCP functions.
+   are already set for the MCP functions. `scripts/set-sync-env.sh` does this step and
+   step 2 together: it generates `CREDENTIALS_KEY` and `CRON_SECRET` once, prompts for the
+   rest (secrets without echo, never on argv), writes `.env.local`, and pushes the same
+   values to Vercel Production with `vercel env add --force`. Rerunning it keeps saved values.
 4. **Merge.** Vercel registers the cron on the production deploy; its first run is at the next
    10:00 UTC, so the day after the merge. Check it in Vercel → Project → Cron Jobs, or call it
    yourself:
