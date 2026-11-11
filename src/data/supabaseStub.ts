@@ -19,7 +19,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-export type Operation = "select" | "insert" | "update" | "delete";
+export type Operation = "select" | "insert" | "update" | "upsert" | "delete";
 
 export interface Step {
   method: string;
@@ -30,7 +30,7 @@ export interface RecordedQuery {
   table: string;
   /** The first verb called after `from()`. */
   op: Operation;
-  /** The insert/update payload, as passed. */
+  /** The insert/update/upsert payload, as passed. */
   payload?: unknown;
   /** Every builder call after `from()`, verb included, in call order. */
   steps: Step[];
@@ -52,11 +52,11 @@ export interface SupabaseStub {
   queries: RecordedQuery[];
   /** Queue canned responses, consumed one per query in the order queries are opened. */
   reply(...responses: StubResponse[]): void;
-  /** The filters (`eq`, `is`, `not`, `lt`) applied to a query, as `[method, ...args]` tuples. */
+  /** The filters (`eq`, `is`, `not`, `lt`, `gte`, `lte`) applied to a query, as `[method, ...args]` tuples. */
   filters(query: RecordedQuery): unknown[][];
 }
 
-const FILTERS = new Set(["eq", "is", "not", "lt"]);
+const FILTERS = new Set(["eq", "is", "not", "lt", "gte", "lte"]);
 
 export function createSupabaseStub(): SupabaseStub {
   const queries: RecordedQuery[] = [];
@@ -76,6 +76,8 @@ export function createSupabaseStub(): SupabaseStub {
       is: record("is"),
       not: record("not"),
       lt: record("lt"),
+      gte: record("gte"),
+      lte: record("lte"),
       order: record("order"),
       limit: record("limit"),
       single: record("single"),
@@ -102,6 +104,8 @@ export function createSupabaseStub(): SupabaseStub {
       select: (...args: unknown[]) => open(table, "select", args),
       insert: (payload: unknown) => open(table, "insert", [payload], payload),
       update: (payload: unknown) => open(table, "update", [payload], payload),
+      upsert: (payload: unknown, options?: unknown) =>
+        open(table, "upsert", options === undefined ? [payload] : [payload, options], payload),
       delete: () => open(table, "delete", []),
     }),
   } as unknown as SupabaseClient;

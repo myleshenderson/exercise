@@ -20,7 +20,7 @@
  * No `user_id` anywhere: Starkeep scopes rows to the caller underneath the
  * row API.
  */
-import type { DataLayer, DayLookup } from "./DataLayer.js";
+import { DEFAULT_ATHLETE_SETTINGS, type DataLayer, type DayLookup } from "./DataLayer.js";
 import type { Exercise, Program, Session, SetEntry, WorkoutDay } from "../types.js";
 import { nextAvailablePositionByProgram, isDayAvailable } from "../lib/programAvailability.js";
 import { compareText } from "../analysis/sqlSemantics.js";
@@ -192,6 +192,37 @@ function newestFirst(a: SessionRow, b: SessionRow): number {
   if (a.created_at !== b.created_at) return a.created_at < b.created_at ? 1 : -1;
   return 0;
 }
+
+/** What every ride analytics write rejects with until Starkeep declares the tables. */
+export const RIDE_ANALYTICS_UNAVAILABLE = "ride analytics is not available on Starkeep yet";
+
+/**
+ * Ride analytics (AI-631) is not declared in starkeep.manifest.json yet
+ * (decision 3: Starkeep parity is a later issue). Reads answer "nothing
+ * stored" and writes reject, both without touching the transport.
+ */
+const rideAnalyticsStub: Pick<
+  DataLayer,
+  | "listExternalActivities" | "getExternalActivity" | "upsertExternalActivities" | "getActivityStreams"
+  | "replaceActivityStreams" | "listBodyWeights" | "upsertBodyWeights" | "getAthleteSettings"
+  | "saveAthleteSettings" | "listFtpHistory" | "addFtpHistoryEntry" | "listDailyTrainingLoad"
+  | "upsertDailyTrainingLoad" | "listSyncState"
+> = {
+  listExternalActivities: async () => [],
+  getExternalActivity: async () => null,
+  getActivityStreams: async () => [],
+  listBodyWeights: async () => [],
+  getAthleteSettings: async () => ({ ...DEFAULT_ATHLETE_SETTINGS }),
+  listFtpHistory: async () => [],
+  listDailyTrainingLoad: async () => [],
+  listSyncState: async () => [],
+  upsertExternalActivities: async () => Promise.reject(new Error(RIDE_ANALYTICS_UNAVAILABLE)),
+  replaceActivityStreams: async () => Promise.reject(new Error(RIDE_ANALYTICS_UNAVAILABLE)),
+  upsertBodyWeights: async () => Promise.reject(new Error(RIDE_ANALYTICS_UNAVAILABLE)),
+  saveAthleteSettings: async () => Promise.reject(new Error(RIDE_ANALYTICS_UNAVAILABLE)),
+  addFtpHistoryEntry: async () => Promise.reject(new Error(RIDE_ANALYTICS_UNAVAILABLE)),
+  upsertDailyTrainingLoad: async () => Promise.reject(new Error(RIDE_ANALYTICS_UNAVAILABLE)),
+};
 
 export function createStarkeepDataLayer(transport: Transport, opts: StarkeepDataLayerOptions = {}): DataLayer {
   return createStarkeepDataLayerFromRows(createRowClient(transport), opts);
@@ -620,5 +651,6 @@ export function createStarkeepDataLayerFromRows(rows: RowClient, opts: StarkeepD
       await rows.remove(T.sets, { session_id: id });
       await rows.remove(T.sessions, { id });
     },
+    ...rideAnalyticsStub,
   };
 }

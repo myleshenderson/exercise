@@ -20,6 +20,13 @@ import {
   reorderProgramDays,
   logExercise,
   createSupabaseDataLayer,
+  EXTERNAL_ACTIVITY_COLUMNS,
+  upsertExternalActivities,
+  replaceActivityStreams,
+  upsertBodyWeights,
+  addFtpHistoryEntry,
+  upsertDailyTrainingLoad,
+  upsertSyncState,
 } from "./supabase";
 
 // createSupabaseDataLayer() takes its client from getSupabase(); the contract
@@ -1385,6 +1392,604 @@ describe("Supabase DataLayer contract", () => {
       const { db, stub } = setup();
       stub.reply({ error: FAIL });
       await expect(db.deleteSession("s-1")).rejects.toBe(FAIL);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ride analytics (AI-631): table, columns, filters, onConflict and user_id
+// stamping for every new function, through the DataLayer where it is wired
+// and directly for the service-role userId variants.
+// ---------------------------------------------------------------------------
+
+const USER = "user-1";
+
+const activityRow = (id: string, over: Record<string, unknown> = {}) => ({
+  id,
+  source: "garmin",
+  source_id: `g-${id}`,
+  started_at: "2026-11-01T14:00:00+00:00",
+  timezone: "Etc/GMT+5",
+  sport: "cycling",
+  sub_type: "road_biking",
+  environment: "outdoor",
+  title: "Morning ride",
+  elapsed_s: 3600,
+  moving_s: 3500,
+  distance_m: 30000,
+  elevation_gain_m: 250,
+  avg_speed_mps: 8.5,
+  max_speed_mps: 15,
+  avg_power_w: 200,
+  max_power_w: 600,
+  normalized_power_w: 215,
+  intensity_factor: 0.86,
+  tss: 74,
+  work_kj: 720,
+  calories: 750,
+  avg_hr_bpm: null,
+  max_hr_bpm: null,
+  avg_cadence_rpm: 88,
+  biggest_climb_m: 80,
+  tss_source: "power",
+  ftp_used_w: 250,
+  ftp_source: "manual",
+  has_power: true,
+  has_hr: false,
+  power_curve: { "60": 320 },
+  best_efforts: null,
+  paired_activity_id: null,
+  synced_at: NOW,
+  ...over,
+});
+
+const activity = (id: string) => ({
+  id,
+  source: "garmin",
+  sourceId: `g-${id}`,
+  startedAt: "2026-11-01T14:00:00+00:00",
+  timezone: "Etc/GMT+5",
+  sport: "cycling",
+  subType: "road_biking",
+  environment: "outdoor",
+  title: "Morning ride",
+  elapsedS: 3600,
+  movingS: 3500,
+  distanceM: 30000,
+  elevationGainM: 250,
+  avgSpeedMps: 8.5,
+  maxSpeedMps: 15,
+  avgPowerW: 200,
+  maxPowerW: 600,
+  normalizedPowerW: 215,
+  intensityFactor: 0.86,
+  tss: 74,
+  workKj: 720,
+  calories: 750,
+  avgHrBpm: null,
+  maxHrBpm: null,
+  avgCadenceRpm: 88,
+  biggestClimbM: 80,
+  tssSource: "power",
+  ftpUsedW: 250,
+  ftpSource: "manual",
+  hasPower: true,
+  hasHr: false,
+  powerCurve: { "60": 320 },
+  bestEfforts: null,
+  pairedActivityId: null,
+  syncedAt: NOW,
+});
+
+const NULL_METRICS = {
+  timezone: null, sub_type: null, title: null, elapsed_s: null, moving_s: null, distance_m: null,
+  elevation_gain_m: null, avg_speed_mps: null, max_speed_mps: null, avg_power_w: null, max_power_w: null,
+  normalized_power_w: null, intensity_factor: null, tss: null, work_kj: null, calories: null, avg_hr_bpm: null,
+  max_hr_bpm: null, avg_cadence_rpm: null, biggest_climb_m: null, tss_source: null, ftp_used_w: null,
+  ftp_source: null, power_curve: null, best_efforts: null, paired_activity_id: null,
+};
+
+describe("Supabase DataLayer contract: ride analytics", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse(NOW));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    clientHolder.client = null;
+  });
+
+  describe("external_activities", () => {
+    test("the read column list never includes provider_payload", () => {
+      expect(EXTERNAL_ACTIVITY_COLUMNS).not.toContain("provider_payload");
+      expect(EXTERNAL_ACTIVITY_COLUMNS.split(", ")).toEqual(Object.keys(activityRow("x")));
+    });
+
+    test("listExternalActivities with no filter: newest first, mapped", async () => {
+      const { db, stub } = setup();
+      stub.reply({ data: [activityRow("a-1")] });
+      expect(await db.listExternalActivities({})).toEqual([activity("a-1")]);
+      expect(stub.queries).toEqual([
+        {
+          table: "external_activities",
+          op: "select",
+          steps: [
+            { method: "select", args: [EXTERNAL_ACTIVITY_COLUMNS] },
+            { method: "order", args: ["started_at", { ascending: false }] },
+          ],
+        },
+      ]);
+    });
+
+    test("listExternalActivities applies every filter and the limit", async () => {
+      const { db, stub } = setup();
+      await db.listExternalActivities({
+        from: "2026-10-01T00:00:00Z",
+        to: "2026-11-01T00:00:00Z",
+        source: "peloton",
+        environment: "indoor",
+        limit: 20,
+      });
+      const [q] = stub.queries;
+      expect(stub.filters(q)).toEqual([
+        ["gte", "started_at", "2026-10-01T00:00:00Z"],
+        ["lte", "started_at", "2026-11-01T00:00:00Z"],
+        ["eq", "source", "peloton"],
+        ["eq", "environment", "indoor"],
+      ]);
+      expect(q.steps.slice(-2)).toEqual([
+        { method: "order", args: ["started_at", { ascending: false }] },
+        { method: "limit", args: [20] },
+      ]);
+    });
+
+    test("listExternalActivities maps numeric strings and throws the Supabase error", async () => {
+      const { db, stub } = setup();
+      stub.reply({ data: [activityRow("a-1", { tss: "74", has_power: null })] }, { error: FAIL });
+      const [a] = await db.listExternalActivities({});
+      expect(a.tss).toBe(74);
+      expect(a.hasPower).toBe(false);
+      await expect(db.listExternalActivities({})).rejects.toBe(FAIL);
+    });
+
+    test("getExternalActivity selects one row by id, null when missing", async () => {
+      const { db, stub } = setup();
+      stub.reply({ data: activityRow("a-1") }, {}, { error: FAIL });
+      expect(await db.getExternalActivity("a-1")).toEqual(activity("a-1"));
+      expect(await db.getExternalActivity("nope")).toBeNull();
+      await expect(db.getExternalActivity("a-1")).rejects.toBe(FAIL);
+      expect(stub.queries[0]).toEqual({
+        table: "external_activities",
+        op: "select",
+        steps: [
+          { method: "select", args: [EXTERNAL_ACTIVITY_COLUMNS] },
+          { method: "eq", args: ["id", "a-1"] },
+          { method: "maybeSingle", args: [] },
+        ],
+      });
+    });
+
+    test("upsertExternalActivities sends every column on (user_id,source,source_id) and returns the rows", async () => {
+      const { db, stub } = setup();
+      stub.reply({ data: [activityRow("a-1")] });
+      const out = await db.upsertExternalActivities([
+        {
+          source: "garmin",
+          sourceId: "g-a-1",
+          startedAt: "2026-11-01T14:00:00Z",
+          sport: "cycling",
+          environment: "outdoor",
+          tss: 74,
+          hasPower: true,
+          providerPayload: { trainingStressScore: 80 },
+        },
+      ]);
+      expect(out).toEqual([activity("a-1")]);
+      const [q] = stub.queries;
+      expect(q.table).toBe("external_activities");
+      expect(q.op).toBe("upsert");
+      expect(q.steps).toEqual([
+        {
+          method: "upsert",
+          args: [
+            [
+              {
+                ...NULL_METRICS,
+                source: "garmin",
+                source_id: "g-a-1",
+                started_at: "2026-11-01T14:00:00Z",
+                sport: "cycling",
+                environment: "outdoor",
+                tss: 74,
+                has_power: true,
+                has_hr: false,
+                provider_payload: { trainingStressScore: 80 },
+                synced_at: NOW,
+                updated_at: NOW,
+              },
+            ],
+            { onConflict: "user_id,source,source_id" },
+          ],
+        },
+        { method: "select", args: [EXTERNAL_ACTIVITY_COLUMNS] },
+      ]);
+      // The DataLayer leaves user_id to the column default (auth.uid()).
+      expect((q.payload as Record<string, unknown>[])[0]).not.toHaveProperty("user_id");
+    });
+
+    test("upsertExternalActivities with a userId stamps it on every row; [] issues no query; errors throw", async () => {
+      const stub = createSupabaseStub();
+      const input = { source: "peloton" as const, sport: "cycling", environment: "indoor" as const, providerPayload: {} };
+      await upsertExternalActivities(
+        stub.client,
+        [
+          { ...input, sourceId: "p-1", startedAt: "2026-11-01T00:00:00Z" },
+          { ...input, sourceId: "p-2", startedAt: "2026-11-02T00:00:00Z" },
+        ],
+        USER,
+      );
+      expect((stub.queries[0].payload as Record<string, unknown>[]).map((r) => r.user_id)).toEqual([USER, USER]);
+      expect(await upsertExternalActivities(stub.client, [], USER)).toEqual([]);
+      expect(stub.queries).toHaveLength(1);
+      stub.reply({ error: FAIL });
+      await expect(upsertExternalActivities(stub.client, [{ ...input, sourceId: "p-3", startedAt: NOW }])).rejects.toBe(FAIL);
+    });
+
+    test("upsertExternalActivities refuses a row without providerPayload before any query", async () => {
+      const stub = createSupabaseStub();
+      const ok = { source: "garmin" as const, sport: "cycling", environment: "outdoor" as const, startedAt: NOW, providerPayload: {} };
+      for (const bad of [undefined, null]) {
+        await expect(
+          upsertExternalActivities(stub.client, [
+            { ...ok, sourceId: "g-1" },
+            { ...ok, sourceId: "g-2", providerPayload: bad },
+          ]),
+        ).rejects.toThrow("external activity garmin/g-2 has no providerPayload");
+      }
+      expect(stub.queries).toHaveLength(0);
+    });
+  });
+
+  test("bulk upserts collapse rows sharing a conflict key to the last one; ftp_used_w is rounded", async () => {
+    const stub = createSupabaseStub();
+    const ride = { source: "garmin" as const, sport: "cycling", environment: "outdoor" as const, providerPayload: {}, startedAt: NOW };
+    await upsertExternalActivities(stub.client, [
+      { ...ride, sourceId: "1", title: "old", ftpUsedW: 251.6 },
+      { ...ride, sourceId: "2" },
+      { ...ride, source: "peloton", sourceId: "1" },
+      { ...ride, sourceId: "1", title: "new", ftpUsedW: 251.6 },
+    ]);
+    const acts = stub.queries[0].payload as Record<string, unknown>[];
+    expect(acts.map((r) => [r.source, r.source_id, r.title, r.ftp_used_w])).toEqual([
+      ["garmin", "1", "new", 252],
+      ["garmin", "2", null, null],
+      ["peloton", "1", null, null],
+    ]);
+
+    await replaceActivityStreams(stub.client, "a-1", [{ channel: "power", values: [1] }, { channel: "power", values: [2] }]);
+    // queries[1] is the delete of dropped channels; [2] the upsert.
+    expect((stub.queries[2].payload as Record<string, unknown>[]).map((r) => r.values)).toEqual([[2]]);
+
+    const w = { source: "garmin" as const, sourceId: "9", measuredAt: NOW, providerPayload: {} };
+    await upsertBodyWeights(stub.client, [{ ...w, weightKg: 80 }, { ...w, weightKg: 81 }]);
+    expect((stub.queries[3].payload as Record<string, unknown>[]).map((r) => r.weight_kg)).toEqual([81]);
+
+    const d = { date: "2026-11-01", tssBySource: {}, ctl: 1, atl: 1, tsb: 0 };
+    await upsertDailyTrainingLoad(stub.client, [{ ...d, tssTotal: 1 }, { ...d, date: "2026-11-02", tssTotal: 5 }, { ...d, tssTotal: 2 }]);
+    expect((stub.queries[4].payload as Record<string, unknown>[]).map((r) => [r.date, r.tss_total])).toEqual([["2026-11-01", 2], ["2026-11-02", 5]]);
+  });
+
+  describe("activity_streams", () => {
+    test("getActivityStreams reads one activity's channels ordered by channel", async () => {
+      const { db, stub } = setup();
+      stub.reply({ data: [{ activity_id: "a-1", channel: "power", start_offset_s: 0, values: [100, null, 120] }] }, { error: FAIL });
+      expect(await db.getActivityStreams("a-1")).toEqual([
+        { activityId: "a-1", channel: "power", startOffsetS: 0, values: [100, null, 120] },
+      ]);
+      expect(stub.queries[0]).toEqual({
+        table: "activity_streams",
+        op: "select",
+        steps: [
+          { method: "select", args: ["activity_id, channel, start_offset_s, values"] },
+          { method: "eq", args: ["activity_id", "a-1"] },
+          { method: "order", args: ["channel"] },
+        ],
+      });
+      await expect(db.getActivityStreams("a-1")).rejects.toBe(FAIL);
+    });
+
+    test("replaceActivityStreams upserts on (activity_id,channel), defaulting start_offset_s to 0", async () => {
+      const { db, stub } = setup();
+      await db.replaceActivityStreams("a-1", [
+        { channel: "power", values: [1, 2] },
+        { channel: "heart_rate", startOffsetS: 3, values: [null, 140] },
+      ]);
+      expect(stub.queries).toEqual([
+        {
+          table: "activity_streams",
+          op: "delete",
+          steps: [
+            { method: "delete", args: [] },
+            { method: "eq", args: ["activity_id", "a-1"] },
+            { method: "not", args: ["channel", "in", "(power,heart_rate)"] },
+          ],
+        },
+        {
+          table: "activity_streams",
+          op: "upsert",
+          payload: [
+            { activity_id: "a-1", channel: "power", start_offset_s: 0, values: [1, 2], updated_at: NOW },
+            { activity_id: "a-1", channel: "heart_rate", start_offset_s: 3, values: [null, 140], updated_at: NOW },
+          ],
+          steps: [expect.objectContaining({ method: "upsert", args: [expect.any(Array), { onConflict: "activity_id,channel" }] })],
+        },
+      ]);
+    });
+
+    test("replaceActivityStreams stamps a userId, deletes every channel for an empty list and throws errors", async () => {
+      const stub = createSupabaseStub();
+      await replaceActivityStreams(stub.client, "a-1", [{ channel: "cadence", values: [90] }], USER);
+      expect(stub.filters(stub.queries[0])).toEqual([["eq", "activity_id", "a-1"], ["not", "channel", "in", "(cadence)"]]);
+      expect((stub.queries[1].payload as Record<string, unknown>[])[0].user_id).toBe(USER);
+      // Empty set: one unfiltered-by-channel delete, no upsert.
+      await replaceActivityStreams(stub.client, "a-1", []);
+      expect(stub.queries).toHaveLength(3);
+      expect(stub.queries[2].op).toBe("delete");
+      expect(stub.filters(stub.queries[2])).toEqual([["eq", "activity_id", "a-1"]]);
+      // A failed delete stops before the upsert; a failed upsert throws too.
+      stub.reply({ error: FAIL });
+      await expect(replaceActivityStreams(stub.client, "a-1", [{ channel: "speed", values: [] }])).rejects.toBe(FAIL);
+      expect(stub.queries).toHaveLength(4);
+      stub.reply({}, { error: FAIL });
+      await expect(replaceActivityStreams(stub.client, "a-1", [{ channel: "speed", values: [] }])).rejects.toBe(FAIL);
+      expect(stub.queries.slice(4).map((q) => q.op)).toEqual(["delete", "upsert"]);
+    });
+  });
+
+  describe("body_weights", () => {
+    const weightRow = {
+      id: "bw-1", source: "garmin", source_id: "123", measured_at: "2026-11-01T12:00:00+00:00", weight_kg: 80.5,
+      bmi: 24.1, body_fat_pct: null, body_water_pct: null, muscle_mass_kg: 35.2, bone_mass_kg: null,
+    };
+
+    test("listBodyWeights filters measured_at inclusively, oldest first", async () => {
+      const { db, stub } = setup();
+      stub.reply({ data: [weightRow] }, { error: FAIL });
+      expect(await db.listBodyWeights("2026-11-01T00:00:00Z", "2026-11-30T23:59:59Z")).toEqual([
+        {
+          id: "bw-1", source: "garmin", sourceId: "123", measuredAt: "2026-11-01T12:00:00+00:00", weightKg: 80.5,
+          bmi: 24.1, bodyFatPct: null, bodyWaterPct: null, muscleMassKg: 35.2, boneMassKg: null,
+        },
+      ]);
+      const [q] = stub.queries;
+      expect(q.table).toBe("body_weights");
+      expect(q.steps[0]).toEqual({
+        method: "select",
+        args: ["id, source, source_id, measured_at, weight_kg, bmi, body_fat_pct, body_water_pct, muscle_mass_kg, bone_mass_kg"],
+      });
+      expect(stub.filters(q)).toEqual([
+        ["gte", "measured_at", "2026-11-01T00:00:00Z"],
+        ["lte", "measured_at", "2026-11-30T23:59:59Z"],
+      ]);
+      expect(q.steps[q.steps.length - 1]).toEqual({ method: "order", args: ["measured_at"] });
+      await expect(db.listBodyWeights("a", "b")).rejects.toBe(FAIL);
+    });
+
+    test("upsertBodyWeights upserts on (user_id,source,source_id) with the payload; userId stamped when given", async () => {
+      const { db, stub } = setup();
+      const input = { source: "garmin" as const, sourceId: "123", measuredAt: "2026-11-01T12:00:00Z", weightKg: 80.5, providerPayload: { weight: 80500 } };
+      await db.upsertBodyWeights([input]);
+      expect(stub.queries[0]).toMatchObject({
+        table: "body_weights",
+        op: "upsert",
+        steps: [
+          {
+            method: "upsert",
+            args: [
+              [
+                {
+                  source: "garmin", source_id: "123", measured_at: "2026-11-01T12:00:00Z", weight_kg: 80.5, bmi: null,
+                  body_fat_pct: null, body_water_pct: null, muscle_mass_kg: null, bone_mass_kg: null,
+                  provider_payload: { weight: 80500 }, updated_at: NOW,
+                },
+              ],
+              { onConflict: "user_id,source,source_id" },
+            ],
+          },
+        ],
+      });
+      expect((stub.queries[0].payload as Record<string, unknown>[])[0]).not.toHaveProperty("user_id");
+
+      const direct = createSupabaseStub();
+      await upsertBodyWeights(direct.client, [input, { ...input, sourceId: "124" }], USER);
+      expect((direct.queries[0].payload as Record<string, unknown>[]).map((r) => r.user_id)).toEqual([USER, USER]);
+      await upsertBodyWeights(direct.client, [], USER);
+      expect(direct.queries).toHaveLength(1);
+      direct.reply({ error: FAIL });
+      await expect(upsertBodyWeights(direct.client, [input])).rejects.toBe(FAIL);
+    });
+  });
+
+  describe("athlete_settings", () => {
+    const COLUMNS = "manual_ftp_w, lthr_bpm, max_hr_bpm, resting_hr_bpm, strength_session_tss, no_power_tss_per_hour, units, week_start";
+    const settingsRow = {
+      manual_ftp_w: 250, lthr_bpm: null, max_hr_bpm: 185, resting_hr_bpm: null,
+      strength_session_tss: "40", no_power_tss_per_hour: 55, units: "metric", week_start: "sunday",
+    };
+    const settings = {
+      manualFtpW: 250, lthrBpm: null, maxHrBpm: 185, restingHrBpm: null,
+      strengthSessionTss: 40, noPowerTssPerHour: 55, units: "metric", weekStart: "sunday",
+    };
+
+    test("getAthleteSettings maps the row, or the column defaults when there is none", async () => {
+      const { db, stub } = setup();
+      stub.reply({ data: settingsRow }, {}, { error: FAIL });
+      expect(await db.getAthleteSettings()).toEqual(settings);
+      expect(await db.getAthleteSettings()).toEqual({
+        manualFtpW: null, lthrBpm: null, maxHrBpm: null, restingHrBpm: null,
+        strengthSessionTss: 50, noPowerTssPerHour: 55, units: "imperial", weekStart: "monday",
+      });
+      await expect(db.getAthleteSettings()).rejects.toBe(FAIL);
+      expect(stub.queries[0]).toEqual({
+        table: "athlete_settings",
+        op: "select",
+        steps: [{ method: "select", args: [COLUMNS] }, { method: "maybeSingle", args: [] }],
+      });
+    });
+
+    test("saveAthleteSettings upserts only the defined fields on user_id and returns the row", async () => {
+      const { db, stub } = setup();
+      stub.reply({ data: settingsRow });
+      expect(await db.saveAthleteSettings({ manualFtpW: 250, units: "metric", lthrBpm: undefined, restingHrBpm: null })).toEqual(settings);
+      expect(stub.queries).toEqual([
+        {
+          table: "athlete_settings",
+          op: "upsert",
+          payload: { manual_ftp_w: 250, resting_hr_bpm: null, units: "metric", updated_at: NOW },
+          steps: [
+            {
+              method: "upsert",
+              args: [{ manual_ftp_w: 250, resting_hr_bpm: null, units: "metric", updated_at: NOW }, { onConflict: "user_id" }],
+            },
+            { method: "select", args: [COLUMNS] },
+            { method: "single", args: [] },
+          ],
+        },
+      ]);
+    });
+
+    test("saveAthleteSettings with an empty patch only reads; errors throw", async () => {
+      const { db, stub } = setup();
+      await db.saveAthleteSettings({ units: undefined });
+      expect(stub.queries.map((q) => q.op)).toEqual(["select"]);
+      stub.reply({ error: FAIL });
+      await expect(db.saveAthleteSettings({ units: "metric" })).rejects.toBe(FAIL);
+    });
+  });
+
+  describe("ftp_history", () => {
+    const COLUMNS = "id, effective_from, ftp_w, source, source_ref";
+    const row = { id: "f-1", effective_from: "2026-10-01T00:00:00+00:00", ftp_w: 250, source: "peloton_test", source_ref: "w-9" };
+    const entry = { id: "f-1", effectiveFrom: "2026-10-01T00:00:00+00:00", ftpW: 250, source: "peloton_test", sourceRef: "w-9" };
+
+    test("listFtpHistory reads oldest first", async () => {
+      const { db, stub } = setup();
+      stub.reply({ data: [row] }, { error: FAIL });
+      expect(await db.listFtpHistory()).toEqual([entry]);
+      expect(stub.queries[0]).toEqual({
+        table: "ftp_history",
+        op: "select",
+        steps: [
+          { method: "select", args: [COLUMNS] },
+          { method: "order", args: ["effective_from"] },
+          { method: "order", args: ["created_at"] },
+        ],
+      });
+      await expect(db.listFtpHistory()).rejects.toBe(FAIL);
+    });
+
+    test("addFtpHistoryEntry inserts one row and returns it; a userId is stamped; a unique violation throws", async () => {
+      const { db, stub } = setup();
+      stub.reply({ data: row });
+      expect(await db.addFtpHistoryEntry({ effectiveFrom: "2026-10-01T00:00:00Z", ftpW: 250, source: "peloton_test", sourceRef: "w-9" })).toEqual(entry);
+      expect(stub.queries[0]).toEqual({
+        table: "ftp_history",
+        op: "insert",
+        payload: { effective_from: "2026-10-01T00:00:00Z", ftp_w: 250, source: "peloton_test", source_ref: "w-9" },
+        steps: [
+          { method: "insert", args: [{ effective_from: "2026-10-01T00:00:00Z", ftp_w: 250, source: "peloton_test", source_ref: "w-9" }] },
+          { method: "select", args: [COLUMNS] },
+          { method: "single", args: [] },
+        ],
+      });
+
+      const direct = createSupabaseStub();
+      direct.reply({ data: row }, { error: { code: "23505", message: "duplicate key" } });
+      await addFtpHistoryEntry(direct.client, { effectiveFrom: "x", ftpW: 1, source: "manual", sourceRef: null }, USER);
+      expect(direct.queries[0].payload).toMatchObject({ user_id: USER, source_ref: null });
+      await expect(addFtpHistoryEntry(direct.client, { effectiveFrom: "x", ftpW: 1, source: "manual", sourceRef: null })).rejects.toMatchObject({ code: "23505" });
+    });
+  });
+
+  describe("daily_training_load", () => {
+    const day = { date: "2026-11-01", tssTotal: 120, tssBySource: { garmin: 70, strength: 50 }, ctl: 60, atl: 80, tsb: -20 };
+
+    test("listDailyTrainingLoad filters date inclusively, oldest first", async () => {
+      const { db, stub } = setup();
+      stub.reply(
+        { data: [{ date: "2026-11-01", tss_total: 120, tss_by_source: { garmin: 70, strength: 50 }, ctl: 60, atl: 80, tsb: -20 }] },
+        { error: FAIL },
+      );
+      expect(await db.listDailyTrainingLoad("2026-11-01", "2026-11-07")).toEqual([day]);
+      const [q] = stub.queries;
+      expect(q.table).toBe("daily_training_load");
+      expect(q.steps[0]).toEqual({ method: "select", args: ["date, tss_total, tss_by_source, ctl, atl, tsb"] });
+      expect(stub.filters(q)).toEqual([
+        ["gte", "date", "2026-11-01"],
+        ["lte", "date", "2026-11-07"],
+      ]);
+      expect(q.steps[q.steps.length - 1]).toEqual({ method: "order", args: ["date"] });
+      await expect(db.listDailyTrainingLoad("a", "b")).rejects.toBe(FAIL);
+    });
+
+    test("upsertDailyTrainingLoad upserts on (user_id,date); a userId is stamped; [] is a no-op", async () => {
+      const { db, stub } = setup();
+      await db.upsertDailyTrainingLoad([day]);
+      const snake = { date: "2026-11-01", tss_total: 120, tss_by_source: { garmin: 70, strength: 50 }, ctl: 60, atl: 80, tsb: -20, updated_at: NOW };
+      expect(stub.queries).toEqual([
+        { table: "daily_training_load", op: "upsert", payload: [snake], steps: [{ method: "upsert", args: [[snake], { onConflict: "user_id,date" }] }] },
+      ]);
+
+      const direct = createSupabaseStub();
+      await upsertDailyTrainingLoad(direct.client, [day, { ...day, date: "2026-11-02" }], USER);
+      expect((direct.queries[0].payload as Record<string, unknown>[]).map((r) => r.user_id)).toEqual([USER, USER]);
+      await upsertDailyTrainingLoad(direct.client, []);
+      expect(direct.queries).toHaveLength(1);
+      direct.reply({ error: FAIL });
+      await expect(upsertDailyTrainingLoad(direct.client, [day])).rejects.toBe(FAIL);
+    });
+  });
+
+  describe("sync_state", () => {
+    const COLUMNS =
+      "source, cursor, last_run_at, last_success_at, items_fetched, items_upserted, last_error, backfill_complete, auth_status";
+    const row = {
+      source: "peloton", cursor: { page: 3 }, last_run_at: NOW, last_success_at: null, items_fetched: 10,
+      items_upserted: 8, last_error: "boom", backfill_complete: false, auth_status: "reconnect_required",
+    };
+    const state = {
+      source: "peloton", cursor: { page: 3 }, lastRunAt: NOW, lastSuccessAt: null, itemsFetched: 10,
+      itemsUpserted: 8, lastError: "boom", backfillComplete: false, authStatus: "reconnect_required",
+    };
+
+    test("listSyncState reads every feed ordered by source", async () => {
+      const { db, stub } = setup();
+      stub.reply({ data: [row] }, { error: FAIL });
+      expect(await db.listSyncState()).toEqual([state]);
+      expect(stub.queries[0]).toEqual({
+        table: "sync_state",
+        op: "select",
+        steps: [{ method: "select", args: [COLUMNS] }, { method: "order", args: ["source"] }],
+      });
+      await expect(db.listSyncState()).rejects.toBe(FAIL);
+    });
+
+    test("upsertSyncState stamps user_id, sends only defined fields, upserts on (user_id,source)", async () => {
+      const stub = createSupabaseStub();
+      stub.reply({ data: row }, { error: FAIL });
+      expect(await upsertSyncState(stub.client, { source: "peloton", lastRunAt: NOW, lastError: null, itemsFetched: undefined }, USER)).toEqual(state);
+      const payload = { user_id: USER, source: "peloton", last_run_at: NOW, last_error: null, updated_at: NOW };
+      expect(stub.queries[0]).toEqual({
+        table: "sync_state",
+        op: "upsert",
+        payload,
+        steps: [
+          { method: "upsert", args: [payload, { onConflict: "user_id,source" }] },
+          { method: "select", args: [COLUMNS] },
+          { method: "single", args: [] },
+        ],
+      });
+      await expect(upsertSyncState(stub.client, { source: "garmin_weight" }, USER)).rejects.toBe(FAIL);
     });
   });
 });
