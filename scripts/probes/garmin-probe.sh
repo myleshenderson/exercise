@@ -91,9 +91,8 @@ get dailysummaries-7d "/usersummary-service/v2/dailysummaries?startDate=$D6&endD
 get sleep-summaries-7d "/sleep-service/sleep/dailySleepSummariesByDate?startDate=$D6&endDate=$TODAY"
 for i in 0 1 2 3 4 5 6; do d=$(day $i); get "sleep-$d" "/sleep-service/sleep/dailySleep?date=$d"; done
 
-# --- 7. OpenAPI spec: no client source reveals a machine-readable spec URL
-echo
-echo "OpenAPI/Swagger JSON: URL not found in any client source."
-echo "Open https://developer.garmin.com/gc-developer-program/personal/swagger-docs/ in a browser,"
-echo "use DevTools > Network to find the spec request (openapi/api-docs .json), and save it as"
-echo "$OUT/openapi.json. Then share $OUT (token-claims.json contains no token)."
+# --- 7. OpenAPI spec: committed in the repo as docs/reference/garmin-personal-api-openapi.json
+#        (26 GET endpoints, 109 schemas; PR #80). Garmin's swagger-docs page inlines the spec in its
+#        Gatsby bundle, so DevTools shows no spec request; see docs/agents/project-memory.md to refresh it.
+echo "OpenAPI spec: see docs/reference/garmin-personal-api-openapi.json (nothing to capture here)."
+echo "Share $OUT (token-claims.json contains no token)."
