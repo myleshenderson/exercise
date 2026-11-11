@@ -11,7 +11,7 @@ export type ToolResult = CallToolResult;
 // to compile.
 export type McpToolHandlers = { [K in ToolName]: (input: ToolInput<K>) => Promise<ToolResult> };
 
-// Registers all 25 tools on `server`, in TOOL_DEFINITIONS order, each dispatching to
+// Registers all 32 tools on `server`, in TOOL_DEFINITIONS order, each dispatching to
 // its handler. Tools defined without an input schema are registered without one
 // (so the SDK skips argument validation, as before) and their handler gets `{}`.
 export function registerTools(server: McpServer, handlers: McpToolHandlers): void {

@@ -54,10 +54,10 @@ describe("POST /mcp (stateless JSON transport)", () => {
     expect(reply.result).toMatchObject({ protocolVersion: expect.any(String), serverInfo: { name: "exercise" } });
   });
 
-  it("answers tools/list with the 25 tools, equal to the AI-589 fixture of main's tools/list", async () => {
+  it("answers tools/list with the 32 tools, equal to the AI-589 fixture of main's tools/list", async () => {
     const reply = await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
     expect(reply.error).toBeUndefined();
-    expect((reply.result as { tools: unknown[] }).tools).toHaveLength(25);
+    expect((reply.result as { tools: unknown[] }).tools).toHaveLength(32);
     expect(reply.result).toEqual(MAIN_TOOLS_LIST);
   });
 });

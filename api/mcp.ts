@@ -23,7 +23,16 @@ import {
   addDayToProgram,
   removeDayFromProgram,
   reorderProgramDays,
+  listExternalActivities,
+  getExternalActivity,
+  getActivityStreams,
+  listBodyWeights,
+  getAthleteSettings,
+  listFtpHistory,
+  listDailyTrainingLoad,
+  listSyncState,
 } from "../src/data/supabase.js";
+import { createRideToolHandlers, type RideReads } from "../src/analysis/rides/index.js";
 import { withDefaultToolArguments } from "../src/mcp/defaults.js";
 import { registerTools, type McpToolHandlers } from "../src/mcp/handlers.js";
 import {
@@ -109,6 +118,22 @@ async function findProgram(client: SupabaseClient, programId: string): Promise<{
   return (data as { id: string; name: string } | null) ?? null;
 }
 
+// The ride analytics tools' reads (AI-654): the src/data/supabase.ts functions over a
+// client scoped to the caller's access_token, so RLS confines every read to their rows.
+// Plain table reads: no RPC.
+function rideReads(client: SupabaseClient): RideReads {
+  return {
+    listExternalActivities: (f) => listExternalActivities(client, f),
+    getExternalActivity: (id) => getExternalActivity(client, id),
+    getActivityStreams: (activityId) => getActivityStreams(client, activityId),
+    listBodyWeights: (from, to) => listBodyWeights(client, from, to),
+    getAthleteSettings: () => getAthleteSettings(client),
+    listFtpHistory: () => listFtpHistory(client),
+    listDailyTrainingLoad: (from, to) => listDailyTrainingLoad(client, from, to),
+    listSyncState: () => listSyncState(client),
+  };
+}
+
 // Just enough of the row to validate a rep-range patch against whichever bound the
 // caller didn't supply, without pulling in supabase.ts's private toExercise mapping.
 async function findExerciseRepRange(
@@ -144,6 +169,8 @@ function createSupabaseHandlers(getIdentity: () => Promise<IdentityResult>): Mcp
   }
 
   return {
+    // The seven ride analytics read tools, shared with Starkeep (src/analysis/rides).
+    ...createRideToolHandlers((run) => withIdentity((accessToken) => run(rideReads(createUserScopedClient(accessToken))))),
     progression_for_exercise: async ({ exercise_name }) =>
       withIdentity(async (accessToken) => {
         const { data, error } = await createUserScopedClient(accessToken).rpc("progression_for_exercise", {

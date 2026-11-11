@@ -33,11 +33,19 @@ const EXPECTED_TOOL_NAMES = [
   "add_day_to_program",
   "remove_day_from_program",
   "reorder_program_days",
+  "list_activities",
+  "get_activity",
+  "activity_stats",
+  "training_load",
+  "power_curve",
+  "weight_history",
+  "sync_status",
 ] as const;
 
 // tools/list exactly as api/mcp.ts on main (96f3b39) returned it, captured once
-// before the AI-589 extraction. Any drift in a name, title, description, schema
-// or order fails the comparison below.
+// before the AI-589 extraction, then regenerated from tools/list when AI-654
+// appended the seven ride tools (the first 25 entries are unchanged). Any drift in
+// a name, title, description, schema or order fails the comparison below.
 const MAIN_TOOLS_LIST: unknown = JSON.parse(mainToolsListJson);
 
 // A handler per tool that echoes its tool name and the parsed input back as text.
@@ -62,7 +70,7 @@ async function connect(handlers: McpToolHandlers): Promise<Client> {
 }
 
 describe("registerTools", () => {
-  it("registers exactly the 25 tools, in the order main registers them", async () => {
+  it("registers exactly the 32 tools, in the order main registers them", async () => {
     const server = new McpServer({ name: "exercise-mcp", version: "0.1.0" });
     const registerTool = vi.spyOn(server, "registerTool");
     registerTools(server, stubHandlers());
@@ -129,7 +137,7 @@ describe("registerTools", () => {
 // Type-level contract: checked by `npm run typecheck` (tsc --noEmit covers src/**,
 // test files included), where an unused @ts-expect-error is itself an error.
 describe("McpToolHandlers type", () => {
-  it("has exactly the ToolName keys, and ToolName is exactly the 25 tool names", () => {
+  it("has exactly the ToolName keys, and ToolName is exactly the 32 tool names", () => {
     expectTypeOf<keyof McpToolHandlers>().toEqualTypeOf<ToolName>();
     expectTypeOf<ToolName>().toEqualTypeOf<(typeof EXPECTED_TOOL_NAMES)[number]>();
   });
