@@ -8,6 +8,7 @@ import { sha256Hex } from "./mcp-login.js";
 import { createRideToolHandlers, RIDE_TOOL_NAMES } from "../src/analysis/rides/index.js";
 import { buildUuidRideFixtures, FIXTURE_NOW, fixtureReads } from "../src/analysis/rides/testFixtures.js";
 import type { RideFixtures } from "../src/rides/testing/fixtures.js";
+import { DEFAULT_ATHLETE_TIMEZONE } from "../src/metrics/dates.js";
 
 // Fake mcp_sessions store + GoTrue refresh + per-user RPC fixtures, keyed the same way
 // the real Supabase tables are: a session row maps a hashed bearer token to a
@@ -66,6 +67,8 @@ const TABLES: Record<FakeTableName, FakeRow[]> = {
 };
 /** Which access token each table read was made with (per-user scoping of the ride tools). */
 const tableReads: Array<{ table: string; accessToken: string }> = [];
+/** Every `range(from, to)` a select asked for, by table (how much a paged read fetched). */
+const rangeRequests: Array<{ table: string; from: number; to: number }> = [];
 let fakeRowSeq = 0;
 function nextFakeId(prefix: string): string {
   return `${prefix}-${++fakeRowSeq}`;
@@ -128,6 +131,7 @@ class FakeQuery implements PromiseLike<FakeResult> {
   }
   // Inclusive bounds; slices the matched rows, so readPages' paging ends on an empty page.
   range(from: number, to: number): this {
+    rangeRequests.push({ table: this.tableName, from, to });
     this.rangeFrom = from;
     this.rangeTo = to;
     return this;
@@ -475,6 +479,7 @@ describe("api/mcp handler", () => {
     TABLES.session_sets.length = 0;
     for (const t of RIDE_TABLES) TABLES[t].length = 0;
     tableReads.length = 0;
+    rangeRequests.length = 0;
     fakeRowSeq = 0;
     forcedError = null;
     seedSession("user-a", "token-a");
@@ -2011,7 +2016,10 @@ describe("api/mcp handler", () => {
     it("answers all seven tools from the caller's own rows, as the shared handlers do over the same fixtures", async () => {
       const a = buildUuidRideFixtures(FIXTURE_NOW);
       seedRides("user-a", a.fixtures);
-      const expected = createRideToolHandlers((run) => run(fixtureReads(a.fixtures)), { now: () => FIXTURE_NOW });
+      const expected = createRideToolHandlers((run) => run(fixtureReads(a.fixtures)), {
+        now: () => FIXTURE_NOW,
+        defaultTimeZone: process.env.SYNC_DEFAULT_TIMEZONE ?? DEFAULT_ATHLETE_TIMEZONE,
+      });
       const client = await connectAs("token-a");
 
       for (const name of RIDE_TOOL_NAMES) {
@@ -2030,6 +2038,27 @@ describe("api/mcp handler", () => {
       const sync = await client.callTool({ name: "sync_status", arguments: {} });
       expect((sync.content as [{ text: string }])[0].text).not.toContain("cursor");
 
+      await client.close();
+    });
+
+    it("list_activities reads only the newest 2 × limit + 50 rows: one page of 250 for limit 100 over 3000", async () => {
+      const a = buildUuidRideFixtures(FIXTURE_NOW);
+      const template = a.fixtures.activities.find((x) => x.id === a.ids.outdoor)!;
+      const base = Date.parse("2026-11-01T12:00:00.000Z");
+      const many = Array.from({ length: 3000 }, (_, i) => ({
+        ...template,
+        id: `00000000-0000-4000-9000-${i.toString(16).padStart(12, "0")}`,
+        sourceId: `bulk-${i}`,
+        pairedActivityId: null,
+        startedAt: new Date(base - i * 3_600_000).toISOString(),
+      }));
+      seedRides("user-a", { ...a.fixtures, activities: many, streams: [], bodyWeights: [], ftpHistory: [], dailyLoad: [], syncState: [] });
+      const client = await connectAs("token-a");
+      rangeRequests.length = 0;
+
+      const listed = await client.callTool({ name: "list_activities", arguments: { limit: 100 } });
+      expect(JSON.parse((listed.content as [{ text: string }])[0].text).activities).toHaveLength(100);
+      expect(rangeRequests.filter((r) => r.table === "external_activities")).toEqual([{ table: "external_activities", from: 0, to: 249 }]);
       await client.close();
     });
 

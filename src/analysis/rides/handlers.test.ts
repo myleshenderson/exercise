@@ -11,7 +11,7 @@ import {
   weightTrend,
   wPerKgBand,
 } from "../../metrics/index.js";
-import type { RideFixtures } from "../../rides/testing/fixtures.js";
+import { FIXTURE_TIMEZONE, RIDE_FIXTURE_IDS, type RideFixtures } from "../../rides/testing/fixtures.js";
 import { createRideToolHandlers, RIDE_TOOL_NAMES, type RideToolHandlers } from "./handlers.js";
 import type { RideReads } from "./reads.js";
 import { buildUuidRideFixtures, EMPTY_READS, FIXTURE_NOW, fixtureReads } from "./testFixtures.js";
@@ -20,7 +20,7 @@ const TODAY = "2026-11-11";
 const MISSING = "f0000000-0000-4000-8000-00000000ffff";
 
 function handlersOver(reads: RideReads, now: Date = FIXTURE_NOW): RideToolHandlers {
-  return createRideToolHandlers((run) => run(reads), { now: () => now });
+  return createRideToolHandlers((run) => run(reads), { now: () => now, defaultTimeZone: FIXTURE_TIMEZONE });
 }
 
 function setup(edit?: (f: RideFixtures) => void) {
@@ -95,6 +95,21 @@ describe("list_activities", () => {
     for (const a of day) expect(a.started_at.slice(0, 10)).toBe(TODAY);
 
     expect(body(await tools.list_activities({ limit: 3 })).activities).toHaveLength(3);
+  });
+
+  it("reads only the newest 2 × limit + 50 rows", async () => {
+    const { fixtures } = setup();
+    const inner = fixtureReads(fixtures);
+    const limits: Array<number | undefined> = [];
+    const tools = handlersOver({
+      ...inner,
+      listExternalActivities: (f) => {
+        limits.push(f.limit);
+        return inner.listExternalActivities(f);
+      },
+    });
+    expect(body(await tools.list_activities({ limit: 3 })).activities).toHaveLength(3);
+    expect(limits).toEqual([56]);
   });
 
   it("rejects a malformed date or limit with a tool error", async () => {
@@ -214,6 +229,19 @@ describe("activity_stats", () => {
     for (const p of s.power_bests) expect(p.watts).toBeGreaterThan(0);
   });
 
+  it("a row stored without a zone (Strava archive) counts on its day in the athlete's zone", async () => {
+    // 02:00Z on 1 January is 21:00 on 31 December in New York: last year's ride.
+    const { tools } = setup((f) => {
+      const a = f.activities.find((x) => x.id === RIDE_FIXTURE_IDS.estimated)!;
+      Object.assign(a, { source: "strava_export", timezone: null, startedAt: "2026-01-01T02:00:00.000Z" });
+    });
+    // The fixtures' other rides are all after 1 March 2026.
+    const s = body(await tools.activity_stats({ as_of: "2026-03-01" }));
+    expect(s.year_to_date.count).toBe(0);
+    expect(s.all_time.count).toBe(1);
+    expect(body(await tools.activity_stats({ as_of: "2025-12-31" })).year_to_date).toMatchObject({ from: "2025-01-01", count: 1 });
+  });
+
   it("as_of cuts every period at that day, and the previous year at the same day of year", async () => {
     const { tools } = setup();
     const s = body(await tools.activity_stats({ as_of: "2026-03-01" }));
@@ -260,6 +288,45 @@ describe("training_load", () => {
     expect(t.days.at(-1).date).toBe("2026-11-08");
   });
 
+  it("today is the athlete's day: at 01:00Z it is still yesterday in New York", async () => {
+    const fx = buildUuidRideFixtures(FIXTURE_NOW);
+    const tools = handlersOver(fixtureReads(fx.fixtures), new Date("2026-11-12T01:00:00.000Z"));
+    const t = body(await tools.training_load({}));
+    expect(t.today).toMatchObject({ date: TODAY, is_today: true });
+    expect(t.days.at(-1).date).toBe(TODAY);
+    expect(body(await tools.activity_stats({})).as_of).toBe(TODAY);
+  });
+
+  it("the weekly total is the stored day total, whatever by_source holds", async () => {
+    const { tools } = setup((f) => {
+      const last = f.dailyLoad[f.dailyLoad.length - 1];
+      f.dailyLoad = [...f.dailyLoad.filter((d) => d.date < "2026-11-09"), { ...last, date: "2026-11-10", tssTotal: 80, tssBySource: {} }];
+    });
+    const week = body(await tools.training_load({})).weekly_tss.at(-1);
+    expect(week).toMatchObject({ week_start: "2026-11-09", total: 80, by_source: { garmin: 0, peloton: 0, strava_export: 0, strength: 0 } });
+  });
+
+  it("reads the settings and the daily rows together, from a week before the oldest possible week start", async () => {
+    const calls: string[] = [];
+    let settingsPending = true;
+    const tools = handlersOver({
+      ...EMPTY_READS,
+      getAthleteSettings: async () => {
+        calls.push("settings");
+        await Promise.resolve();
+        settingsPending = false;
+        return EMPTY_READS.getAthleteSettings();
+      },
+      listDailyTrainingLoad: async (from, to) => {
+        calls.push(`load ${from}..${to} settingsPending=${settingsPending}`);
+        return [];
+      },
+    });
+    await tools.training_load({ days: 7 });
+    // 12 weeks back from a Wednesday can start no earlier than 83 days ago; then 7 more.
+    expect(calls).toEqual(["settings", "load 2026-08-13..2026-11-11 settingsPending=true"]);
+  });
+
   it("days bounds the daily rows; out-of-range days is a tool error", async () => {
     const { tools } = setup();
     expect(body(await tools.training_load({ days: 7 })).days).toHaveLength(7);
@@ -276,9 +343,9 @@ describe("power_curve", () => {
   it("best power per stored duration with W/kg, eFTP and the manual FTP", async () => {
     const { tools, fixtures } = setup();
     const p = body(await tools.power_curve({}));
-    const visible = visibleActivities(fixtures.activities);
+    // Every stored row, as sync's eFTP reads them.
     const expectedEftp = eftp(
-      visible.map((a) => ({ startedAt: a.startedAt, mmp20minW: (a.powerCurve as Record<string, number> | null)?.["1200"] ?? null })),
+      fixtures.activities.map((a) => ({ startedAt: a.startedAt, mmp20minW: (a.powerCurve as Record<string, number> | null)?.["1200"] ?? null })),
       TODAY,
     )!;
     expect(p.eftp_w).toBe(Math.round(expectedEftp * 10) / 10);
@@ -318,6 +385,24 @@ describe("power_curve", () => {
   });
 });
 
+describe("power_curve over every stored row", () => {
+  it("a Garmin recording paired to a weaker Peloton row contributes its 20-minute best", async () => {
+    const { tools, ids } = setup((f) => {
+      f.settings = { ...f.settings, manualFtpW: null };
+      f.ftpHistory = [];
+      const peloton = f.activities.find((a) => a.source === "peloton" && a.pairedActivityId !== null)!;
+      const garmin = f.activities.find((a) => a.id === peloton.pairedActivityId)!;
+      peloton.powerCurve = { "1200": 150 };
+      garmin.powerCurve = { "1200": 900 };
+    });
+    const p = body(await tools.power_curve({}));
+    const point = p.points.find((x: { seconds: number }) => x.seconds === 1200);
+    expect(point).toMatchObject({ watts: 900, activity_id: ids.pairedGarmin });
+    expect(p.eftp_w).toBe(855);
+    expect(p).toMatchObject({ ftp_w: 855, ftp_source: "estimated" });
+  });
+});
+
 describe("weight_history", () => {
   it("weigh-ins in kg and lb, the 7-day average, 4-week change, rate and W/kg band", async () => {
     const { tools, fixtures } = setup();
@@ -340,6 +425,40 @@ describe("weight_history", () => {
     });
     expect(w.change_4w_kg).toBeLessThan(0);
     expect(w.change_4w_lb).toBe(r1(trend.change4wKg! / 0.45359237));
+  });
+});
+
+describe("weight_history reads", () => {
+  function counting(edit?: (f: RideFixtures) => void) {
+    const { fixtures } = setup(edit);
+    const inner = fixtureReads(fixtures);
+    let activityReads = 0;
+    const tools = handlersOver({
+      ...inner,
+      listExternalActivities: (f) => {
+        activityReads++;
+        return inner.listExternalActivities(f);
+      },
+    });
+    return { tools, reads: () => activityReads };
+  }
+
+  it("reads no activities when a manual FTP or an FTP history entry is in force", async () => {
+    const manual = counting();
+    expect(body(await manual.tools.weight_history({}))).toMatchObject({ ftp_w: 250, ftp_source: "manual" });
+    expect(manual.reads()).toBe(0);
+    const history = counting((f) => (f.settings = { ...f.settings, manualFtpW: null }));
+    expect(body(await history.tools.weight_history({})).ftp_w).not.toBeNull();
+    expect(history.reads()).toBe(0);
+  });
+
+  it("reads the activities for the estimate when there is neither", async () => {
+    const est = counting((f) => {
+      f.settings = { ...f.settings, manualFtpW: null };
+      f.ftpHistory = [];
+    });
+    expect(body(await est.tools.weight_history({})).ftp_source).toBe("estimated");
+    expect(est.reads()).toBe(1);
   });
 });
 
@@ -393,7 +512,7 @@ describe("plumbing", () => {
 
   it("a backend that refuses the caller answers with its own error and never reads", async () => {
     const denied: CallToolResult = { isError: true, content: [{ type: "text", text: "Invalid bearer token" }] };
-    const tools = createRideToolHandlers(async () => denied);
+    const tools = createRideToolHandlers(async () => denied, { defaultTimeZone: FIXTURE_TIMEZONE });
     for (const name of RIDE_TOOL_NAMES) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       expect(await (tools[name] as any)({ activity_id: MISSING })).toBe(denied);

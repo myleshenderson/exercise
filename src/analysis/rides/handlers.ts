@@ -11,14 +11,17 @@
  * ISO timestamps are passed through as stored. An account with nothing stored gets empty arrays
  * and nulls, never an error (only `get_activity` reports "Activity not found").
  *
- * "Today" is the UTC day: the server knows no time zone for the caller. An activity's own day is
- * its local day in its stored time zone, as `daily_training_load` files it.
+ * "Today" is the day in the athlete's time zone (`defaultTimeZone`, the zone sync files
+ * `daily_training_load` in). An activity's own day is its local day in its stored time zone, else
+ * in `defaultTimeZone`, as `daily_training_load` files it (`src/sync/load.ts`).
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { catchToolError, invalidIdError, toolError, toolResult } from "../../mcp/format.js";
 import type { McpToolHandlers } from "../../mcp/handlers.js";
 import type { ToolInput } from "../../mcp/tools.js";
 import {
+  activityDate,
+  addDays,
   bestPowerCurve,
   COGGAN_POWER_ZONES,
   dateFromDayNumber,
@@ -29,13 +32,13 @@ import {
   GARMIN_HR_MAX_ZONES,
   isEstimatedTss,
   kgToLb,
-  localDate,
   mToFt,
   mToMi,
   periodTotals,
   rampRate,
   recordsFromStored,
   storedBestEfforts,
+  todayIn,
   tsbBand,
   visibleActivities,
   weekStartOf,
@@ -75,6 +78,11 @@ export type RideToolHandlers = Pick<McpToolHandlers, RideToolName>;
 export type WithRideReads = (run: (reads: RideReads) => Promise<CallToolResult>) => Promise<CallToolResult>;
 
 export interface RideToolOptions {
+  /**
+   * The athlete's IANA time zone: "today" is taken in it, and so is the day of a row stored
+   * without a zone (the Strava archive). The Supabase server passes `SYNC_DEFAULT_TIMEZONE`.
+   */
+  defaultTimeZone: string;
   /** The clock; tests pin it. */
   now?: () => Date;
 }
@@ -101,22 +109,9 @@ const convert = (v: number | null | undefined, f: (x: number) => number): number
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
-function utcToday(now: Date): string {
-  return now.toISOString().slice(0, 10);
-}
-
-function addDays(date: string, days: number): string {
-  return dateFromDayNumber(dayNumber(date)! + days);
-}
-
 const startOfDay = (date: string) => `${date}T00:00:00.000Z`;
 const endOfDay = (date: string) => `${date}T23:59:59.999Z`;
 const minDate = (a: string, b: string) => (a < b ? a : b);
-
-/** The local day an activity happened on, in its own time zone. */
-function activityDate(a: Pick<ExternalActivity, "startedAt" | "timezone">): string | null {
-  return localDate(a.startedAt, a.timezone ?? undefined);
-}
 
 class InputError extends Error {}
 
@@ -262,15 +257,16 @@ function previousYearCutoff(asOf: string): string {
 // ---------------------------------------------------------------------------
 // The handlers
 
-export function createRideToolHandlers(withReads: WithRideReads, opts: RideToolOptions = {}): RideToolHandlers {
+export function createRideToolHandlers(withReads: WithRideReads, opts: RideToolOptions): RideToolHandlers {
   const clock = opts.now ?? (() => new Date());
+  const zone = opts.defaultTimeZone;
 
   function tool<K extends RideToolName>(
     name: K,
     body: (reads: RideReads, input: ToolInput<K>, today: string) => Promise<CallToolResult>,
   ): RideToolHandlers[K] {
     const handler = (input: ToolInput<K>) =>
-      withReads((reads) => guarded(name, () => body(reads, input, utcToday(clock()))));
+      withReads((reads) => guarded(name, () => body(reads, input, todayIn(zone, clock().getTime()))));
     return handler as RideToolHandlers[K];
   }
 
@@ -280,10 +276,12 @@ export function createRideToolHandlers(withReads: WithRideReads, opts: RideToolO
       const end = parseDate("list_activities", "end_date", input.end_date);
       const limit = intParam("list_activities", "limit", input.limit, 1, 500, DEFAULT_LIST_LIMIT);
       // Read a day either side and every source and environment, so a pair whose two
-      // recordings straddle a bound or a filter still collapses; then cut to the request.
+      // recordings straddle a bound or a filter still collapses; then cut to the request. Only
+      // the newest 2 × limit + 50 rows are read: room for hidden fragments and paired halves.
       const rows = await reads.listExternalActivities({
         ...(start !== undefined ? { from: startOfDay(addDays(start, -1)) } : {}),
         ...(end !== undefined ? { to: endOfDay(addDays(end, 1)) } : {}),
+        limit: 2 * limit + 50,
       });
       const fromMs = start === undefined ? -Infinity : Date.parse(startOfDay(start));
       const toMs = end === undefined ? Infinity : Date.parse(endOfDay(end));
@@ -357,7 +355,7 @@ export function createRideToolHandlers(withReads: WithRideReads, opts: RideToolO
       // A day past as_of covers every time zone's local as_of; later rows are cut per row below.
       const all = await reads.listExternalActivities({ to: endOfDay(addDays(asOf, 1)) });
       const dated = visibleActivities(all)
-        .map((a) => ({ a, date: activityDate(a) }))
+        .map((a) => ({ a, date: activityDate(a, zone) }))
         .filter((x): x is { a: VisibleActivity; date: string } => x.date !== null && x.date <= asOf);
       const between = (from: string) => dated.filter(({ date }) => date >= from).map(({ a }) => a);
       const year = asOf.slice(0, 4);
@@ -420,12 +418,16 @@ export function createRideToolHandlers(withReads: WithRideReads, opts: RideToolO
 
     training_load: tool("training_load", async (reads, input, today) => {
       const days = intParam("training_load", "days", input.days, 7, 730, DEFAULT_LOAD_DAYS);
-      const settings = await reads.getAthleteSettings();
       const daysFrom = addDays(today, -(days - 1));
+      // The oldest the first of the 12 weeks can start, whichever day weeks start on, so both
+      // reads go out together; then a week more, for the ramp rate's CTL a week back.
+      const from = minDate(daysFrom, addDays(today, -(7 * WEEKLY_TSS_WEEKS - 1)));
+      const [settings, rows] = await Promise.all([
+        reads.getAthleteSettings(),
+        reads.listDailyTrainingLoad(addDays(from, -7), today),
+      ]);
       const currentWeek = weekStartOf(today, settings.weekStart);
       const weeks = Array.from({ length: WEEKLY_TSS_WEEKS }, (_, i) => addDays(currentWeek, -7 * (WEEKLY_TSS_WEEKS - 1 - i)));
-      // A week more than either window, for the ramp rate's CTL a week back.
-      const rows = await reads.listDailyTrainingLoad(addDays(minDate(daysFrom, weeks[0]), -7), today);
 
       let latest: (typeof rows)[number] | undefined;
       for (const r of rows) if (r.date <= today && Number.isFinite(r.tsb) && (!latest || r.date > latest.date)) latest = r;
@@ -438,12 +440,11 @@ export function createRideToolHandlers(withReads: WithRideReads, opts: RideToolO
         const k = weekIndex.get(weekStartOf(r.date, settings.weekStart));
         if (k === undefined || r.date > today) continue;
         hasRow[k] = true;
+        // The total is the stored day total; by_source is its breakdown.
+        if (typeof r.tssTotal === "number" && Number.isFinite(r.tssTotal)) weekly[k].total += r.tssTotal;
         for (const s of LOAD_SOURCES) {
           const v = r.tssBySource?.[s];
-          if (typeof v === "number" && Number.isFinite(v)) {
-            weekly[k].by_source[s] += v;
-            weekly[k].total += v;
-          }
+          if (typeof v === "number" && Number.isFinite(v)) weekly[k].by_source[s] += v;
         }
       }
       // Weeks before the first stored day are not shown (none at all on an empty account).
@@ -491,13 +492,13 @@ export function createRideToolHandlers(withReads: WithRideReads, opts: RideToolO
         reads.listFtpHistory(),
         reads.listBodyWeights(startOfDay(addDays(today, -6)), endOfDay(today)),
       ]);
-      const visible = visibleActivities(all);
+      // Every stored row, as sync's eFTP reads them: a paired Garmin recording's bests count.
       const kg7d = weightTrend(weighIns(weights), today).avg7Kg;
-      const ftp = ftpNow(visible, settings, history, today);
+      const ftp = ftpNow(all, settings, history, today);
       const fromIso = windowDays === undefined ? undefined : startOfDay(addDays(today, -(windowDays - 1)));
       return toolResult({
         window_days: windowDays ?? null,
-        points: bestPowerCurve(visible, fromIso).map((p) => ({
+        points: bestPowerCurve(all, fromIso).map((p) => ({
           seconds: p.durationS,
           watts: p.watts,
           w_per_kg: r1(wPerKg(p.watts, kg7d)),
@@ -516,16 +517,20 @@ export function createRideToolHandlers(withReads: WithRideReads, opts: RideToolO
       const days = intParam("weight_history", "days", input.days, 7, 3650, DEFAULT_WEIGHT_DAYS);
       const daysFrom = addDays(today, -(days - 1));
       // The 4-week change compares with the 7 days ending 28 days ago.
-      const [weights, recent, settings, history] = await Promise.all([
+      const [weights, settings, history] = await Promise.all([
         reads.listBodyWeights(startOfDay(minDate(daysFrom, addDays(today, -34))), endOfDay(today)),
-        // eFTP only looks at the last 90 days.
-        reads.listExternalActivities({ from: startOfDay(addDays(today, -EFTP_WINDOW_DAYS)) }),
         reads.getAthleteSettings(),
         reads.listFtpHistory(),
       ]);
+      // The manual FTP or the history entry in force; the activities are read only for the
+      // estimate, when there is neither (eFTP only looks at the last 90 days, every row).
+      let ftp = resolveFtp(endOfDay(today), { settings, ftpHistory: history, priorRides: [] });
+      if (ftp.ftpW === null) {
+        const recent = await reads.listExternalActivities({ from: startOfDay(addDays(today, -EFTP_WINDOW_DAYS)) });
+        ftp = ftpNow(recent, settings, history, today);
+      }
       const trend = weightTrend(weighIns(weights), today);
       const rate = weightRatePerWeek(trend);
-      const ftp = ftpNow(visibleActivities(recent), settings, history, today);
       const wkg = wPerKg(ftp.ftpW, trend.avg7Kg);
       const fromMs = Date.parse(startOfDay(daysFrom));
       return toolResult({

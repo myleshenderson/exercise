@@ -230,9 +230,9 @@ export const TOOL_DEFINITIONS = [
     name: "activity_stats",
     title: "Activity stats",
     description:
-      "Ride totals (count, moving time, distance with its indoor part, elevation, TSS, work) for the last 4 weeks, year to date, the previous year to the same day of year and all time; the 15 personal-record rows (longest ride, biggest climb, most elevation and 12 distance best efforts, outdoor rides only); and the 5 s, 1 min, 5 min, 20 min and 1 h power bests, as of a UTC day (as_of, default today), for the authenticated user.",
+      "Ride totals (count, moving time, distance with its indoor part, elevation, TSS, work) for the last 4 weeks, year to date, the previous year to the same day of year and all time; the 15 personal-record rows (longest ride, biggest climb, most elevation and 12 distance best efforts, outdoor rides only); and the 5 s, 1 min, 5 min, 20 min and 1 h power bests, as of a day (as_of, default today in the athlete's time zone), for the authenticated user.",
     inputSchema: {
-      as_of: z.string().optional().describe("The UTC day (YYYY-MM-DD) the totals and records are taken at; default today."),
+      as_of: z.string().optional().describe("The day (YYYY-MM-DD) the totals and records are taken at, each ride counted on its local day; default today in the athlete's time zone."),
     },
   },
   {

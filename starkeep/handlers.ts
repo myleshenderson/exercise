@@ -59,6 +59,7 @@ import {
 } from "../src/analysis/index.js";
 import { compileIlike } from "../src/analysis/sqlSemantics.js";
 import { createRideToolHandlers } from "../src/analysis/rides/index.js";
+import { DEFAULT_ATHLETE_TIMEZONE } from "../src/metrics/dates.js";
 
 // ---- Starkeep rows (starkeep.manifest.json tables) --------------------------
 
@@ -331,7 +332,8 @@ export function createStarkeepHandlers(data: DataLayer, rows: RowClient): McpToo
 
   return {
     // The seven ride analytics read tools, shared with api/mcp.ts (src/analysis/rides).
-    ...createRideToolHandlers((run) => run(data)),
+    // Starkeep has no env: the same default zone the Supabase server falls back to.
+    ...createRideToolHandlers((run) => run(data), { defaultTimeZone: DEFAULT_ATHLETE_TIMEZONE }),
     progression_for_exercise: ({ exercise_name }) =>
       readTool("progression_for_exercise", async () =>
         progressionForExercise(await setsForName(exercise_name), { exercise_name }),

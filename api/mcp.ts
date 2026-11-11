@@ -33,6 +33,7 @@ import {
   listSyncState,
 } from "../src/data/supabase.js";
 import { createRideToolHandlers, type RideReads } from "../src/analysis/rides/index.js";
+import { DEFAULT_ATHLETE_TIMEZONE } from "../src/metrics/dates.js";
 import { withDefaultToolArguments } from "../src/mcp/defaults.js";
 import { registerTools, type McpToolHandlers } from "../src/mcp/handlers.js";
 import {
@@ -170,7 +171,10 @@ function createSupabaseHandlers(getIdentity: () => Promise<IdentityResult>): Mcp
 
   return {
     // The seven ride analytics read tools, shared with Starkeep (src/analysis/rides).
-    ...createRideToolHandlers((run) => withIdentity((accessToken) => run(rideReads(createUserScopedClient(accessToken))))),
+    // "Today" is the athlete's day in the zone sync files daily_training_load in.
+    ...createRideToolHandlers((run) => withIdentity((accessToken) => run(rideReads(createUserScopedClient(accessToken)))), {
+      defaultTimeZone: process.env.SYNC_DEFAULT_TIMEZONE ?? DEFAULT_ATHLETE_TIMEZONE,
+    }),
     progression_for_exercise: async ({ exercise_name }) =>
       withIdentity(async (accessToken) => {
         const { data, error } = await createUserScopedClient(accessToken).rpc("progression_for_exercise", {
