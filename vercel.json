@@ -3,5 +3,7 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
+  "functions": { "api/sync.ts": { "maxDuration": 60 } },
+  "crons": [{ "path": "/api/sync", "schedule": "0 10 * * *" }]
 }

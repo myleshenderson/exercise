@@ -37,3 +37,14 @@ the page's `component---src-pages-gc-developer-program-personal-swagger-docs-js-
 bundle, so DevTools shows no spec request. To refresh it, fetch that bundle,
 cut the single-quoted JSON literal out, JS-unescape it and parse. Captured
 2026-11-11 while running `scripts/probes/garmin-probe.sh` for AI-627.
+
+## Ride sync
+
+The ride sync (`src/sync/runner.ts`, with `scripts/sync.ts` and the `api/sync.ts` daily cron;
+runbook in `docs/ride-sync.md`) talks to Garmin, Peloton and Supabase, and the agent container
+can reach none of them. Sync code is therefore validated only with an injected `fetch`, the
+in-memory store (`src/sync/testing/memoryStore.ts`) and fixtures; no agent has run it live. The
+first full backfill is owner-run (Myles, from his machine, `npm run sync -- --source … --full`),
+not an agent's job. The cron only keeps current, though the adapters backfill an incomplete
+source in either mode, so a cron run before the backfill ends chips at it 50 s a day.
+Added 2026-11-11 (AI-641).
