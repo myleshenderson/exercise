@@ -7,9 +7,13 @@
  * token>` runs the same sync for the owner account only; POST /api/sync?recompute=all[&offset=n]
  * recomputes every activity's TSS and the daily load instead, in budgeted passes the client
  * repeats with `offset=nextOffset` until `done`. CRON_SECRET is never accepted on POST.
+ *
+ * Both sync paths run inside `withSyncLock` (AI-659): while another run (cron, owner or
+ * `npm run sync`) holds the lease the answer is 409 `{ "error": "sync already running" }`.
  */
 import { timingSafeEqual } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { SyncLockBusyError, withSyncLock } from "../src/sync/lock.js";
 import { createNodeSyncDeps, createServiceClient } from "../src/sync/nodeDeps.js";
 import { recomputeAll } from "../src/sync/recompute.js";
 import {
@@ -45,6 +49,20 @@ export interface HandleSyncDeps {
   /** Builds the runner deps; called only once the request is authorised. */
   makeDeps: () => SyncDeps;
   runSync: (deps: SyncDeps, opts: SyncOptions) => Promise<SyncRunResult[]>;
+  /** `withSyncLock` on the client `makeDeps` built; throws `SyncLockBusyError` when held. */
+  withSyncLock: <T>(fn: () => Promise<T>) => Promise<T>;
+}
+
+const SYNC_BUSY = { status: 409, body: { error: "sync already running" } } as const;
+
+/** Runs `fn` under the lease; `null` when another run holds it (the caller answers 409). */
+async function lockedOrBusy<T>(lock: (fn: () => Promise<T>) => Promise<T>, fn: () => Promise<T>): Promise<T | null> {
+  try {
+    return await lock(fn);
+  } catch (e) {
+    if (e instanceof SyncLockBusyError) return null;
+    throw e;
+  }
 }
 
 export type HandleSyncResult = { status: 200; body: SyncRunResult[] } | { status: number; body: { error: string } };
@@ -66,7 +84,10 @@ export async function handleSync(
 
   const start = deps.now();
   const syncDeps = deps.makeDeps();
-  const results = await deps.runSync(syncDeps, budgetedSyncOptions(syncDeps.env, start, deps.now));
+  const results = await lockedOrBusy(deps.withSyncLock, () =>
+    deps.runSync(syncDeps, budgetedSyncOptions(syncDeps.env, start, deps.now)),
+  );
+  if (results === null) return SYNC_BUSY;
   return { status: 200, body: results };
 }
 
@@ -101,6 +122,8 @@ export interface HandleOwnerSyncDeps<Client = SupabaseClient> {
   /** Builds the runner deps on that client; called only once authorised. */
   makeDeps: (env: SyncEnv, client: Client) => SyncDeps;
   runSync: (deps: SyncDeps, opts: SyncOptions) => Promise<SyncRunResult[]>;
+  /** `withSyncLock` on that client; throws `SyncLockBusyError` when another run holds the lease. */
+  withSyncLock: <T>(client: Client, fn: () => Promise<T>) => Promise<T>;
   recomputeAll: typeof recomputeAll;
 }
 
@@ -183,7 +206,11 @@ export async function handleOwnerSync<Client>(
   }
 
   const syncDeps = deps.makeDeps(env, client);
-  const results = await deps.runSync(syncDeps, budgetedSyncOptions(env, start, deps.now));
+  const results = await lockedOrBusy(
+    (fn) => deps.withSyncLock(client, fn),
+    () => deps.runSync(syncDeps, budgetedSyncOptions(env, start, deps.now)),
+  );
+  if (results === null) return SYNC_BUSY;
   return { status: 200, body: { kind: "sync", results } };
 }
 
@@ -227,6 +254,7 @@ async function ownerHandler(req: VercelLikeRequest, res: VercelLikeResponse, aut
         verifyUser: verifySupabaseUser,
         makeDeps: createNodeSyncDeps,
         runSync,
+        withSyncLock: (client, fn) => withSyncLock(client, fn, { label: "owner" }),
         recomputeAll,
       },
     );
@@ -248,6 +276,8 @@ export default async function handler(req: VercelLikeRequest, res: VercelLikeRes
   const header = req.headers.authorization;
   const authorization = Array.isArray(header) ? header[0] : header;
   if (req.method === "POST") return ownerHandler(req, res, authorization);
+  // makeDeps builds the client once authorised; the lock runs on that same client.
+  let client: SupabaseClient | undefined;
   try {
     // An unset or empty CRON_SECRET refuses every bearer (401) and is never named to the caller.
     const result = await handleSync(
@@ -255,8 +285,16 @@ export default async function handler(req: VercelLikeRequest, res: VercelLikeRes
       {
         cronSecret: process.env.CRON_SECRET ?? "",
         now: () => Date.now(),
-        makeDeps: () => createNodeSyncDeps(readSyncEnv(process.env, CRON_SOURCES)),
+        makeDeps: () => {
+          const env = readSyncEnv(process.env, CRON_SOURCES);
+          client = createServiceClient(env);
+          return createNodeSyncDeps(env, client);
+        },
         runSync,
+        withSyncLock: (fn) => {
+          if (!client) throw new Error("sync lock: no client (makeDeps not called)");
+          return withSyncLock(client, fn, { label: "cron" });
+        },
       },
     );
     if (result.status === 200) logFailures(result.body as SyncRunResult[]);
