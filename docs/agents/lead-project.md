@@ -55,7 +55,8 @@ the session-end docs). Sections follow `.claude/skills/lead/PROFILE-TEMPLATE.md`
   monitor merges as soon as CI is green, with no lead read; for non-production paths the
   lead's read is the post-merge verification subagent. The monitor moves the issue to
   Done about ten minutes after the merge (AI-622 on 2026-11-10: merged, In Progress at
-  01:04, Done at 01:09); wait fifteen minutes before setting Done by hand, and set it by
+  01:04, Done at 01:09; on 2026-11-11 ~3 min for runner PRs #108/#109, merged 21:57Z, Done
+  ~22:00Z, and ~15 min for the lead's docs PR #107); wait fifteen minutes before setting Done by hand, and set it by
   hand only for a PR Myles merged himself (#69).
 - **Monitor after a failed run.** #100 (AI-640) failed CI, was fixed, went green and CLEAN at
   ~20:14Z, and the monitor merged it only at ~20:55Z; every PR green on its first run merged
@@ -134,11 +135,17 @@ into the pending issues' ACs before they dispatch.
   (earlier sessions), `wt-starkeep`, `wt-verify2`, `wt-lead3` (2026-11-10), `wt-lead4`, `wt-lead5`, `wt-lead6`, `wt-ci635`, `wt-verify85`, `wt-verify86`, `wt-verify88`, `wt-verify89`, `wt-verify90`, `wt-verify91`, `wt-fix84`, `wt-fix92`, `wt-merge92`, `wt-verify92`, `wt-env92`, `wt-verify94`,
   `wt-verify96`, `wt-verify98`, `wt-fix94`, `wt-fix95`, `wt-fix100`, `wt-c6`, `wt-briefs`,
   `wt-fix102`, `wt-verify100`, `wt-verify103`, `wt-verify104`, `wt-verify105`, `wt-fix106`,
-  `wt-verify106`, `wt-rebase105` and `wt-lead7` (2026-11-11).
-- The container user (uid 1000) cannot `apt-get`; Chromium's runtime libraries (`libnspr4`,
-  `libnss3`, ...) are missing, so `npm run screenshots -- --rides` cannot render stills
-  (AI-666 in worktree-tools). Until it lands, UI PRs are checked by the verification
-  subagent against their ACs and Myles sees the deployed app.
+  `wt-verify106`, `wt-rebase105` and `wt-lead7` (2026-11-11), `wt-stills`, `wt-stills112`,
+  `wt-verify108`, `wt-verify110`, `wt-verify112`, `wt-verify114`, `wt-fix114`, `wt-fix115`,
+  `wt-docs675` (2026-11-11 late).
+- The container user (uid 1000) cannot `apt-get`; the agent image has Chromium's system
+  libraries since AI-666 (2026-11-11 evening). Playwright's headless-shell download
+  (cdn.playwright.dev) is blocked, so run `npx playwright install chromium` (works, via the
+  npm registry mirror) and symlink
+  `~/.cache/ms-playwright/chromium_headless_shell-1254/chrome-headless-shell-linux64/chrome-headless-shell`
+  to the installed `chromium-1254` binary; then `npm run screenshots -- --rides --out-dir <dir>`
+  renders the ten ride screens from fixtures (`VITE_MOCK_RIDES=1`). Runner containers lack
+  the symlink, so agents cannot re-render; the lead renders on the branch.
 - Scratch work goes under the session scratchpad directory, never the checkout.
   Starkeep source for research is cloned there (`starkeep-core`, `starkeep-apps`).
 
@@ -151,7 +158,9 @@ into the pending issues' ACs before they dispatch.
   evening). The Starkeep path (`starkeep/`, `src/data/starkeep*`, manifest) is the lead's.
 - Schema changes are files in `supabase/migrations/`; `docs/supabase-migrations.md` says
   how they reach production (the `migrate` CI job on main, green since 2026-11-11; it
-  applied `20261111131256_ride_analytics.sql` and `20261111195714_sessions_service_role_select.sql`).
+  applied `20261111131256_ride_analytics.sql` and `20261111195714_sessions_service_role_select.sql`,
+  and `20261111221500_sync_lock.sql` on 2026-11-11 22:37Z). The recovery SQL for a stuck sync
+  lease is in `docs/agents/project-memory.md` ("Sync lock").
   The strength tables from `0001_init.sql` grant nothing to `service_role`; a service-role
   read of one needs an explicit grant migration (AI-664).
   Two migrations sharing a version number apply silently as one; CI checks for this
