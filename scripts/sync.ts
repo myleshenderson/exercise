@@ -42,7 +42,7 @@ async function main(): Promise<number> {
 
   if (args.recomputeAll) {
     const r = await recomputeAll(deps.store, { defaultTimeZone: env.SYNC_DEFAULT_TIMEZONE, today: today() });
-    console.log(`recompute-all: ${r.activities} activities, ${r.days} days`);
+    console.log(`recompute-all: ${r.activities} activities, ${r.days} days, done ${r.done}`);
   }
   return results.some((r) => r.error !== null) ? 1 : 0;
 }

@@ -4,14 +4,24 @@
  * error strings only, never tokens.
  *
  * Settings "Sync now" (AI-653): POST /api/sync with `Authorization: Bearer <Supabase access
- * token>` runs the same sync for the owner account only; POST /api/sync?recompute=all recomputes
- * every activity's TSS and the daily load instead. CRON_SECRET is never accepted on POST.
+ * token>` runs the same sync for the owner account only; POST /api/sync?recompute=all[&offset=n]
+ * recomputes every activity's TSS and the daily load instead, in budgeted passes the client
+ * repeats with `offset=nextOffset` until `done`. CRON_SECRET is never accepted on POST.
  */
 import { timingSafeEqual } from "node:crypto";
-import { createClient } from "@supabase/supabase-js";
-import { createNodeSyncDeps } from "../src/sync/nodeDeps.js";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { createNodeSyncDeps, createServiceClient } from "../src/sync/nodeDeps.js";
 import { recomputeAll } from "../src/sync/recompute.js";
-import { SyncLoadError, readSyncEnv, runSync, todayIn, type SyncDeps, type SyncOptions, type SyncProvider } from "../src/sync/runner.js";
+import {
+  SyncLoadError,
+  readSyncEnv,
+  runSync,
+  todayIn,
+  type SyncDeps,
+  type SyncEnv,
+  type SyncOptions,
+  type SyncProvider,
+} from "../src/sync/runner.js";
 import type { SyncRunResult } from "../src/sync/types.js";
 
 interface VercelLikeRequest {
@@ -56,46 +66,58 @@ export async function handleSync(
 
   const start = deps.now();
   const syncDeps = deps.makeDeps();
-  const results = await deps.runSync(syncDeps, {
-    sources: CRON_SOURCES,
-    mode: "incremental",
-    deadlineMs: start + CRON_BUDGET_MS,
-    now: deps.now,
-    today: () => todayIn(syncDeps.env.SYNC_DEFAULT_TIMEZONE, deps.now()),
-  });
+  const results = await deps.runSync(syncDeps, budgetedSyncOptions(syncDeps.env, start, deps.now));
   return { status: 200, body: results };
 }
 
-export interface HandleOwnerSyncDeps {
+/** The cron's run, shared by GET and the owner's POST: incremental, both providers, 50 s budget. */
+export function budgetedSyncOptions(env: SyncEnv, start: number, now: () => number): SyncOptions {
+  return {
+    sources: CRON_SOURCES,
+    mode: "incremental",
+    deadlineMs: start + CRON_BUDGET_MS,
+    now,
+    today: () => todayIn(env.SYNC_DEFAULT_TIMEZONE, now()),
+  };
+}
+
+/** The outcome of the stateless token check. */
+export type VerifyUserResult =
+  | { kind: "user"; id: string }
+  | { kind: "invalid" }
+  /** Supabase Auth could not answer (5xx, network): not the caller's fault. */
+  | { kind: "unavailable"; status: number | undefined };
+
+export interface HandleOwnerSyncDeps<Client = SupabaseClient> {
   /** Never accepted on POST: a bearer equal to it is refused before any Supabase call. */
   cronSecret: string;
-  /** Stateless Supabase `auth.getUser(token)`; null for an error or no user. */
-  verifyUser: (token: string) => Promise<{ id: string } | null>;
-  /** SYNC_OWNER_USER_ID; empty refuses every user. */
-  ownerUserId: string;
   now: () => number;
-  /** Builds the runner deps for `sources` ([] for a recompute); called only once authorised. */
-  makeDeps: (sources: readonly SyncProvider[]) => SyncDeps;
+  /** `readSyncEnv(process.env, sources)`; throws naming the missing variables. */
+  readEnv: (sources: readonly SyncProvider[]) => SyncEnv;
+  /** The one service-role client of this request, shared by the token check and the store. */
+  createClient: (env: SyncEnv) => Client;
+  /** Stateless `auth.getUser(token)` on that client. */
+  verifyUser: (client: Client, token: string) => Promise<VerifyUserResult>;
+  /** Builds the runner deps on that client; called only once authorised. */
+  makeDeps: (env: SyncEnv, client: Client) => SyncDeps;
   runSync: (deps: SyncDeps, opts: SyncOptions) => Promise<SyncRunResult[]>;
   recomputeAll: typeof recomputeAll;
 }
 
 export type HandleOwnerSyncResult =
   | { status: 200; body: { kind: "sync"; results: SyncRunResult[] } }
-  | { status: 200; body: { kind: "recompute"; activities: number; days: number } }
+  | {
+      status: 200;
+      body: { kind: "recompute"; activities: number; days: number; done: boolean; nextOffset: number | null };
+    }
   | { status: number; body: { error: string } };
 
 const BEARER = /^Bearer ([^\s]+)$/;
+const NOT_CONFIGURED = { status: 500, body: { error: "Sync is not configured" } } as const;
 
-/** `recompute` query values: null when absent, else every value given. */
-function recomputeParam(url: string | undefined): string[] | null {
-  const values = new URL(url ?? "/", "http://localhost").searchParams.getAll("recompute");
-  return values.length === 0 ? null : values;
-}
-
-export async function handleOwnerSync(
+export async function handleOwnerSync<Client>(
   input: { authorization: string | undefined; method: string | undefined; url: string | undefined },
-  deps: HandleOwnerSyncDeps,
+  deps: HandleOwnerSyncDeps<Client>,
 ): Promise<HandleOwnerSyncResult> {
   // The budget counts from the request's arrival, so the getUser round trip is inside it.
   const start = deps.now();
@@ -105,53 +127,82 @@ export async function handleOwnerSync(
   if (token === undefined || bearerMatches(input.authorization, deps.cronSecret)) {
     return { status: 401, body: { error: "Unauthorized" } };
   }
-  const user = await deps.verifyUser(token);
-  if (!user) return { status: 401, body: { error: "Invalid session" } };
-  if (!deps.ownerUserId || user.id !== deps.ownerUserId) {
+
+  let query: URLSearchParams;
+  try {
+    query = new URL(input.url ?? "/", "http://localhost").searchParams;
+  } catch (e) {
+    if (e instanceof TypeError) return { status: 400, body: { error: "Bad request URL" } };
+    throw e;
+  }
+  const recompute = query.getAll("recompute");
+  // One env and one client per request: the recompute needs no provider variables.
+  let env: SyncEnv;
+  let client: Client;
+  try {
+    env = deps.readEnv(recompute.length > 0 ? [] : CRON_SOURCES);
+    client = deps.createClient(env);
+  } catch (e) {
+    // The caller is not authenticated yet: name the missing variables in the log only.
+    console.error(`sync owner: ${e instanceof Error ? e.message : String(e)}`);
+    return NOT_CONFIGURED;
+  }
+  if (!env.SYNC_OWNER_USER_ID) {
+    console.error("sync owner: SYNC_OWNER_USER_ID is not set");
+    return NOT_CONFIGURED;
+  }
+
+  const user = await deps.verifyUser(client, token);
+  if (user.kind === "unavailable") {
+    console.error(`sync owner: auth service unavailable (status ${user.status ?? "none"})`);
+    return { status: 503, body: { error: "Auth service unavailable" } };
+  }
+  if (user.kind === "invalid") return { status: 401, body: { error: "Invalid session" } };
+  if (user.id !== env.SYNC_OWNER_USER_ID) {
     return { status: 403, body: { error: "Sync is limited to the owner account" } };
   }
 
-  const recompute = recomputeParam(input.url);
-  if (recompute !== null) {
+  if (recompute.length > 0) {
     if (recompute.length !== 1 || recompute[0] !== "all") return { status: 400, body: { error: "recompute must be 'all'" } };
-    const syncDeps = deps.makeDeps([]);
-    const tz = syncDeps.env.SYNC_DEFAULT_TIMEZONE;
-    const counts = await deps.recomputeAll(syncDeps.store, { defaultTimeZone: tz, today: todayIn(tz, deps.now()) });
-    return { status: 200, body: { kind: "recompute", activities: counts.activities, days: counts.days } };
+    const offsets = query.getAll("offset");
+    const offset = offsets.length === 0 ? 0 : offsets.length === 1 && /^\d+$/.test(offsets[0]!) ? Number(offsets[0]) : NaN;
+    if (!Number.isSafeInteger(offset)) return { status: 400, body: { error: "offset must be a non-negative integer" } };
+    const syncDeps = deps.makeDeps(env, client);
+    const tz = env.SYNC_DEFAULT_TIMEZONE;
+    const r = await deps.recomputeAll(syncDeps.store, {
+      defaultTimeZone: tz,
+      today: todayIn(tz, deps.now()),
+      deadlineMs: start + CRON_BUDGET_MS,
+      offset,
+      now: deps.now,
+    });
+    return {
+      status: 200,
+      body: { kind: "recompute", activities: r.activities, days: r.days, done: r.done, nextOffset: r.nextOffset },
+    };
   }
 
-  const syncDeps = deps.makeDeps(CRON_SOURCES);
-  const results = await deps.runSync(syncDeps, {
-    sources: CRON_SOURCES,
-    mode: "incremental",
-    deadlineMs: start + CRON_BUDGET_MS,
-    now: deps.now,
-    today: () => todayIn(syncDeps.env.SYNC_DEFAULT_TIMEZONE, deps.now()),
-  });
+  const syncDeps = deps.makeDeps(env, client);
+  const results = await deps.runSync(syncDeps, budgetedSyncOptions(env, start, deps.now));
   return { status: 200, body: { kind: "sync", results } };
 }
 
-const makeDeps = (): SyncDeps => createNodeSyncDeps(readSyncEnv(process.env, CRON_SOURCES));
-
-const makeOwnerDeps = (sources: readonly SyncProvider[]): SyncDeps => createNodeSyncDeps(readSyncEnv(process.env, sources));
+/** An outage rather than a rejection: no HTTP answer (0), a 5xx, or the client's retryable error. */
+function authUnavailable(error: { status?: number; name?: string }): boolean {
+  return error.name === "AuthRetryableFetchError" || error.status === 0 || (error.status !== undefined && error.status >= 500);
+}
 
 /**
  * The same stateless check as api/mcp-login.ts: getUser(token) on a service-role client. Never
  * call a session-establishing auth method on this client.
  */
-async function verifySupabaseUser(token: string): Promise<{ id: string } | null> {
-  let env;
-  try {
-    env = readSyncEnv(process.env, []);
-  } catch (e) {
-    // The caller is not authenticated yet: name the missing variables in the log only.
-    console.error(`sync owner: ${e instanceof Error ? e.message : String(e)}`);
-    throw new Error("Sync is not configured");
-  }
-  const client = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+export async function verifySupabaseUser(
+  client: Pick<SupabaseClient, "auth">,
+  token: string,
+): Promise<VerifyUserResult> {
   const { data, error } = await client.auth.getUser(token);
-  if (error || !data.user) return null;
-  return { id: data.user.id };
+  if (error) return authUnavailable(error) ? { kind: "unavailable", status: error.status } : { kind: "invalid" };
+  return data.user ? { kind: "user", id: data.user.id } : { kind: "invalid" };
 }
 
 /** One log line per failed source: counts and the error string only, never tokens. */
@@ -170,10 +221,11 @@ async function ownerHandler(req: VercelLikeRequest, res: VercelLikeResponse, aut
       { authorization, method: req.method, url: req.url },
       {
         cronSecret: process.env.CRON_SECRET ?? "",
-        verifyUser: verifySupabaseUser,
-        ownerUserId: (process.env.SYNC_OWNER_USER_ID ?? "").trim(),
         now: () => Date.now(),
-        makeDeps: makeOwnerDeps,
+        readEnv: (sources) => readSyncEnv(process.env, sources),
+        createClient: createServiceClient,
+        verifyUser: verifySupabaseUser,
+        makeDeps: createNodeSyncDeps,
         runSync,
         recomputeAll,
       },
@@ -200,7 +252,12 @@ export default async function handler(req: VercelLikeRequest, res: VercelLikeRes
     // An unset or empty CRON_SECRET refuses every bearer (401) and is never named to the caller.
     const result = await handleSync(
       { authorization, method: req.method },
-      { cronSecret: process.env.CRON_SECRET ?? "", now: () => Date.now(), makeDeps, runSync },
+      {
+        cronSecret: process.env.CRON_SECRET ?? "",
+        now: () => Date.now(),
+        makeDeps: () => createNodeSyncDeps(readSyncEnv(process.env, CRON_SOURCES)),
+        runSync,
+      },
     );
     if (result.status === 200) logFailures(result.body as SyncRunResult[]);
     res.status(result.status).json(result.body);

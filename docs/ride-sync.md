@@ -85,30 +85,42 @@ authenticated by the caller's own Supabase session, never by `CRON_SECRET` (whic
 reach a browser and is refused on `POST` with 401):
 
 ```http
-POST /api/sync                  Authorization: Bearer <Supabase access token>
-POST /api/sync?recompute=all    Authorization: Bearer <Supabase access token>
+POST /api/sync                            Authorization: Bearer <Supabase access token>
+POST /api/sync?recompute=all[&offset=n]   Authorization: Bearer <Supabase access token>
 ```
 
 - **Who may call it:** only the user whose id is `SYNC_OWNER_USER_ID`. The token is checked
   with the stateless `auth.getUser(token)` on a service-role client (as `api/mcp-login.ts`
-  does). A missing or malformed bearer gets 401 `Unauthorized`, an unknown or expired token
-  401 `Invalid session`, any other signed-in user 403 `Sync is limited to the owner account`.
-- **Sync now** (no query) runs exactly what the cron runs: an incremental Garmin + Peloton
-  sync with the 50 s budget. Answer: `200 {"kind":"sync","results":[...]}`, one result per
-  source with the same counts and error strings as the cron.
+  does); that one client per request also backs the store. A missing or malformed bearer gets
+  401 `Unauthorized`, an unknown or expired token 401 `Invalid session`, any other signed-in
+  user 403 `Sync is limited to the owner account`. When Supabase Auth itself fails (a 5xx,
+  status 0 or `AuthRetryableFetchError`) the answer is 503 `Auth service unavailable` and the
+  log records the status; retry later.
+- **Sync now** (no query) runs exactly what the cron runs (the same `budgetedSyncOptions`): an
+  incremental Garmin + Peloton sync with the 50 s budget. Answer:
+  `200 {"kind":"sync","results":[...]}`, one result per source with the same counts and error
+  strings as the cron.
 - **Recompute** (`?recompute=all`, after an FTP, flat-rate or strength-TSS change) is the CLI's
-  `--recompute-all`: every activity's TSS, then the daily load. It needs no provider
-  variables. Answer: `200 {"kind":"recompute","activities":n,"days":n}`. Any other
-  `recompute` value gets 400.
+  `--recompute-all`: every activity's TSS (oldest first, then by id), then the daily load. It
+  needs no provider variables. It runs in passes that stop at the 50 s budget. Answer:
+  `200 {"kind":"recompute","activities":n,"days":n,"done":bool,"nextOffset":n|null}`, where
+  `activities` counts this pass. When `done` is false the pass stopped at its deadline before
+  activity `nextOffset` and did not rebuild the daily load (`days` is 0): **the client calls
+  again with `?recompute=all&offset=<nextOffset>` until `done` is true**; the pass that
+  reaches the end rebuilds the daily load from the first ride. Activities before `offset` are
+  not rewritten but still seed eFTP. Any other `recompute` value gets 400 `recompute must be
+  'all'`, an `offset` that is not one non-negative integer 400 `offset must be a non-negative
+  integer`.
 - **Errors** after the owner check answer 500 `{"error":"..."}` (plus `results` when only the
   daily-load step failed) and are logged as `sync owner: ...`; no body or log carries a token
-  or key. A missing `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` or `SYNC_OWNER_USER_ID` answers
-  500 `Sync is not configured` (the log names the variables; the caller is not yet
-  authenticated). Other methods than `GET` and `POST` get 405.
+  or key. A missing `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` or `SYNC_OWNER_USER_ID` (or,
+  for Sync now, a provider variable) answers 500 `Sync is not configured` before the token is
+  checked (the log names the variables; the caller is not yet authenticated). A request URL
+  that does not parse gets 400 `Bad request URL`. Other methods than `GET` and `POST` get 405.
 - **The 60 s limit:** both run inside the function's `maxDuration: 60`. A sync stops at its
-  50 s budget and resumes on the next call. A recompute does not resume: if the full history
-  ever takes longer than 60 s, Vercel cuts it off; rerun it from the CLI
-  (`npm run sync -- --source garmin --incremental --recompute-all`) instead.
+  50 s budget and resumes on the next call; a recompute stops at the same budget and resumes
+  at `nextOffset` as above. The CLI's `--recompute-all` has no deadline and still runs the
+  whole history in one go.
 
 To try it after deploy, copy the access token from a signed-in browser session
 (`supabase.auth.getSession()`):
@@ -116,6 +128,8 @@ To try it after deploy, copy the access token from a signed-in browser session
 ```bash
 curl -s -X POST -H "Authorization: Bearer $ACCESS_TOKEN" https://<production-host>/api/sync
 curl -s -X POST -H "Authorization: Bearer $ACCESS_TOKEN" "https://<production-host>/api/sync?recompute=all"
+# if it answers "done":false, repeat with the nextOffset it returned:
+curl -s -X POST -H "Authorization: Bearer $ACCESS_TOKEN" "https://<production-host>/api/sync?recompute=all&offset=<nextOffset>"
 ```
 
 ## CLI reference

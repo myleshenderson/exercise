@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemorySyncStore } from "../src/sync/testing/memoryStore.js";
 import type { SyncDeps } from "../src/sync/runner.js";
 import type { SyncRunResult } from "../src/sync/types.js";
@@ -7,10 +7,13 @@ import { SyncLoadError } from "../src/sync/runner.js";
 import handler, {
   CRON_BUDGET_MS,
   bearerMatches,
+  budgetedSyncOptions,
+  verifySupabaseUser,
   handleOwnerSync,
   handleSync,
   type HandleOwnerSyncDeps,
   type HandleSyncDeps,
+  type VerifyUserResult,
 } from "./sync.js";
 
 const SECRET = "cron-secret-value";
@@ -212,17 +215,20 @@ describe("handler logging", () => {
 const TOKEN = "eyJ.owner-access-token.sig";
 const OWNER = "owner";
 
-function ownerSetup(user: { id: string } | null = { id: OWNER }) {
+const CLIENT = { name: "service-role client" };
+
+function ownerSetup(user: VerifyUserResult = { kind: "user", id: OWNER }) {
   const { syncDeps } = setup();
   const deps = {
     cronSecret: SECRET,
-    verifyUser: vi.fn(async (_token: string) => user),
-    ownerUserId: OWNER,
     now: () => START,
-    makeDeps: vi.fn((_sources: readonly string[]) => syncDeps),
+    readEnv: vi.fn((_sources: readonly string[]) => syncDeps.env),
+    createClient: vi.fn((_env: unknown) => CLIENT),
+    verifyUser: vi.fn(async (_client: typeof CLIENT, _token: string) => user),
+    makeDeps: vi.fn((_env: unknown, _client: typeof CLIENT) => syncDeps),
     runSync: vi.fn(async () => [RESULT]),
-    recomputeAll: vi.fn(async () => ({ activities: 12, days: 40 })),
-  } satisfies HandleOwnerSyncDeps;
+    recomputeAll: vi.fn(async () => ({ activities: 12, days: 40, done: true, nextOffset: null })),
+  } satisfies HandleOwnerSyncDeps<typeof CLIENT>;
   return { deps, syncDeps };
 }
 
@@ -259,24 +265,56 @@ describe("handleOwnerSync (AI-653)", () => {
   });
 
   it("answers 401 Invalid session when Supabase knows no user for the token", async () => {
-    const { deps } = ownerSetup(null);
+    const { deps } = ownerSetup({ kind: "invalid" });
     const r = await handleOwnerSync(post(`Bearer ${TOKEN}`), deps);
     expect(r).toEqual({ status: 401, body: { error: "Invalid session" } });
-    expect(deps.verifyUser).toHaveBeenCalledWith(TOKEN);
+    expect(deps.verifyUser).toHaveBeenCalledWith(CLIENT, TOKEN);
+    expectNoWork(deps);
+  });
+
+  it("answers 503 when Supabase Auth is unavailable, logging the status but never the token", async () => {
+    const { deps } = ownerSetup({ kind: "unavailable", status: 503 });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await handleOwnerSync(post(`Bearer ${TOKEN}`), deps);
+    expect(r).toEqual({ status: 503, body: { error: "Auth service unavailable" } });
+    expect(log.mock.calls).toEqual([["sync owner: auth service unavailable (status 503)"]]);
     expectNoWork(deps);
   });
 
   it("answers 403 to a signed-in user who is not the owner", async () => {
-    const { deps } = ownerSetup({ id: "second-user" });
+    const { deps } = ownerSetup({ kind: "user", id: "second-user" });
     const r = await handleOwnerSync(post(`Bearer ${TOKEN}`), deps);
     expect(r).toEqual({ status: 403, body: { error: "Sync is limited to the owner account" } });
     expectNoWork(deps);
   });
 
-  it("answers 403 to everyone when the owner id is unset", async () => {
-    const { deps } = ownerSetup({ id: "" });
-    const r = await handleOwnerSync(post(`Bearer ${TOKEN}`), { ...deps, ownerUserId: "" });
-    expect(r.status).toBe(403);
+  it("answers 500 Sync is not configured when the owner id is unset, before verifying anyone", async () => {
+    const { deps, syncDeps } = ownerSetup({ kind: "user", id: "" });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await handleOwnerSync(post(`Bearer ${TOKEN}`), {
+      ...deps,
+      readEnv: () => ({ ...syncDeps.env, SYNC_OWNER_USER_ID: "" }),
+    });
+    expect(r).toEqual({ status: 500, body: { error: "Sync is not configured" } });
+    expect(log).toHaveBeenCalledWith("sync owner: SYNC_OWNER_USER_ID is not set");
+    expect(deps.verifyUser).not.toHaveBeenCalled();
+    expectNoWork(deps);
+  });
+
+  it("reads the env and creates the client once, sharing the client between the token check and the store", async () => {
+    const { deps, syncDeps } = ownerSetup();
+    await handleOwnerSync(post(`Bearer ${TOKEN}`), deps);
+    expect(deps.readEnv.mock.calls).toEqual([[["garmin", "peloton"]]]);
+    expect(deps.createClient.mock.calls).toEqual([[syncDeps.env]]);
+    expect(deps.verifyUser).toHaveBeenCalledWith(CLIENT, TOKEN);
+    expect(deps.makeDeps.mock.calls).toEqual([[syncDeps.env, CLIENT]]);
+  });
+
+  it("answers 400 Bad request URL to a URL the parser rejects", async () => {
+    const { deps } = ownerSetup();
+    const r = await handleOwnerSync(post(`Bearer ${TOKEN}`, "//"), deps);
+    expect(r).toEqual({ status: 400, body: { error: "Bad request URL" } });
+    expect(deps.verifyUser).not.toHaveBeenCalled();
     expectNoWork(deps);
   });
 
@@ -291,7 +329,7 @@ describe("handleOwnerSync (AI-653)", () => {
     const { deps, syncDeps } = ownerSetup();
     const r = await handleOwnerSync(post(`Bearer ${TOKEN}`), deps);
     expect(r).toEqual({ status: 200, body: { kind: "sync", results: [RESULT] } });
-    expect(deps.makeDeps).toHaveBeenCalledWith(["garmin", "peloton"]);
+    expect(deps.readEnv).toHaveBeenCalledWith(["garmin", "peloton"]);
     const [passedDeps, opts] = deps.runSync.mock.calls[0] as unknown as Parameters<HandleSyncDeps["runSync"]>;
     expect(passedDeps).toBe(syncDeps);
     expect(opts).toMatchObject({ sources: ["garmin", "peloton"], mode: "incremental", deadlineMs: START + 50_000 });
@@ -300,17 +338,43 @@ describe("handleOwnerSync (AI-653)", () => {
     expect(deps.recomputeAll).not.toHaveBeenCalled();
   });
 
-  it("?recompute=all recomputes with the env time zone and the owner's today, without provider env", async () => {
+  it("?recompute=all recomputes with the env time zone, the owner's today and the 50 s deadline, without provider env", async () => {
     const { deps, syncDeps } = ownerSetup();
     const late = Date.parse("2026-11-11T03:00:00.000Z"); // 22:00 on the 10th in New York
-    const r = await handleOwnerSync(post(`Bearer ${TOKEN}`, "/api/sync?recompute=all"), { ...deps, now: () => late });
-    expect(r).toEqual({ status: 200, body: { kind: "recompute", activities: 12, days: 40 } });
-    expect(deps.makeDeps).toHaveBeenCalledWith([]);
+    const now = () => late;
+    const r = await handleOwnerSync(post(`Bearer ${TOKEN}`, "/api/sync?recompute=all"), { ...deps, now });
+    expect(r).toEqual({ status: 200, body: { kind: "recompute", activities: 12, days: 40, done: true, nextOffset: null } });
+    expect(deps.readEnv).toHaveBeenCalledWith([]);
     expect(deps.recomputeAll).toHaveBeenCalledWith(syncDeps.store, {
       defaultTimeZone: "America/New_York",
       today: "2026-11-10",
+      deadlineMs: late + 50_000,
+      offset: 0,
+      now,
     });
     expect(deps.runSync).not.toHaveBeenCalled();
+  });
+
+  it("?recompute=all&offset=n resumes at n and passes through a pass that stopped at its deadline", async () => {
+    const { deps } = ownerSetup();
+    deps.recomputeAll.mockResolvedValueOnce({ activities: 300, days: 0, done: false, nextOffset: 340 } as never);
+    const r = await handleOwnerSync(post(`Bearer ${TOKEN}`, "/api/sync?recompute=all&offset=40"), deps);
+    expect(r).toEqual({ status: 200, body: { kind: "recompute", activities: 300, days: 0, done: false, nextOffset: 340 } });
+    expect(deps.recomputeAll.mock.calls[0]![1]).toMatchObject({ offset: 40, deadlineMs: START + 50_000 });
+  });
+
+  it.each(["-1", "1.5", "abc", "", "1e3", "99999999999999999999"])("answers 400 to offset=%s", async (offset) => {
+    const { deps } = ownerSetup();
+    const r = await handleOwnerSync(post(`Bearer ${TOKEN}`, `/api/sync?recompute=all&offset=${offset}`), deps);
+    expect(r).toEqual({ status: 400, body: { error: "offset must be a non-negative integer" } });
+    expectNoWork(deps);
+  });
+
+  it("answers 400 to a repeated offset", async () => {
+    const { deps } = ownerSetup();
+    const r = await handleOwnerSync(post(`Bearer ${TOKEN}`, "/api/sync?recompute=all&offset=1&offset=2"), deps);
+    expect(r.status).toBe(400);
+    expectNoWork(deps);
   });
 
   it.each(["/api/sync?recompute=some", "/api/sync?recompute=", "/api/sync?recompute=all&recompute=all", "/api/sync?recompute=ALL"])(
@@ -326,9 +390,9 @@ describe("handleOwnerSync (AI-653)", () => {
   it("starts the 50 s budget before verifying the session", async () => {
     const { deps } = ownerSetup();
     let t = START;
-    const verifyUser = vi.fn(async () => {
+    const verifyUser = vi.fn(async (): Promise<VerifyUserResult> => {
       t += 3_000;
-      return { id: OWNER };
+      return { kind: "user", id: OWNER };
     });
     await handleOwnerSync(post(`Bearer ${TOKEN}`), { ...deps, verifyUser, now: () => t });
     expect((deps.runSync.mock.calls[0] as unknown as Parameters<HandleSyncDeps["runSync"]>)[1].deadlineMs).toBe(START + 50_000);
@@ -341,9 +405,56 @@ describe("handleOwnerSync (AI-653)", () => {
   });
 
   it("checks the session before the query, so a stranger learns nothing from a bad recompute", async () => {
-    const { deps } = ownerSetup(null);
+    const { deps } = ownerSetup({ kind: "invalid" });
     const r = await handleOwnerSync(post(`Bearer ${TOKEN}`, "/api/sync?recompute=nope"), deps);
     expect(r.status).toBe(401);
+  });
+});
+
+describe("budgetedSyncOptions (AI-653)", () => {
+  it("is the one source of the cron and owner run options", async () => {
+    const cron = setup();
+    await handleSync({ authorization: `Bearer ${SECRET}`, method: "GET" }, cron.deps);
+    const owner = ownerSetup();
+    await handleOwnerSync(post(`Bearer ${TOKEN}`), owner.deps);
+    const expected = budgetedSyncOptions(cron.syncDeps.env, START, () => START);
+    for (const opts of [cron.deps.runSync.mock.calls[0], owner.deps.runSync.mock.calls[0]].map(
+      (c) => (c as unknown as Parameters<HandleSyncDeps["runSync"]>)[1],
+    )) {
+      expect(Object.keys(opts).sort()).toEqual(Object.keys(expected).sort());
+      expect({ ...opts, now: opts.now(), today: opts.today() }).toEqual({ ...expected, now: START, today: "2026-11-11" });
+    }
+  });
+});
+
+describe("verifySupabaseUser (AI-653)", () => {
+  const client = (result: { data: { user: { id: string } | null }; error: unknown }) =>
+    ({ auth: { getUser: vi.fn(async () => result) } }) as unknown as Parameters<typeof verifySupabaseUser>[0];
+  const authError = (name: string, status: number | undefined) => Object.assign(new Error("x"), { name, status });
+
+  it("returns the user id for a valid token", async () => {
+    expect(await verifySupabaseUser(client({ data: { user: { id: OWNER } }, error: null }), TOKEN)).toEqual({ kind: "user", id: OWNER });
+  });
+
+  it.each([
+    ["a 401 rejection", authError("AuthApiError", 401)],
+    ["a 403 bad jwt", authError("AuthApiError", 403)],
+    ["an error without a status", authError("AuthSessionMissingError", undefined)],
+  ])("treats %s as an invalid session", async (_label, error) => {
+    expect(await verifySupabaseUser(client({ data: { user: null }, error }), TOKEN)).toEqual({ kind: "invalid" });
+  });
+
+  it("treats no user without an error as an invalid session", async () => {
+    expect(await verifySupabaseUser(client({ data: { user: null }, error: null }), TOKEN)).toEqual({ kind: "invalid" });
+  });
+
+  it.each([
+    ["a 503", authError("AuthApiError", 503), 503],
+    ["a 500", authError("AuthUnknownError", 500), 500],
+    ["status 0", authError("AuthApiError", 0), 0],
+    ["AuthRetryableFetchError", authError("AuthRetryableFetchError", 429), 429],
+  ])("treats %s as the auth service being unavailable", async (_label, error, status) => {
+    expect(await verifySupabaseUser(client({ data: { user: null }, error }), TOKEN)).toEqual({ kind: "unavailable", status });
   });
 });
 
@@ -361,27 +472,42 @@ describe("handler POST (AI-653)", () => {
 
   // After resetModules the handler's runner module (and SyncLoadError class) is a fresh copy.
   let LoadError: typeof SyncLoadError = SyncLoadError;
+  let createdClients: [string, string][] = [];
+  beforeEach(() => {
+    createdClients = [];
+  });
 
-  async function mockedHandler(runSyncImpl: () => Promise<SyncRunResult[]>, userId = OWNER) {
+  async function mockedHandler(
+    runSyncImpl: () => Promise<SyncRunResult[]>,
+    userId = OWNER,
+    authFailure: { name: string; status: number } = { name: "AuthApiError", status: 403 },
+  ) {
     const { syncDeps } = setup();
     vi.resetModules();
-    vi.doMock("@supabase/supabase-js", () => ({
-      createClient: () => ({
-        auth: {
-          getUser: async (token: string) =>
-            token === TOKEN ? { data: { user: { id: userId } }, error: null } : { data: { user: null }, error: new Error("bad jwt") },
-        },
-      }),
+    const fakeClient = {
+      auth: {
+        getUser: async (token: string) =>
+          token === TOKEN
+            ? { data: { user: { id: userId } }, error: null }
+            : { data: { user: null }, error: Object.assign(new Error("bad jwt"), authFailure) },
+      },
+    };
+    vi.doMock("../src/sync/nodeDeps.js", () => ({
+      createNodeSyncDeps: () => syncDeps,
+      createServiceClient: (env: { SUPABASE_URL: string; SUPABASE_SERVICE_ROLE_KEY: string }) => {
+        createdClients.push([env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY]);
+        return fakeClient;
+      },
     }));
-    vi.doMock("../src/sync/nodeDeps.js", () => ({ createNodeSyncDeps: () => syncDeps }));
     vi.doMock("../src/sync/runner.js", async (orig) => ({
       ...(await orig<typeof import("../src/sync/runner.js")>()),
       runSync: runSyncImpl,
     }));
-    vi.doMock("../src/sync/recompute.js", () => ({ recomputeAll: async () => ({ activities: 3, days: 9 }) }));
+    vi.doMock("../src/sync/recompute.js", () => ({
+      recomputeAll: async () => ({ activities: 3, days: 9, done: true, nextOffset: null }),
+    }));
     const mod = await import("./sync.js");
     LoadError = (await import("../src/sync/runner.js")).SyncLoadError;
-    vi.doUnmock("@supabase/supabase-js");
     vi.doUnmock("../src/sync/nodeDeps.js");
     vi.doUnmock("../src/sync/runner.js");
     vi.doUnmock("../src/sync/recompute.js");
@@ -408,7 +534,37 @@ describe("handler POST (AI-653)", () => {
     const res = fakeRes();
     await h({ method: "POST", url: "/api/sync?recompute=all", headers: { authorization: `Bearer ${TOKEN}` } }, res);
     expect(res.statusCode).toBe(200);
-    expect(res.body).toEqual({ kind: "recompute", activities: 3, days: 9 });
+    expect(res.body).toEqual({ kind: "recompute", activities: 3, days: 9, done: true, nextOffset: null });
+    expect(createdClients).toEqual([[ENV.SUPABASE_URL, ENV.SUPABASE_SERVICE_ROLE_KEY]]);
+  });
+
+  it("answers 503 Auth service unavailable when getUser fails with a 5xx, logging the status only", async () => {
+    const h = await mockedHandler(async () => [RESULT], OWNER, { name: "AuthRetryableFetchError", status: 502 });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = fakeRes();
+    await h({ method: "POST", url: "/api/sync", headers: { authorization: "Bearer another-token" } }, res);
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toEqual({ error: "Auth service unavailable" });
+    expect(log.mock.calls).toEqual([["sync owner: auth service unavailable (status 502)"]]);
+    expect(JSON.stringify(log.mock.calls)).not.toContain("another-token");
+  });
+
+  it("answers 500 Sync is not configured when SYNC_OWNER_USER_ID is unset", async () => {
+    const h = await mockedHandler(async () => [RESULT]);
+    vi.stubEnv("SYNC_OWNER_USER_ID", "");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = fakeRes();
+    await h({ method: "POST", url: "/api/sync", headers: { authorization: `Bearer ${TOKEN}` } }, res);
+    expect(res.statusCode).toBe(500);
+    expect(res.body).toEqual({ error: "Sync is not configured" });
+  });
+
+  it("answers 400 Bad request URL instead of 500 for an unparseable URL", async () => {
+    const h = await mockedHandler(async () => [RESULT]);
+    const res = fakeRes();
+    await h({ method: "POST", url: "//", headers: { authorization: `Bearer ${TOKEN}` } }, res);
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toEqual({ error: "Bad request URL" });
   });
 
   it("answers 500 with the results on a SyncLoadError, logging the error and each failed source", async () => {
