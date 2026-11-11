@@ -79,14 +79,16 @@ WID=$(jq -r '.data[0].id // empty' "$OUT/workouts_ride.json" 2>/dev/null)
 [ -n "$WID" ] || { echo "no workouts found; stopping"; exit 1; }
 echo "  newest workout id=$WID"
 
-# 3. Newest workout detail (spec example joins) and performance graph every_n=60
+# 3. Newest workout detail and performance graph every_n=60. The spec's example joins
+#    "peloton,peloton.ride,..." now return 400 "Bad joins"; ride,ride.instructor,user work.
 step "workout" "$OUT/workout_$WID.json" -G "$BASE/api/workout/$WID" \
-  --data-urlencode "joins=peloton,peloton.ride,peloton.ride.instructor,user"
+  --data-urlencode "joins=ride,ride.instructor,user"
 step "performance_graph" "$OUT/perf_$WID.json" -G "$BASE/api/workout/$WID/performance_graph" -d every_n=60
 jq -r '"  metrics: \([.metrics[]?.slug]|join(",")) summaries: \([.summaries[]?.slug]|join(","))"' "$OUT/perf_$WID.json" 2>/dev/null
 
 # 4. Ride details: GET /api/ride/{rideId}/details
 RID=$(jq -r '.ride.id // .peloton.ride.id // empty' "$OUT/workout_$WID.json" 2>/dev/null)
+[ -n "$RID" ] || RID=$(jq -r '.data[0].ride.id // empty' "$OUT/workouts_ride.json" 2>/dev/null)
 if [ -n "$RID" ]; then
   step "ride_details" "$OUT/ride_$RID.json" "$BASE/api/ride/$RID/details"
   jq -r '"  top-level keys: \(keys|join(","))"' "$OUT/ride_$RID.json" 2>/dev/null
