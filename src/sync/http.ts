@@ -10,6 +10,18 @@ export interface RetryOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
+/**
+ * Thrown by a deadline-aware `sleep` when a wait (a Retry-After or a long backoff) would end past
+ * the run's deadline. Adapters must let it end the run, never treat it as a per-item failure, so
+ * the item stays unstored and is retried by the next run.
+ */
+export class SyncDeadlineError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SyncDeadlineError";
+  }
+}
+
 export const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 function retryable(status: number): boolean {

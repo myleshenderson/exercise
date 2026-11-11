@@ -35,7 +35,8 @@ export function loadItems(
   return items;
 }
 
-function addDays(date: string, days: number): string | null {
+/** `date` shifted by `days`; null when `date` is not a valid `YYYY-MM-DD`. */
+export function addDays(date: string, days: number): string | null {
   const n = dayNumber(date);
   return n === null ? null : dateFromDayNumber(n + days);
 }
