@@ -48,3 +48,5 @@ first full backfill is owner-run (Myles, from his machine, `npm run sync -- --so
 not an agent's job. The cron only keeps current, though the adapters backfill an incomplete
 source in either mode, so a cron run before the backfill ends chips at it 50 s a day.
 Added 2026-11-11 (AI-641).
+
+The strength-app tables from `0001_init.sql` grant nothing to `service_role` by default; any new service-role read of them (as the daily-load recompute's read of `sessions`) needs an explicit grant migration. Added 2026-11-11 (AI-664).
