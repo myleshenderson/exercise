@@ -7,7 +7,7 @@ history per exercise and a summary after each session. It also runs an MCP
 server with 25 tools, so an AI client such as Claude can read your training
 data and edit your plan.
 
-<!-- screenshot: home -->
+<img src="docs/images/home.png" alt="Home screen with today's planned workout" width="320">
 
 ## Features
 
@@ -23,6 +23,19 @@ data and edit your plan.
 - An MCP server for AI clients, with per-user bearer tokens.
 - Built with React 19, Vite 8, TypeScript, Tailwind CSS, React Router 7 and
   Vitest.
+
+### Screens
+
+Logging a session, the summary after it, managing the schedule, the list of
+logged workouts, and one exercise's history:
+
+<p>
+<img src="docs/images/session.png" alt="Session screen with logged and remaining exercises" width="180">
+<img src="docs/images/summary.png" alt="Summary screen after finishing a workout" width="180">
+<img src="docs/images/days.png" alt="Manage Schedule screen with day templates and their exercises" width="180">
+<img src="docs/images/workouts.png" alt="Logged Workouts screen listing past sessions" width="180">
+<img src="docs/images/history.png" alt="History screen with past sets for one exercise" width="180">
+</p>
 
 ## Run it in two minutes
 
@@ -61,7 +74,7 @@ claude mcp add --transport http exercise-mcp <endpoint> --header "Authorization:
 On Vercel the endpoint is `https://<your-domain>/api/mcp`. Custom connectors
 on claude.ai take the same `Authorization` header.
 
-<!-- screenshot: mcp -->
+<img src="docs/images/mcp.png" alt="MCP screen for creating a connector token" width="320">
 
 The 25 tools (the authoritative list is
 [`src/mcp/__fixtures__/tools-list.main.json`](src/mcp/__fixtures__/tools-list.main.json)):
@@ -112,7 +125,7 @@ npm run typecheck       # tsc for the app, api/ and starkeep/
 npm test                # vitest run
 npm run test:coverage   # vitest with v8 coverage; CI fails under 80% lines or 80% functions
 npm run build           # tsc -b && vite build
-npm run screenshots     # README screenshots with Playwright; one-time setup: npx playwright install chromium
+npm run screenshots     # the seven README screenshots with Playwright; one-time setup: npx playwright install chromium
 ```
 
 CI (`.github/workflows/ci.yml`) runs `npm run typecheck` and
