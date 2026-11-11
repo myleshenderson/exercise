@@ -795,6 +795,26 @@ export function createSupabaseDataLayer(): DataLayer {
     return data ? toExercise(data) : null;
   }
 
+  /**
+   * Session ids newest first (optionally only those before `beforeDate`), paged
+   * past the PostgREST row cap. id breaks performed_on/created_at ties so
+   * consecutive pages neither skip nor repeat a row.
+   */
+  function readSessionIdsNewestFirst(beforeDate?: string): Promise<string[]> {
+    return readPages(
+      (from, to) => {
+        let q = supabase.from("sessions").select("id");
+        if (beforeDate !== undefined) q = q.lt("performed_on", beforeDate);
+        return q
+          .order("performed_on", { ascending: false })
+          .order("created_at", { ascending: false })
+          .order("id")
+          .range(from, to);
+      },
+      (r) => r.id as string,
+    );
+  }
+
   async function loadSession(id: string): Promise<Session | null> {
     const { data: s } = await supabase.from("sessions").select("*").eq("id", id).maybeSingle();
     if (!s) return null;
@@ -925,17 +945,14 @@ export function createSupabaseDataLayer(): DataLayer {
       });
     },
     async getLastSetsForExercise(exerciseId, beforeDate) {
-      const { data: s } = await supabase
-        .from("sessions")
-        .select("id, performed_on")
-        .lt("performed_on", beforeDate)
-        .order("performed_on", { ascending: false })
-        .order("created_at", { ascending: false });
-      for (const sess of s ?? []) {
+      // A failed read yields no earlier sessions (and so no last sets), as before paging:
+      // the callers have no catch and must keep rendering.
+      const ids = await readSessionIdsNewestFirst(beforeDate).catch((): string[] => []);
+      for (const id of ids) {
         const { data: sets } = await supabase
           .from("session_sets")
           .select("*")
-          .eq("session_id", sess.id)
+          .eq("session_id", id)
           .eq("exercise_id", exerciseId)
           .order("set_number");
         if (sets && sets.length) {
@@ -981,11 +998,14 @@ export function createSupabaseDataLayer(): DataLayer {
     },
     logExercise: (sessionId, exerciseId, sets) => logExercise(supabase, sessionId, exerciseId, sets),
     async getExerciseHistory(exerciseId) {
-      const { data: setRows } = await supabase
-        .from("session_sets")
-        .select("session_id")
-        .eq("exercise_id", exerciseId);
-      const ids = [...new Set((setRows ?? []).map((r) => r.session_id))];
+      // The result is sorted below; ordering by id only makes the pages deterministic.
+      // A failed read yields an empty history, as before paging: the callers have no catch.
+      const sessionIds = await readPages(
+        (from, to) =>
+          supabase.from("session_sets").select("session_id").eq("exercise_id", exerciseId).order("id").range(from, to),
+        (r) => r.session_id as string,
+      ).catch((): string[] => []);
+      const ids = [...new Set(sessionIds)];
       const sessions: Session[] = [];
       for (const id of ids) {
         const sess = await loadSession(id);
@@ -994,14 +1014,12 @@ export function createSupabaseDataLayer(): DataLayer {
       return sessions.sort((a, b) => (a.performedOn < b.performedOn ? 1 : -1));
     },
     async listSessions() {
-      const { data: s } = await supabase
-        .from("sessions")
-        .select("id")
-        .order("performed_on", { ascending: false })
-        .order("created_at", { ascending: false });
+      // A failed read yields no sessions, as before paging: the callers have no catch.
+      // A row shifted between pages can be read twice, so ids are de-duplicated (first wins).
+      const ids = [...new Set(await readSessionIdsNewestFirst().catch((): string[] => []))];
       const sessions: Session[] = [];
-      for (const row of s ?? []) {
-        const sess = await loadSession(row.id);
+      for (const id of ids) {
+        const sess = await loadSession(id);
         if (sess) sessions.push(sess);
       }
       return sessions;

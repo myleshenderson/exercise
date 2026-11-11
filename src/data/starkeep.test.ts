@@ -504,6 +504,13 @@ describe("ride analytics (not declared on Starkeep yet)", () => {
     expect(fake.requests).toEqual([]);
   });
 
+  test("listExternalActivities enforces the DataLayer limit contract", async () => {
+    const { db, fake } = setup();
+    await expect(db.listExternalActivities({ limit: 1.5 })).rejects.toBeInstanceOf(RangeError);
+    await expect(db.listExternalActivities({ limit: 0 })).resolves.toEqual([]);
+    expect(fake.requests).toEqual([]);
+  });
+
   test("getAthleteSettings hands out a copy, not the shared defaults", async () => {
     const { db } = setup();
     const s = await db.getAthleteSettings();
