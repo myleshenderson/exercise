@@ -33,10 +33,24 @@ function StarkeepLogin() {
 function SupabaseLogin() {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
+  // Supabase refuses some requests (its hourly email rate limit, "Signups not
+  // allowed") with `{ error }` rather than a throw; a failed chunk load or a
+  // network failure throws. Either way the person stays on the form and sees why.
   async function send() {
-    await (await loadSupabase()).auth.signInWithOtp({ email });
-    setSent(true);
+    setSending(true);
+    setError(null);
+    try {
+      const { error } = await (await loadSupabase()).auth.signInWithOtp({ email });
+      if (error) setError(error.message);
+      else setSent(true);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSending(false);
+    }
   }
 
   return (
@@ -56,9 +70,18 @@ function SupabaseLogin() {
               className="mt-1 w-full rounded-lg border p-3"
             />
           </label>
-          <button onClick={send} className="w-full rounded-lg bg-black p-3 font-semibold text-white">
+          <button
+            onClick={send}
+            disabled={sending}
+            className="w-full rounded-lg bg-black p-3 font-semibold text-white disabled:opacity-50"
+          >
             Send magic link
           </button>
+          {error && (
+            <p role="alert" className="text-sm text-red-600">
+              Couldn't send the link: {error}
+            </p>
+          )}
         </>
       )}
     </div>
