@@ -19,14 +19,22 @@
  * returns for the scenario, written out by hand below (not computed by the
  * analysis functions under test).
  *
- * The seven ride tools (AI-654) run on the empty scenario: Starkeep has no ride
- * tables (decision 3), and the fake Supabase's ride tables are empty.
+ * The seven ride tools (AI-654) run on the ride fixtures
+ * (`src/analysis/rides/testFixtures.ts`), written to Starkeep through the
+ * Starkeep DataLayer (AI-825) and copied, in Supabase column form, from the
+ * resulting rows into the fake Supabase, so both backends hold the same ids.
  */
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import manifest from "../starkeep.manifest.json" with { type: "json" };
 import { createFakeTransport, type FakeTable, type FakeTransport } from "../src/data/starkeep/fakeTransport.js";
+import { withRideTables } from "../src/data/starkeep/rideTablesFake.js";
+import { externalActivityId, RIDE_TABLES as RT, toSyncStateRow } from "../src/data/starkeep/rideRows.js";
+import { createStarkeepDataLayer } from "../src/data/starkeep.js";
+import type {
+  ActivityStream, AthleteSettings, BodyWeight, DailyTrainingLoad, ExternalActivity, FtpHistoryEntry, SyncState,
+} from "../src/types.js";
 import { FakeDataPlane, fakeJwt, mcpHeaders, TEST_CREDS } from "./test-support.js";
 import type { Transport } from "./serverTransport.js";
 import { DEFAULT_ATHLETE_TIMEZONE, todayIn } from "../src/metrics/dates.js";
@@ -75,6 +83,25 @@ vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "service-key");
 
 const { createApp } = await import("./server.js");
 const { resetMcpAuthCaches } = await import("./mcp-auth.js");
+/**
+ * The ride fixtures. testFixtures.ts reaches src/data/mock.ts, whose
+ * extensionless imports tsconfig.starkeep.json (nodenext) cannot check, so the
+ * module is loaded through a variable specifier and typed here.
+ */
+const RIDE_FIXTURES_MODULE = "../src/analysis/rides/testFixtures.js";
+const { buildUuidRideFixtures } = (await import(/* @vite-ignore */ RIDE_FIXTURES_MODULE)) as {
+  buildUuidRideFixtures(now: Date): {
+    fixtures: {
+      activities: ExternalActivity[];
+      streams: ActivityStream[];
+      bodyWeights: BodyWeight[];
+      settings: AthleteSettings;
+      ftpHistory: FtpHistoryEntry[];
+      dailyLoad: DailyTrainingLoad[];
+      syncState: SyncState[];
+    };
+  };
+};
 const { asPgTimestamptz } = await import("./handlers.js");
 const { default: supabaseHandler } = await import("../api/mcp.js");
 
@@ -373,7 +400,8 @@ const sb = {
 
 // ---- fake data server (for Starkeep) -----------------------------------------
 
-const SCHEMA = manifest.infraRequirements.appSpecificSyncable.tables as FakeTable[];
+// withRideTables: AI-824 declares the ride tables in the manifest; until it lands, its declaration's copy.
+const SCHEMA = withRideTables(manifest.infraRequirements.appSpecificSyncable.tables as FakeTable[]);
 
 let plane: FakeDataPlane;
 /** App tables per `X-Starkeep-User-Token` (null: local mode). */
@@ -397,7 +425,7 @@ function seedStarkeep(s: FakeTransport): void {
   }
 }
 
-/** The ride tables api/mcp.ts's ride tools read; empty in this scenario (Starkeep has none). */
+/** The ride tables api/mcp.ts's ride tools read; empty unless a test seeds rides ({@link seedRides}). */
 const RIDE_TABLES = [
   "external_activities",
   "activity_streams",
@@ -408,10 +436,62 @@ const RIDE_TABLES = [
   "sync_state",
 ];
 
+/** The ride rows in Supabase column form that seedSupabase loads; set by seedRides. */
+let supabaseRides: Record<string, AnyRow[]> = {};
+
 function seedSupabase(): void {
   sb.tables = structuredClone(SCENARIO) as unknown as Record<string, AnyRow[]>;
-  for (const t of RIDE_TABLES) sb.tables[t] = [];
+  for (const t of RIDE_TABLES) sb.tables[t] = structuredClone(supabaseRides[t] ?? []);
   sb.ids = [...NEW_IDS];
+}
+
+/** The JSON-in-text columns per ride table (decision 2), jsonb / arrays on Supabase. */
+const RIDE_JSON_COLUMNS: Record<string, string[]> = {
+  external_activities: ["provider_payload", "power_curve", "best_efforts"],
+  activity_streams: ["values"],
+  body_weights: ["provider_payload"],
+  daily_training_load: ["tss_by_source"],
+  sync_state: ["cursor"],
+};
+
+/**
+ * Writes the ride fixtures (dated relative to now) to the local Starkeep store
+ * through the Starkeep DataLayer, then gives the fake Supabase the same rows
+ * with JSON text parsed back, so both backends answer from the same data and
+ * the same activity ids. sync_state has no DataLayer write (the sync owns
+ * it), so its rows go in through the shared row mapper.
+ */
+async function seedRides(): Promise<void> {
+  const { fixtures } = buildUuidRideFixtures(new Date());
+  const s = store(null);
+  const db = createStarkeepDataLayer(s.transport, { claimSettleMs: 0 });
+  const key = new Map(fixtures.activities.map((a) => [a.id, externalActivityId(a.source, a.sourceId)]));
+  await db.upsertExternalActivities(
+    fixtures.activities.map(({ id: _id, syncedAt: _syncedAt, ...a }) => ({
+      ...a,
+      pairedActivityId: a.pairedActivityId === null ? null : key.get(a.pairedActivityId)!,
+      providerPayload: { fixture: a.sourceId },
+    })),
+  );
+  const streams = new Map<string, typeof fixtures.streams>();
+  for (const st of fixtures.streams) streams.set(st.activityId, [...(streams.get(st.activityId) ?? []), st]);
+  for (const [id, list] of streams) await db.replaceActivityStreams(key.get(id)!, list.map(({ activityId: _a, ...st }) => st));
+  await db.upsertBodyWeights(fixtures.bodyWeights.map(({ id: _id, ...w }) => ({ ...w, providerPayload: { fixture: w.sourceId } })));
+  await db.saveAthleteSettings(fixtures.settings);
+  for (const { id: _id, ...e } of fixtures.ftpHistory) await db.addFtpHistoryEntry(e);
+  await db.upsertDailyTrainingLoad(fixtures.dailyLoad);
+  const now = new Date().toISOString();
+  s.tables[RT.syncState] = fixtures.syncState.map((st) => toSyncStateRow(st, { now }));
+
+  supabaseRides = {};
+  for (const t of RIDE_TABLES) {
+    supabaseRides[t] = s.tables[t]!.map((r) => {
+      const out: AnyRow = { ...r };
+      for (const c of RIDE_JSON_COLUMNS[t] ?? []) out[c] = r[c] === null ? null : JSON.parse(r[c] as string);
+      return out;
+    });
+  }
+  seedSupabase();
 }
 
 async function dataServerFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
@@ -531,6 +611,7 @@ beforeEach(() => {
   dataRequests = [];
   localToken = plane.seed().token;
   seedStarkeep(store(null));
+  supabaseRides = {};
   seedSupabase();
   vi.stubGlobal("fetch", dataServerFetch);
   app = createApp();
@@ -638,11 +719,12 @@ describe("read tools: same text as api/mcp.ts's RPCs", () => {
 
 // ---- exercises ----------------------------------------------------------------
 
-describe("ride analytics tools (AI-654): same text on the empty scenario", () => {
+describe("ride analytics tools (AI-654): same text over the ride fixtures", () => {
   // Pin the clock (Date only, at the real now so tokens stay valid) so both backends
-  // compute "today" from the same instant.
-  beforeEach(() => {
+  // compute "today" from the same instant; the fixtures are dated relative to it.
+  beforeEach(async () => {
     vi.useFakeTimers({ toFake: ["Date"], now: Date.now() });
+    await seedRides();
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -652,9 +734,28 @@ describe("ride analytics tools (AI-654): same text on the empty scenario", () =>
   const today = () => todayIn(DEFAULT_ATHLETE_TIMEZONE, Date.now());
   const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
 
+  it("the fixtures are on Starkeep as rows written by the DataLayer", () => {
+    const t = local();
+    expect(t.external_activities!.length).toBeGreaterThan(50);
+    expect(t.external_activities!.every((r) => r.id === `${r.source}:${r.source_id}`)).toBe(true);
+    expect(t.activity_streams!.length).toBe(8);
+    expect(t.body_weights!.length).toBeGreaterThan(100);
+    expect(t.athlete_settings).toEqual([expect.objectContaining({ id: "settings", manual_ftp_w: 250 })]);
+    expect(t.ftp_history!.length).toBe(3);
+    expect(t.daily_training_load!.length).toBeGreaterThan(100);
+    expect(t.sync_state!.map((r) => r.id).sort()).toEqual(["garmin_activities", "garmin_weight", "peloton"]);
+  });
+
   it("list_activities", async () => {
     const r = await parity("list_activities", { source: "peloton", limit: 5 });
-    expect(text(r)).toBe(json({ activities: [] }));
+    const { activities } = JSON.parse(text(r)) as { activities: { id: string }[] };
+    expect(activities).toHaveLength(5);
+    expect(activities.every((a) => a.id.startsWith("peloton:"))).toBe(true);
+  });
+
+  it("list_activities over a date range", async () => {
+    const r = await parity("list_activities", { start_date: day(-30), end_date: day(-7) });
+    expect(JSON.parse(text(r)).activities.length).toBeGreaterThan(0);
   });
 
   it("get_activity: unknown id is 'Activity not found' on both", async () => {
@@ -669,13 +770,20 @@ describe("ride analytics tools (AI-654): same text on the empty scenario", () =>
     expect(text(r)).toBe('get_activity failed: expected a UUID for activity_id, got "ride-outdoor-1".');
   });
 
+  it("get_activity: a Starkeep activity id is refused by the UUID check (AI-835 lifts it)", async () => {
+    const id = local().external_activities![0]!.id as string;
+    const r = await parity("get_activity", { activity_id: id });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toBe(`get_activity failed: expected a UUID for activity_id, got "${id}".`);
+  });
+
   it("activity_stats", async () => {
     const r = await parity("activity_stats");
     const s = JSON.parse(text(r));
     expect(s.as_of).toBe(today());
-    expect(s.all_time).toMatchObject({ from: null, count: 0, distance_m: 0 });
+    expect(s.all_time.count).toBeGreaterThan(0);
     expect(s.best_efforts).toHaveLength(15);
-    expect(s.power_bests.map((p: { watts: unknown }) => p.watts)).toEqual([null, null, null, null, null]);
+    expect(s.power_bests.some((p: { watts: unknown }) => p.watts !== null)).toBe(true);
   });
 
   it("activity_stats: between 00:00Z and New York midnight as_of is the New York date (AI-670)", async () => {
@@ -686,24 +794,26 @@ describe("ride analytics tools (AI-654): same text on the empty scenario", () =>
 
   it("training_load", async () => {
     const r = await parity("training_load", { days: 30 });
-    expect(text(r)).toBe(json({ days: [], today: null, ramp_rate: null, week_start: "monday", weekly_tss: [] }));
+    const t = JSON.parse(text(r));
+    expect(t.days.length).toBeGreaterThan(0);
+    expect(t.week_start).toBe("monday");
   });
 
   it("power_curve", async () => {
     const r = await parity("power_curve", { window_days: 90 });
-    expect(text(r)).toBe(
-      json({ window_days: 90, points: [], eftp_w: null, ftp_w: null, ftp_source: null, weight_kg_7d: null, weight_lb_7d: null }),
-    );
+    const p = JSON.parse(text(r));
+    expect(p.points.length).toBeGreaterThan(0);
+    expect(p.ftp_w).toBe(250);
   });
 
   it("weight_history", async () => {
     const r = await parity("weight_history");
-    expect(JSON.parse(text(r))).toMatchObject({ weigh_ins: [], avg_7d_kg: null, w_per_kg: null, w_per_kg_band: null });
+    expect(JSON.parse(text(r)).weigh_ins.length).toBeGreaterThan(0);
   });
 
   it("sync_status", async () => {
     const r = await parity("sync_status");
-    expect(text(r)).toBe(json({ sources: [] }));
+    expect(JSON.parse(text(r)).sources.map((x: { source: string }) => x.source)).toEqual(["garmin_activities", "garmin_weight", "peloton"]);
   });
 
   it("an input error reads the same on both", async () => {
