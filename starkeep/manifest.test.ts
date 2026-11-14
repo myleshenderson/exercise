@@ -1,8 +1,63 @@
 // @vitest-environment node
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { validateManifest } from "@starkeep/admin-manifest";
 import { readManifest } from "./manifest-file.js";
 import { CLIENT_ROUTES, IMMUTABLE_PREFIX } from "./client-routes.js";
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+const TABLE_NAMES = [
+  // Strength (Supabase 0001 onward).
+  "programs",
+  "exercises",
+  "workout_days",
+  "workout_day_exercises",
+  "workout_day_exercise_scheme_history",
+  "sessions",
+  "session_sets",
+  // Ride analytics (supabase/migrations/20261111131256_ride_analytics.sql).
+  "external_activities",
+  "activity_streams",
+  "body_weights",
+  "athlete_settings",
+  "ftp_history",
+  "daily_training_load",
+  "sync_state",
+  "provider_credentials",
+  // Starkeep-only.
+  "mcp_tokens",
+  "app_meta",
+];
+
+/**
+ * The ride tables' deterministic ids (AI-822 decision 1). Starkeep keys every
+ * row on `id` and its insert is a last-writer-wins upsert, so a re-synced
+ * provider row lands on the same id instead of duplicating. `columns` are the
+ * declared columns each id is built from.
+ */
+const RIDE_ID_SCHEME: Record<string, { scheme: string; columns: string[] }> = {
+  external_activities: { scheme: "<source>:<source_id>", columns: ["source", "source_id"] },
+  body_weights: { scheme: "<source>:<source_id>", columns: ["source", "source_id"] },
+  activity_streams: { scheme: "<activity_id>:<channel>", columns: ["activity_id", "channel"] },
+  ftp_history: { scheme: "<effective_from ISO>|<source>", columns: ["effective_from", "source"] },
+  daily_training_load: { scheme: "<date YYYY-MM-DD>", columns: ["date"] },
+  sync_state: { scheme: "<source>", columns: ["source"] },
+  athlete_settings: { scheme: '"settings"', columns: [] },
+  provider_credentials: { scheme: "<provider>", columns: ["provider"] },
+};
+
+/**
+ * The manifest spelling of a react-router path: everything from the first
+ * `:param` segment on becomes `/*`, e.g. `/session/:id/summary` → `/session/*`.
+ */
+function toManifestRoute(path: string): string {
+  const segments = path.split("/");
+  const firstParam = segments.findIndex((s) => s.startsWith(":"));
+  return firstParam === -1 ? path : `${segments.slice(0, firstParam).join("/")}/*`;
+}
 
 describe("starkeep.manifest.json", () => {
   const result = validateManifest(readManifest());
@@ -21,12 +76,19 @@ describe("starkeep.manifest.json", () => {
     expect(m.infraRequirements.publicSharing).toBe(false);
   });
 
+  it("declares exactly the 17 tables", () => {
+    const tableNames = result.manifest!.infraRequirements.appSpecificSyncable.tables.map((t) => t.name);
+    expect([...tableNames].sort()).toEqual([...TABLE_NAMES].sort());
+  });
+
   it("keys every table on a text `id` and declares no auth-bound or reserved columns", () => {
     for (const table of result.manifest!.infraRequirements.appSpecificSyncable.tables) {
       const pk = table.columns.filter((c) => c.primaryKey);
-      expect(pk.map((c) => [c.name, c.type]), table.name).toEqual([["id", "text"]]);
+      expect(pk.map((c) => [c.name, c.type, c.notNull]), table.name).toEqual([["id", "text", true]]);
       const names = table.columns.map((c) => c.name);
       expect(names, table.name).not.toContain("user_id");
+      expect(names, table.name).not.toContain("updated_at");
+      expect(names, table.name).not.toContain("deleted_at");
     }
     const tableNames = result.manifest!.infraRequirements.appSpecificSyncable.tables.map((t) => t.name);
     expect(tableNames).not.toContain("mcp_sessions");
@@ -88,5 +150,57 @@ describe("starkeep.manifest.json", () => {
   it("serves exactly the SPA client routes and the immutable prefix from disk", () => {
     const shell = result.manifest!.infraRequirements.compute.handlers.find((h) => h.name === "static")!;
     expect([...shell.staticAssetPaths].sort()).toEqual([...CLIENT_ROUTES, IMMUTABLE_PREFIX].sort());
+    for (const route of [...CLIENT_ROUTES, IMMUTABLE_PREFIX]) {
+      expect(shell.publicPaths, route).toContain(route);
+    }
+  });
+
+  it("lists every <Route path> in src/App.tsx as a client route", () => {
+    const app = readFileSync(join(REPO_ROOT, "src", "App.tsx"), "utf8");
+    // Every `<Route ...>` tag, wherever `path` sits among its attributes.
+    const tags = [...app.matchAll(/<Route\b[^>]*>/g)].map((m) => m[0]);
+    const paths = tags.map((tag) => /\spath="([^"]+)"/.exec(tag)?.[1]);
+    // A Route without a literal path (`path={...}`, an index or layout route)
+    // would escape the check below: fail instead, so the test gets taught.
+    expect(paths.filter((p) => p === undefined), "<Route> without a literal path").toEqual([]);
+    expect(paths.length).toBeGreaterThan(0);
+    for (const path of paths) {
+      expect(CLIENT_ROUTES as readonly string[], path).toContain(toManifestRoute(path!));
+    }
+  });
+
+  it("declares the ride and strength indexes", () => {
+    const tables = result.manifest!.infraRequirements.appSpecificSyncable.tables;
+    const indexes = Object.fromEntries(tables.map((t) => [t.name, t.indexes.map((i) => i.columns)]));
+    expect(indexes).toMatchObject({
+      external_activities: [["started_at"], ["source", "started_at"], ["environment", "started_at"]],
+      activity_streams: [["activity_id"]],
+      body_weights: [["measured_at"]],
+      ftp_history: [["effective_from"]],
+      daily_training_load: [["date"]],
+      workout_days: [["program_id"]],
+      workout_day_exercises: [["workout_day_id"]],
+      workout_day_exercise_scheme_history: [["workout_day_id", "exercise_id"]],
+      sessions: [["performed_on"], ["workout_day_id"]],
+      session_sets: [["session_id"], ["exercise_id"]],
+    });
+  });
+
+  it("documents the ride id scheme in starkeep/README.md, built from declared columns", () => {
+    // A literal `|` is escaped as `\|` inside a Markdown table cell.
+    const readme = readFileSync(join(REPO_ROOT, "starkeep", "README.md"), "utf8").replaceAll("\\|", "|");
+    const tables = result.manifest!.infraRequirements.appSpecificSyncable.tables;
+    for (const [name, { scheme, columns }] of Object.entries(RIDE_ID_SCHEME)) {
+      expect(readme, name).toContain(`\`${name}.id\` = \`${scheme}\``);
+      const declared = tables.find((t) => t.name === name)!.columns.map((c) => c.name);
+      for (const col of columns) expect(declared, `${name}.${col}`).toContain(col);
+    }
+  });
+
+  it("keeps activity_streams' column named `values`, as a JSON-in-text array", () => {
+    const table = result.manifest!.infraRequirements.appSpecificSyncable.tables.find(
+      (t) => t.name === "activity_streams",
+    )!;
+    expect(table.columns.find((c) => c.name === "values")).toMatchObject({ type: "text", notNull: true });
   });
 });

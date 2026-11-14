@@ -46,6 +46,9 @@
             { "name": "program_position", "type": "integer" },
             { "name": "created_at", "type": "timestamp", "notNull": true },
             { "name": "archived_at", "type": "timestamp" }
+          ],
+          "indexes": [
+            { "columns": ["program_id"] }
           ]
         },
         {
@@ -56,6 +59,9 @@
             { "name": "exercise_id", "type": "text", "notNull": true },
             { "name": "position", "type": "integer", "notNull": true },
             { "name": "target_sets", "type": "text" }
+          ],
+          "indexes": [
+            { "columns": ["workout_day_id"] }
           ]
         },
         {
@@ -66,6 +72,9 @@
             { "name": "exercise_id", "type": "text", "notNull": true },
             { "name": "target_sets", "type": "text" },
             { "name": "recorded_at", "type": "timestamp", "notNull": true }
+          ],
+          "indexes": [
+            { "columns": ["workout_day_id", "exercise_id"] }
           ]
         },
         {
@@ -75,6 +84,10 @@
             { "name": "workout_day_id", "type": "text" },
             { "name": "performed_on", "type": "text", "notNull": true },
             { "name": "created_at", "type": "timestamp", "notNull": true }
+          ],
+          "indexes": [
+            { "columns": ["performed_on"] },
+            { "columns": ["workout_day_id"] }
           ]
         },
         {
@@ -86,6 +99,167 @@
             { "name": "set_number", "type": "integer", "notNull": true },
             { "name": "weight", "type": "real", "notNull": true },
             { "name": "reps", "type": "integer", "notNull": true }
+          ],
+          "indexes": [
+            { "columns": ["session_id"] },
+            { "columns": ["exercise_id"] }
+          ]
+        },
+        {
+          "name": "external_activities",
+          "columns": [
+            { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+            { "name": "source", "type": "text", "notNull": true },
+            { "name": "source_id", "type": "text", "notNull": true },
+            { "name": "started_at", "type": "timestamp", "notNull": true },
+            { "name": "timezone", "type": "text" },
+            { "name": "sport", "type": "text", "notNull": true },
+            { "name": "sub_type", "type": "text" },
+            { "name": "environment", "type": "text", "notNull": true },
+            { "name": "title", "type": "text" },
+            { "name": "elapsed_s", "type": "real" },
+            { "name": "moving_s", "type": "real" },
+            { "name": "distance_m", "type": "real" },
+            { "name": "elevation_gain_m", "type": "real" },
+            { "name": "avg_speed_mps", "type": "real" },
+            { "name": "max_speed_mps", "type": "real" },
+            { "name": "avg_power_w", "type": "real" },
+            { "name": "max_power_w", "type": "real" },
+            { "name": "normalized_power_w", "type": "real" },
+            { "name": "intensity_factor", "type": "real" },
+            { "name": "tss", "type": "real" },
+            { "name": "work_kj", "type": "real" },
+            { "name": "calories", "type": "real" },
+            { "name": "avg_hr_bpm", "type": "real" },
+            { "name": "max_hr_bpm", "type": "real" },
+            { "name": "avg_cadence_rpm", "type": "real" },
+            { "name": "biggest_climb_m", "type": "real" },
+            { "name": "tss_source", "type": "text" },
+            { "name": "ftp_used_w", "type": "integer" },
+            { "name": "ftp_source", "type": "text" },
+            { "name": "has_power", "type": "boolean", "notNull": true },
+            { "name": "has_hr", "type": "boolean", "notNull": true },
+            { "name": "power_curve", "type": "text" },
+            { "name": "best_efforts", "type": "text" },
+            { "name": "paired_activity_id", "type": "text" },
+            { "name": "provider_payload", "type": "text", "notNull": true },
+            { "name": "synced_at", "type": "timestamp", "notNull": true },
+            { "name": "created_at", "type": "timestamp", "notNull": true }
+          ],
+          "indexes": [
+            { "columns": ["started_at"] },
+            { "columns": ["source", "started_at"] },
+            { "columns": ["environment", "started_at"] }
+          ]
+        },
+        {
+          "name": "activity_streams",
+          "columns": [
+            { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+            { "name": "activity_id", "type": "text", "notNull": true },
+            { "name": "channel", "type": "text", "notNull": true },
+            { "name": "start_offset_s", "type": "integer", "notNull": true },
+            { "name": "values", "type": "text", "notNull": true },
+            { "name": "created_at", "type": "timestamp", "notNull": true }
+          ],
+          "indexes": [
+            { "columns": ["activity_id"] }
+          ]
+        },
+        {
+          "name": "body_weights",
+          "columns": [
+            { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+            { "name": "source", "type": "text", "notNull": true },
+            { "name": "source_id", "type": "text", "notNull": true },
+            { "name": "measured_at", "type": "timestamp", "notNull": true },
+            { "name": "weight_kg", "type": "real", "notNull": true },
+            { "name": "bmi", "type": "real" },
+            { "name": "body_fat_pct", "type": "real" },
+            { "name": "body_water_pct", "type": "real" },
+            { "name": "muscle_mass_kg", "type": "real" },
+            { "name": "bone_mass_kg", "type": "real" },
+            { "name": "provider_payload", "type": "text", "notNull": true },
+            { "name": "created_at", "type": "timestamp", "notNull": true }
+          ],
+          "indexes": [
+            { "columns": ["measured_at"] }
+          ]
+        },
+        {
+          "name": "athlete_settings",
+          "columns": [
+            { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+            { "name": "manual_ftp_w", "type": "integer" },
+            { "name": "lthr_bpm", "type": "integer" },
+            { "name": "max_hr_bpm", "type": "integer" },
+            { "name": "resting_hr_bpm", "type": "integer" },
+            { "name": "strength_session_tss", "type": "real", "notNull": true },
+            { "name": "no_power_tss_per_hour", "type": "real", "notNull": true },
+            { "name": "units", "type": "text", "notNull": true },
+            { "name": "week_start", "type": "text", "notNull": true },
+            { "name": "created_at", "type": "timestamp", "notNull": true }
+          ]
+        },
+        {
+          "name": "ftp_history",
+          "columns": [
+            { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+            { "name": "effective_from", "type": "timestamp", "notNull": true },
+            { "name": "ftp_w", "type": "integer", "notNull": true },
+            { "name": "source", "type": "text", "notNull": true },
+            { "name": "source_ref", "type": "text" },
+            { "name": "created_at", "type": "timestamp", "notNull": true }
+          ],
+          "indexes": [
+            { "columns": ["effective_from"] }
+          ]
+        },
+        {
+          "name": "daily_training_load",
+          "columns": [
+            { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+            { "name": "date", "type": "text", "notNull": true },
+            { "name": "tss_total", "type": "real", "notNull": true },
+            { "name": "tss_by_source", "type": "text", "notNull": true },
+            { "name": "ctl", "type": "real", "notNull": true },
+            { "name": "atl", "type": "real", "notNull": true },
+            { "name": "tsb", "type": "real", "notNull": true },
+            { "name": "created_at", "type": "timestamp", "notNull": true }
+          ],
+          "indexes": [
+            { "columns": ["date"] }
+          ]
+        },
+        {
+          "name": "sync_state",
+          "columns": [
+            { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+            { "name": "source", "type": "text", "notNull": true },
+            { "name": "cursor", "type": "text" },
+            { "name": "last_run_at", "type": "timestamp" },
+            { "name": "last_success_at", "type": "timestamp" },
+            { "name": "items_fetched", "type": "integer", "notNull": true },
+            { "name": "items_upserted", "type": "integer", "notNull": true },
+            { "name": "last_error", "type": "text" },
+            { "name": "backfill_complete", "type": "boolean", "notNull": true },
+            { "name": "auth_status", "type": "text", "notNull": true },
+            { "name": "created_at", "type": "timestamp", "notNull": true }
+          ]
+        },
+        {
+          "name": "provider_credentials",
+          "columns": [
+            { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+            { "name": "provider", "type": "text", "notNull": true },
+            { "name": "ciphertext", "type": "text", "notNull": true },
+            { "name": "iv", "type": "text", "notNull": true },
+            { "name": "auth_tag", "type": "text", "notNull": true },
+            { "name": "key_id", "type": "text", "notNull": true },
+            { "name": "access_expires_at", "type": "timestamp" },
+            { "name": "rotated_at", "type": "timestamp" },
+            { "name": "revoked_at", "type": "timestamp" },
+            { "name": "created_at", "type": "timestamp", "notNull": true }
           ]
         },
         {
@@ -130,6 +304,13 @@
             "/mcp-login",
             "/session/*",
             "/history/*",
+            "/activities",
+            "/activities/*",
+            "/stats",
+            "/training",
+            "/power",
+            "/weight",
+            "/settings",
             "/_immutable/*",
             "/starkeep-runtime-config",
             "/api/session/*"
@@ -142,6 +323,13 @@
             "/mcp-login",
             "/session/*",
             "/history/*",
+            "/activities",
+            "/activities/*",
+            "/stats",
+            "/training",
+            "/power",
+            "/weight",
+            "/settings",
             "/_immutable/*"
           ],
           "bundleAssetsDir": "assets",
