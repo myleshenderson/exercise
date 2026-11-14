@@ -30,7 +30,7 @@ tools pinned in `src/mcp/__fixtures__/tools-list.main.json`.
 | `starkeep/mcpTokens.ts` | The `mcp_tokens` row calls (find, list, insert, delete, touch). |
 | `starkeep/serve.ts` | Local entry (`localRun`): Node server on loopback, Hono for server paths, `dist/` for the rest. |
 | `starkeep/handler.ts` | Cloud Lambda entry: `createWebAppHandler` + `honoUpstream`. |
-| `starkeep/client-routes.ts` | The SPA's client routes, used as cloud `shellPaths`. Includes `/sign-in`, where the cloud's CloudFront function sends a signed-out browser; it must stay public and served (see `docs/agents/project-memory.md`). |
+| `starkeep/client-routes.ts` | The SPA's client routes, used as cloud `shellPaths`; `starkeep/manifest.test.ts` fails if a `<Route path>` in `src/App.tsx` is not covered. Includes `/sign-in`, where the cloud's CloudFront function sends a signed-out browser; it must stay public and served (see `docs/agents/project-memory.md`). |
 | `starkeep/build-bundle.ts` | `npm run bundle` / `pnpm bundle`: writes `dist.zip`. |
 | `starkeep/spa-build.ts` | The Starkeep `vite build` both of the above use: forces `VITE_DATA_BACKEND=starkeep`, checks the main chunk, and decides when the local `dist/` needs a rebuild. |
 | `starkeep/validate-manifest.ts` | `npm run starkeep:validate`. |
@@ -123,7 +123,7 @@ The script runs `vite build` with `VITE_DATA_BACKEND=starkeep` into a staging
    inside a registered folder for a `starkeep.manifest.json`.
 6. On the **Exercise** card, click **Install**. The dialog says "Exercise
    asks for access to these files. No file-type grants requested." and lists
-   no tables: the app's nine app-private tables are not shown there
+   no tables: the app's seventeen app-private tables are not shown there
    (starkeep-core #142 tracks the dialog). Click **Approve & Install**.
    This writes the app credential to `~/.starkeep/app-creds/exercise.json`.
 7. Click **Start Exercise**, then **Open Exercise ↗**. Open the MCP screen
@@ -324,13 +324,13 @@ differ anyway.
 
 ## Table mapping
 
-Every application table from `supabase/migrations/` is declared under
+Every application table from `supabase/migrations/` except the dropped ones below is declared under
 `infraRequirements.appSpecificSyncable.tables`, plus the Starkeep-only
-`mcp_tokens` and `app_meta`. Locally each one becomes `exercise_syncable_<name>`. Table and
+`mcp_tokens` and `app_meta`: seventeen in all, pinned by
+`starkeep/manifest.test.ts`. Locally each one becomes `exercise_syncable_<name>`. Table and
 column names are unchanged, except that soft delete's `deleted_at` becomes
-`archived_at` (below).
-
-**Not declared yet:** the ride analytics tables (AI-631); on Starkeep their DataLayer reads return empty or default results and writes reject.
+`archived_at` (below), and the ride tables that Supabase keys on `user_id`
+or a composite key gain a text `id` (see [Ride analytics tables](#ride-analytics-tables)).
 
 **Dropped:**
 
@@ -340,8 +340,12 @@ column names are unchanged, except that soft delete's `deleted_at` becomes
   below).
 - Table `seed_claims`: Supabase per-user seeding bookkeeping. It references
   `auth.users`.
-- RLS policies, grants, RPC functions, foreign keys, unique and partial
-  indexes, and column defaults. The manifest has none of these, so the
+- Table `sync_lock` and its `acquire_sync_lock` / `renew_sync_lock`
+  functions: the Vercel sync's lease row (AI-659). The Starkeep sync takes
+  its lease in `app_meta` instead (AI-822 decision 5, AI-829).
+- RLS policies, grants, RPC functions, foreign keys, check constraints,
+  unique and partial indexes, column defaults, and the `moddatetime`
+  `updated_at` triggers. The manifest has none of these, so the
   DataLayer must enforce or compute them itself.
 
 **Starkeep-only:**
@@ -376,7 +380,9 @@ you.
 Starkeep sync runtime and must not be declared. The app never writes
 `deleted_at`: it belongs to the sync runtime, which does not guarantee that
 rows it marks stay readable, so it cannot carry soft delete.
-No Supabase table has its own `updated_at`.
+None of the strength tables has its own `updated_at`. Every ride table does
+in Supabase (moved by a `moddatetime` trigger); here the sync runtime's
+`updated_at` takes its place and the app never writes it.
 
 **Type substitutions** (allowed types are exactly `integer, bigint, real,
 text, blob, timestamp, boolean`):
@@ -386,10 +392,12 @@ text, blob, timestamp, boolean`):
 | `uuid` (primary key `id`) | `text`, `primaryKey: true`, `notNull: true` | The server never assigns ids. The app generates them with `crypto.randomUUID()`. Supabase's `default gen_random_uuid()` is gone. |
 | `uuid` (foreign key) | `text` | No FK enforcement and no cascades. `on delete cascade` / `set null` become DataLayer logic. |
 | `timestamptz` | `timestamp` | ISO-8601 UTC with millisecond precision (`toISOString()`). `default now()` is gone, so the app must set it. |
-| `date` (`sessions.performed_on`) | `text` | `YYYY-MM-DD`. `timestamp` would reject a bare date. |
-| `numeric` (`session_sets.weight`) | `real` | Double precision. Fine for gym weights. |
+| `date` (`sessions.performed_on`, `daily_training_load.date`) | `text` | `YYYY-MM-DD`. `timestamp` would reject a bare date. |
+| `numeric` (`session_sets.weight`, `athlete_settings.*_tss*`), `double precision` | `real` | Double precision. Fine for gym weights and ride metrics. |
 | `int` | `integer` | |
-| `jsonb` (`target_sets`) | `text` | A JSON string (`JSON.stringify` of the `[{weight, reps}]` array), or null. |
+| `boolean` | `boolean` | |
+| `jsonb` (`target_sets`, and the ride columns below) | `text` | A JSON string (`JSON.stringify` of the value; for `target_sets` the `[{weight, reps}]` array), or null. |
+| `double precision[]` (`activity_streams.values`) | `text` | A JSON array string; a missing second is a JSON `null` element. |
 | `text` | `text` | |
 
 **Columns** (`nn` = `notNull: true`; PK = `primaryKey: true`):
@@ -448,7 +456,200 @@ Supabase rules the DataLayer has to reproduce by hand: the partial unique
 index `workout_days (program_id, program_position) where program_id is not
 null and deleted_at is null` (here: `archived_at is null`); the append-only rule on
 `workout_day_exercise_scheme_history`, which is insert only; and the RPCs
-(`get_day_templates`, `get_workout_history`, `adherence_for_day`, `progression_for_exercise`, `scheme_history_for_day_exercise`, `sets_for_exercise`, `training_gaps` and `weekly_volume`). The manifest
-declares no `indexes` yet. Add one per filter the DataLayer actually issues
-(authoring guide §6), e.g. `workout_day_exercises(workout_day_id)` and
-`session_sets(session_id)`.
+(`get_day_templates`, `get_workout_history`, `adherence_for_day`, `progression_for_exercise`, `scheme_history_for_day_exercise`, `sets_for_exercise`, `training_gaps` and `weekly_volume`). Indexes are listed under
+[Indexes](#indexes).
+
+### Ride analytics tables
+
+The eight tables of `supabase/migrations/20261111131256_ride_analytics.sql`
+(epic AI-822; declared by AI-824). Until AI-825 replaces
+`rideAnalyticsStub` in `src/data/starkeep.ts`, the Starkeep DataLayer still
+answers ride reads with empty or default results and rejects ride writes;
+the tables exist but nothing reads or writes them yet. The substitutions
+above apply, plus:
+
+- No `user_id` (as everywhere). `athlete_settings`, `daily_training_load` and
+  `sync_state` have no Supabase `id`: their primary key was `user_id` or
+  `(user_id, …)`. Every table here gets `id text primaryKey notNull`.
+- No `updated_at`: reserved by the sync runtime (above).
+- `activity_streams` keeps its column named `values` (quoted in Postgres
+  because `VALUES` is reserved; the data server quotes identifiers itself).
+- `check (... in (...))` constraints on `source`, `environment`, `channel`,
+  `tss_source`, `units`, `week_start`, `auth_status` and `provider`, and
+  `ftp_w > 0`, are gone: the DataLayer and the ingesters validate them.
+- `paired_activity_id` (`on delete set null`) and `activity_streams.activity_id`
+  (`on delete cascade`) are plain text; deleting an activity must clear or
+  delete them in the DataLayer.
+
+**Id scheme** (AI-822 decision 1). Ids are deterministic, never random, so a
+re-sync of the same provider row is an upsert onto the same id (Starkeep's
+insert is last-writer-wins), standing in for Supabase's unique constraints.
+Pinned by `starkeep/manifest.test.ts`.
+
+| Table | Id | Replaces Supabase |
+| --- | --- | --- |
+| `external_activities` | `external_activities.id` = `<source>:<source_id>` | `unique (user_id, source, source_id)` |
+| `body_weights` | `body_weights.id` = `<source>:<source_id>` | `unique (user_id, source, source_id)` |
+| `activity_streams` | `activity_streams.id` = `<activity_id>:<channel>` | `unique (activity_id, channel)` |
+| `ftp_history` | `ftp_history.id` = `<effective_from ISO>\|<source>` | `unique (user_id, effective_from, source)` |
+| `daily_training_load` | `daily_training_load.id` = `<date YYYY-MM-DD>` | `primary key (user_id, date)` |
+| `sync_state` | `sync_state.id` = `<source>` | `primary key (user_id, source)` |
+| `athlete_settings` | `athlete_settings.id` = `"settings"` | `primary key (user_id)`; one row per install |
+| `provider_credentials` | `provider_credentials.id` = `<provider>` | `unique (user_id, provider)` |
+
+`<effective_from ISO>` is `toISOString()` (UTC, milliseconds), so the same
+instant always spells the same id. `<activity_id>` is the parent's own id, so
+a stream id reads e.g. `garmin:123456:power`.
+
+**JSON-in-text columns** (a `JSON.stringify` string; parse on read):
+
+| Column | Holds | Nullable |
+| --- | --- | --- |
+| `external_activities.power_curve` | power curve (jsonb) | yes |
+| `external_activities.best_efforts` | best efforts (jsonb) | yes |
+| `external_activities.provider_payload` | the provider's summary object, unmodified | no |
+| `activity_streams.values` | 1 Hz samples (`double precision[]`), `null` for a missing second | no |
+| `body_weights.provider_payload` | the provider's weigh-in object, unmodified | no |
+| `daily_training_load.tss_by_source` | `{ garmin, peloton, strava_export, strength }` TSS | no (`"{}"` when empty) |
+| `sync_state.cursor` | the feed's sync cursor | yes |
+
+**`provider_credentials` is readable by the user.** Like every declared table
+it is reachable through `/api/local-data/app-data/db/provider_credentials`,
+so the signed-in user (or anything on loopback locally) can read its rows.
+Supabase's "RLS on, no policies, service role only" protection has no
+counterpart here. What makes that acceptable: the rows hold only ciphertext
+(`ciphertext`, `iv`, `auth_tag`, base64, AES-256-GCM) under a key derived
+from the app's HMAC secret, which lives on the server
+(`~/.starkeep/app-creds/exercise.json`, or SSM in the cloud) and which the
+browser never has. Without it a row decrypts to nothing.
+
+**Ride columns** (`nn` = `notNull: true`; PK = `primaryKey: true`):
+
+| Table | Column | Supabase type | Manifest type |
+| --- | --- | --- | --- |
+| `external_activities` | `id` | uuid PK | text PK nn (`<source>:<source_id>`) |
+| | `source` | text not null, check garmin/peloton/strava_export | text nn |
+| | `source_id` | text not null | text nn |
+| | `started_at` | timestamptz not null | timestamp nn |
+| | `timezone` | text | text |
+| | `sport` | text not null | text nn |
+| | `sub_type` | text | text |
+| | `environment` | text not null, check indoor/outdoor | text nn |
+| | `title` | text | text |
+| | `elapsed_s` | double precision | real |
+| | `moving_s` | double precision | real |
+| | `distance_m` | double precision | real |
+| | `elevation_gain_m` | double precision | real |
+| | `avg_speed_mps` | double precision | real |
+| | `max_speed_mps` | double precision | real |
+| | `avg_power_w` | double precision | real |
+| | `max_power_w` | double precision | real |
+| | `normalized_power_w` | double precision | real |
+| | `intensity_factor` | double precision | real |
+| | `tss` | double precision | real |
+| | `work_kj` | double precision | real |
+| | `calories` | double precision | real |
+| | `avg_hr_bpm` | double precision | real |
+| | `max_hr_bpm` | double precision | real |
+| | `avg_cadence_rpm` | double precision | real |
+| | `biggest_climb_m` | double precision | real |
+| | `tss_source` | text, check power/estimated_flat | text |
+| | `ftp_used_w` | integer | integer |
+| | `ftp_source` | text | text |
+| | `has_power` | boolean not null default false | boolean nn |
+| | `has_hr` | boolean not null default false | boolean nn |
+| | `power_curve` | jsonb | text (JSON) |
+| | `best_efforts` | jsonb | text (JSON) |
+| | `paired_activity_id` | uuid → external_activities, on delete set null | text |
+| | `provider_payload` | jsonb not null | text nn (JSON) |
+| | `synced_at` | timestamptz not null default now() | timestamp nn |
+| | `created_at` | timestamptz not null default now() | timestamp nn |
+| `activity_streams` | `id` | uuid PK | text PK nn (`<activity_id>:<channel>`) |
+| | `activity_id` | uuid not null → external_activities, cascade | text nn |
+| | `channel` | text not null, check power/heart_rate/cadence/speed/distance/altitude/lat/lng/temperature/resistance | text nn |
+| | `start_offset_s` | integer not null default 0 | integer nn |
+| | `values` | double precision[] not null | text nn (JSON array) |
+| | `created_at` | timestamptz not null default now() | timestamp nn |
+| `body_weights` | `id` | uuid PK | text PK nn (`<source>:<source_id>`) |
+| | `source` | text not null, check garmin | text nn |
+| | `source_id` | text not null (Garmin samplePk) | text nn |
+| | `measured_at` | timestamptz not null | timestamp nn |
+| | `weight_kg` | double precision not null | real nn |
+| | `bmi` | double precision | real |
+| | `body_fat_pct` | double precision | real |
+| | `body_water_pct` | double precision | real |
+| | `muscle_mass_kg` | double precision | real |
+| | `bone_mass_kg` | double precision | real |
+| | `provider_payload` | jsonb not null | text nn (JSON) |
+| | `created_at` | timestamptz not null default now() | timestamp nn |
+| `athlete_settings` | `id` | (none; Supabase keys on `user_id`) | text PK nn (`"settings"`) |
+| | `manual_ftp_w` | integer | integer |
+| | `lthr_bpm` | integer | integer |
+| | `max_hr_bpm` | integer | integer |
+| | `resting_hr_bpm` | integer | integer |
+| | `strength_session_tss` | numeric not null default 50 | real nn |
+| | `no_power_tss_per_hour` | numeric not null default 55 | real nn |
+| | `units` | text not null default 'imperial', check imperial/metric | text nn |
+| | `week_start` | text not null default 'monday', check monday/sunday | text nn |
+| | `created_at` | timestamptz not null default now() | timestamp nn |
+| `ftp_history` | `id` | uuid PK | text PK nn (`<effective_from ISO>\|<source>`) |
+| | `effective_from` | timestamptz not null | timestamp nn |
+| | `ftp_w` | integer not null, check > 0 | integer nn |
+| | `source` | text not null, check manual/peloton_test/peloton_manual/estimated | text nn |
+| | `source_ref` | text | text |
+| | `created_at` | timestamptz not null default now() | timestamp nn |
+| `daily_training_load` | `id` | (none; Supabase keys on `(user_id, date)`) | text PK nn (`<date YYYY-MM-DD>`) |
+| | `date` | date not null | text nn (`YYYY-MM-DD`) |
+| | `tss_total` | double precision not null default 0 | real nn |
+| | `tss_by_source` | jsonb not null default '{}' | text nn (JSON) |
+| | `ctl` | double precision not null | real nn |
+| | `atl` | double precision not null | real nn |
+| | `tsb` | double precision not null | real nn |
+| | `created_at` | timestamptz not null default now() | timestamp nn |
+| `sync_state` | `id` | (none; Supabase keys on `(user_id, source)`) | text PK nn (`<source>`) |
+| | `source` | text not null, check garmin_activities/garmin_weight/peloton | text nn |
+| | `cursor` | jsonb | text (JSON) |
+| | `last_run_at` | timestamptz | timestamp |
+| | `last_success_at` | timestamptz | timestamp |
+| | `items_fetched` | integer not null default 0 | integer nn |
+| | `items_upserted` | integer not null default 0 | integer nn |
+| | `last_error` | text | text |
+| | `backfill_complete` | boolean not null default false | boolean nn |
+| | `auth_status` | text not null default 'ok', check ok/reconnect_required | text nn |
+| | `created_at` | timestamptz not null default now() | timestamp nn |
+| `provider_credentials` | `id` | uuid PK | text PK nn (`<provider>`) |
+| | `provider` | text not null, check peloton | text nn |
+| | `ciphertext` | text not null (base64) | text nn |
+| | `iv` | text not null (base64) | text nn |
+| | `auth_tag` | text not null (base64) | text nn |
+| | `key_id` | text not null | text nn |
+| | `access_expires_at` | timestamptz | timestamp |
+| | `rotated_at` | timestamptz | timestamp |
+| | `revoked_at` | timestamptz | timestamp |
+| | `created_at` | timestamptz not null default now() | timestamp nn |
+
+### Indexes
+
+Declared per table under `indexes` (authoring guide §6), one per filter or
+sort the DataLayer issues (for the ride tables, the filters AI-825 is
+specified to issue; add one when it issues another). Supabase's
+`(user_id, …)` indexes lose their `user_id` prefix, and the manifest has no
+sort direction: `external_activities (user_id, started_at desc)` becomes
+`(started_at)`, which SQLite scans backwards for a newest-first read.
+
+| Table | Columns | For |
+| --- | --- | --- |
+| `external_activities` | `(started_at)` | the feed and date-range reads, newest first |
+| `external_activities` | `(source, started_at)` | per-provider reads |
+| `external_activities` | `(environment, started_at)` | indoor/outdoor filters |
+| `activity_streams` | `(activity_id)` | an activity's streams |
+| `body_weights` | `(measured_at)` | the weight chart |
+| `ftp_history` | `(effective_from)` | the FTP in effect at a date |
+| `daily_training_load` | `(date)` | the CTL/ATL/TSB series |
+| `workout_days` | `(program_id)` | a program's days (AI-609) |
+| `workout_day_exercises` | `(workout_day_id)` | a day's exercises (AI-609) |
+| `workout_day_exercise_scheme_history` | `(workout_day_id, exercise_id)` | scheme history for a day's exercise (AI-609) |
+| `sessions` | `(performed_on)` | history by date (AI-609) |
+| `sessions` | `(workout_day_id)` | a day's sessions (AI-609) |
+| `session_sets` | `(session_id)` | a session's sets (AI-609) |
+| `session_sets` | `(exercise_id)` | an exercise's sets across sessions (AI-609) |
