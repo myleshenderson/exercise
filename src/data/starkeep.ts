@@ -17,14 +17,22 @@
  * - First-use seeding is guarded by a row in the Starkeep-only `app_meta`
  *   table instead of Supabase's `seed_claims`.
  *
+ * - Ride analytics (AI-822) lives in `./starkeep/rideAnalytics.ts`, over the
+ *   ids and row mappers of `./starkeep/rideRows.ts`.
+ *
  * No `user_id` anywhere: Starkeep scopes rows to the caller underneath the
  * row API.
  */
-import { assertListLimit, DEFAULT_ATHLETE_SETTINGS, type DataLayer, type DayLookup } from "./DataLayer.js";
+import type { DataLayer, DayLookup } from "./DataLayer.js";
 import type { Exercise, Program, Session, SetEntry, WorkoutDay } from "../types.js";
 import { nextAvailablePositionByProgram, isDayAvailable } from "../lib/programAvailability.js";
 import { compareText } from "../analysis/sqlSemantics.js";
 import { createRowClient, type Row, type RowClient, type Transport, type Where } from "./starkeep/rows.js";
+import { chunks, IN_CHUNK, selectIn } from "./starkeep/select.js";
+import { createRideAnalytics } from "./starkeep/rideAnalytics.js";
+
+/** Shared with starkeep/handlers.ts. */
+export { selectIn };
 
 interface ExerciseRow {
   [key: string]: unknown;
@@ -118,9 +126,6 @@ export interface StarkeepDataLayerOptions {
   claimSettleMs?: number;
 }
 
-/** Ids per `in` filter, to keep each query string well under URL limits. */
-const IN_CHUNK = 100;
-
 const LIVE = { archived_at: null } as const;
 
 /** Thrown by deleteExercise while something still references the exercise. */
@@ -156,33 +161,6 @@ function parseTargetSets(raw: string | null): SetEntry[] | null {
   return parsed.map((s, i) => ({ setNumber: i + 1, weight: s.weight, reps: s.reps }));
 }
 
-function chunks<T>(items: T[], size = IN_CHUNK): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
-  return out;
-}
-
-/**
- * selectAll with `column in ids`, chunked to {@link IN_CHUNK} ids per request;
- * rows from every chunk, in chunk order, otherwise unsorted. Null/undefined ids
- * and duplicates are dropped, and no ids means no request at all. Shared by
- * this DataLayer and starkeep/handlers.ts.
- */
-export async function selectIn<R extends Row>(
-  rows: RowClient,
-  table: string,
-  column: string,
-  ids: readonly (string | null | undefined)[],
-  opts: { where?: Where; select?: string[]; order?: string[] } = {},
-): Promise<R[]> {
-  const unique = [...new Set(ids.filter((id): id is string => typeof id === "string"))];
-  const out: R[] = [];
-  for (const part of chunks(unique)) {
-    out.push(...(await rows.selectAll<R>(table, { ...opts, where: { ...opts.where, [column]: { in: part } } })));
-  }
-  return out;
-}
-
 const now = () => new Date().toISOString();
 const newId = () => crypto.randomUUID();
 
@@ -192,40 +170,6 @@ function newestFirst(a: SessionRow, b: SessionRow): number {
   if (a.created_at !== b.created_at) return a.created_at < b.created_at ? 1 : -1;
   return 0;
 }
-
-/** What every ride analytics write rejects with until Starkeep declares the tables. */
-export const RIDE_ANALYTICS_UNAVAILABLE = "ride analytics is not available on Starkeep yet";
-
-/**
- * Ride analytics (AI-631) is not declared in starkeep.manifest.json yet
- * (decision 3: Starkeep parity is a later issue). Reads answer "nothing
- * stored" and writes reject, both without touching the transport.
- */
-const rideAnalyticsStub: Pick<
-  DataLayer,
-  | "listExternalActivities" | "getExternalActivity" | "upsertExternalActivities" | "getActivityStreams"
-  | "replaceActivityStreams" | "listBodyWeights" | "upsertBodyWeights" | "getAthleteSettings"
-  | "saveAthleteSettings" | "listFtpHistory" | "addFtpHistoryEntry" | "listDailyTrainingLoad"
-  | "upsertDailyTrainingLoad" | "listSyncState"
-> = {
-  listExternalActivities: async (f) => {
-    assertListLimit(f.limit);
-    return [];
-  },
-  getExternalActivity: async () => null,
-  getActivityStreams: async () => [],
-  listBodyWeights: async () => [],
-  getAthleteSettings: async () => ({ ...DEFAULT_ATHLETE_SETTINGS }),
-  listFtpHistory: async () => [],
-  listDailyTrainingLoad: async () => [],
-  listSyncState: async () => [],
-  upsertExternalActivities: async () => Promise.reject(new Error(RIDE_ANALYTICS_UNAVAILABLE)),
-  replaceActivityStreams: async () => Promise.reject(new Error(RIDE_ANALYTICS_UNAVAILABLE)),
-  upsertBodyWeights: async () => Promise.reject(new Error(RIDE_ANALYTICS_UNAVAILABLE)),
-  saveAthleteSettings: async () => Promise.reject(new Error(RIDE_ANALYTICS_UNAVAILABLE)),
-  addFtpHistoryEntry: async () => Promise.reject(new Error(RIDE_ANALYTICS_UNAVAILABLE)),
-  upsertDailyTrainingLoad: async () => Promise.reject(new Error(RIDE_ANALYTICS_UNAVAILABLE)),
-};
 
 export function createStarkeepDataLayer(transport: Transport, opts: StarkeepDataLayerOptions = {}): DataLayer {
   return createStarkeepDataLayerFromRows(createRowClient(transport), opts);
@@ -654,6 +598,6 @@ export function createStarkeepDataLayerFromRows(rows: RowClient, opts: StarkeepD
       await rows.remove(T.sets, { session_id: id });
       await rows.remove(T.sessions, { id });
     },
-    ...rideAnalyticsStub,
+    ...createRideAnalytics(rows),
   };
 }
