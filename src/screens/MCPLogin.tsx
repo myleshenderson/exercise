@@ -55,19 +55,11 @@ const TOOLS = [
 
 /**
  * The JSON body that authenticates a call to `api/mcp-login` / `api/mcp-sessions`,
- * or null when there is no session.
- *
- * Supabase: the session's access token goes in the body; supabase-js is
- * loaded on demand (`loadSupabase`), so a Starkeep build never loads it.
- * Starkeep: the app server reads the platform session from its HttpOnly
- * cookie, which a same-origin fetch sends by itself; the body carries no
- * credential.
+ * or null when there is no session. The session's access token goes in the
+ * body; supabase-js is loaded on demand (`loadSupabase`), so a Starkeep build
+ * never loads it.
  */
-async function authBody(
-  starkeep: boolean,
-  extra: Record<string, string> = {},
-): Promise<Record<string, string> | null> {
-  if (starkeep) return { ...extra };
+async function authBody(extra: Record<string, string> = {}): Promise<Record<string, string> | null> {
   const { data } = await (await loadSupabase()).auth.getSession();
   const session = data?.session;
   if (!session) return null;
@@ -81,6 +73,148 @@ function selectOnFocus(e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElemen
 }
 
 export default function MCPLogin() {
+  // The backend is fixed for the life of the screen: read it once at mount.
+  const [starkeep] = useState(isStarkeepBackend);
+  return starkeep ? <StarkeepMcp /> : <SupabaseMcp />;
+}
+
+/** The parts of the runtime config the Starkeep screen reads. */
+interface RuntimeConfig {
+  connectUrl?: string;
+  connectionsUrl?: string;
+}
+
+/** The platform's consent pages, as the runtime config names them. */
+interface PlatformPages {
+  connectUrl: string;
+  connectionsUrl: string;
+}
+
+/**
+ * Starkeep: the platform owns access for outside clients. In the cloud, an
+ * MCP client signs in with OAuth on the platform, or the user creates a
+ * delegation token on the platform's connect page and pastes it into the
+ * client; the user lists and revokes both kinds on the connections page. The
+ * runtime config names both pages in the cloud and neither locally. Locally,
+ * `/mcp` admits any loopback caller and needs no token.
+ */
+function StarkeepMcp() {
+  // The platform's pages in the cloud; null on the local surface, whose
+  // runtime config names none; undefined while loading or when the config
+  // cannot be read, so the screen claims neither surface.
+  const [pages, setPages] = useState<PlatformPages | null | undefined>(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(appPath("starkeep-runtime-config"), { credentials: "same-origin" });
+        if (!res.ok) return;
+        const cfg = (await res.json()) as RuntimeConfig | null;
+        if (!cfg || typeof cfg !== "object") return;
+        const { connectUrl, connectionsUrl } = cfg;
+        const found =
+          typeof connectUrl === "string" && connectUrl && typeof connectionsUrl === "string" && connectionsUrl
+            ? { connectUrl, connectionsUrl }
+            : null;
+        if (!cancelled) setPages(found);
+      } catch {
+        // Unreadable: leave the screen at the endpoint and the CLI command.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const endpointUrl = `${window.location.origin}${appPath("mcp")}`;
+  const cliSnippet = `claude mcp add --transport http exercise ${endpointUrl}`;
+  const tokenSnippet = `claude mcp add --transport http exercise ${endpointUrl} --header "Authorization: Bearer YOUR_TOKEN"`;
+
+  return (
+    <div className="p-4 space-y-4">
+      <h1 className="text-xl font-bold">Connect an MCP client</h1>
+      <ReadOnlyField id="mcp-endpoint" label="MCP endpoint URL" value={endpointUrl} />
+      <ReadOnlyField id="mcp-cli-snippet" label="Claude Code CLI" value={cliSnippet} rows={2} />
+      {pages === undefined ? null : pages === null ? (
+        <p className="text-sm text-gray-600">
+          On this computer the endpoint needs no token: it answers only local programs.
+        </p>
+      ) : (
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Your MCP client opens a browser so you can sign in to Starkeep and approve its access.
+          </p>
+          <div className="space-y-1 border-t pt-4">
+            <p className="text-sm font-semibold">Clients without sign-in</p>
+            <p className="text-sm text-gray-600">
+              <a className="underline" href={pages.connectUrl}>
+                Create a token
+              </a>{" "}
+              for Exercise, then pass it as a header.
+            </p>
+            <ReadOnlyField id="mcp-token-snippet" label="Claude Code CLI with a token" value={tokenSnippet} rows={2} />
+          </div>
+          <p className="border-t pt-4 text-sm text-gray-600">
+            <a className="underline" href={pages.connectionsUrl}>
+              Manage connections
+            </a>{" "}
+            to see which clients can reach your data and revoke them.
+          </p>
+        </div>
+      )}
+      <div className="border-t pt-4">
+        <ToolList />
+      </div>
+    </div>
+  );
+}
+
+function ReadOnlyField({ id, label, value, rows }: { id: string; label: string; value: string; rows?: number }) {
+  return (
+    <div className="space-y-1">
+      <label className="block text-sm" htmlFor={id}>
+        {label}
+      </label>
+      {rows ? (
+        <textarea
+          id={id}
+          readOnly
+          rows={rows}
+          value={value}
+          onFocus={selectOnFocus}
+          className="w-full rounded-lg border p-3 font-mono text-xs"
+        />
+      ) : (
+        <input
+          id={id}
+          readOnly
+          value={value}
+          onFocus={selectOnFocus}
+          className="w-full rounded-lg border p-3 font-mono text-sm"
+        />
+      )}
+    </div>
+  );
+}
+
+function ToolList() {
+  return (
+    <div className="space-y-1">
+      <p className="text-sm font-semibold">Available tools</p>
+      <ul className="space-y-1 text-sm text-gray-600">
+        {TOOLS.map((tool) => (
+          <li key={tool.name}>
+            <span className="font-mono text-xs">{tool.name}</span> — {tool.description}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Supabase (Vercel): Exercise mints, lists and revokes its own MCP tokens. */
+function SupabaseMcp() {
   const [token, setToken] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -89,16 +223,12 @@ export default function MCPLogin() {
   const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [sessionsVersion, setSessionsVersion] = useState(0);
-  // The backend is fixed for the life of the screen: read it once at mount, so
-  // an async continuation (the session list refreshed after a new token) never
-  // re-reads it and picks the Supabase path mid-flight.
-  const [starkeep] = useState(isStarkeepBackend);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const body = await authBody(starkeep);
+        const body = await authBody();
         if (!body) return;
         const res = await fetch(appPath("api/mcp-sessions"), {
           method: "POST",
@@ -115,13 +245,13 @@ export default function MCPLogin() {
     return () => {
       cancelled = true;
     };
-  }, [sessionsVersion, starkeep]);
+  }, [sessionsVersion]);
 
   async function revokeSession(id: string) {
     setRevokingId(id);
     setSessionsError(null);
     try {
-      const body = await authBody(starkeep, { session_id: id });
+      const body = await authBody({ session_id: id });
       if (!body) {
         setSessionsError(SESSION_EXPIRED);
         return;
@@ -132,10 +262,6 @@ export default function MCPLogin() {
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        if (starkeep && res.status === 401) {
-          setSessionsError(SESSION_EXPIRED);
-          return;
-        }
         setSessionsError("Could not revoke that session. Please try again.");
         return;
       }
@@ -147,11 +273,7 @@ export default function MCPLogin() {
     }
   }
 
-  // Starkeep serves MCP at the app's own `mcp` route (under `/apps/exercise/`
-  // in the cloud); Vercel at `/api/mcp`.
-  const endpointUrl = starkeep
-    ? `${window.location.origin}${appPath("mcp")}`
-    : `${window.location.origin}/api/mcp`;
+  const endpointUrl = `${window.location.origin}/api/mcp`;
   const tokenPlaceholder = token ?? "YOUR_TOKEN";
   const cliSnippet = `claude mcp add --transport http exercise-mcp ${endpointUrl} --header "Authorization: Bearer ${tokenPlaceholder}"`;
   const jsonSnippet = JSON.stringify(
@@ -182,7 +304,7 @@ export default function MCPLogin() {
     setToken(null);
     setExpiresAt(null);
     try {
-      const auth = await authBody(starkeep);
+      const auth = await authBody();
       if (!auth) {
         setError(SESSION_EXPIRED);
         return;
@@ -193,11 +315,6 @@ export default function MCPLogin() {
         body: JSON.stringify(auth),
       });
       if (!res.ok) {
-        // Starkeep authenticates by cookie, so an expired session shows up here.
-        if (starkeep && res.status === 401) {
-          setError(SESSION_EXPIRED);
-          return;
-        }
         setError("Could not create a token. Please try again.");
         return;
       }
@@ -318,16 +435,7 @@ export default function MCPLogin() {
           />
         </div>
 
-        <div className="space-y-1">
-          <p className="text-sm font-semibold">Available tools</p>
-          <ul className="space-y-1 text-sm text-gray-600">
-            {TOOLS.map((tool) => (
-              <li key={tool.name}>
-                <span className="font-mono text-xs">{tool.name}</span> — {tool.description}
-              </li>
-            ))}
-          </ul>
-        </div>
+        <ToolList />
       </div>
     </div>
   );

@@ -28,7 +28,6 @@ const TABLE_NAMES = [
   "sync_state",
   "provider_credentials",
   // Starkeep-only.
-  "mcp_tokens",
   "app_meta",
 ];
 
@@ -76,7 +75,7 @@ describe("starkeep.manifest.json", () => {
     expect(m.infraRequirements.publicSharing).toBe(false);
   });
 
-  it("declares exactly the 17 tables", () => {
+  it("declares exactly the 16 tables", () => {
     const tableNames = result.manifest!.infraRequirements.appSpecificSyncable.tables.map((t) => t.name);
     expect([...tableNames].sort()).toEqual([...TABLE_NAMES].sort());
   });
@@ -92,6 +91,8 @@ describe("starkeep.manifest.json", () => {
     }
     const tableNames = result.manifest!.infraRequirements.appSpecificSyncable.tables.map((t) => t.name);
     expect(tableNames).not.toContain("mcp_sessions");
+    // Outside clients authenticate with the platform's delegation tokens.
+    expect(tableNames).not.toContain("mcp_tokens");
     expect(tableNames).not.toContain("seed_claims");
   });
 
@@ -110,30 +111,9 @@ describe("starkeep.manifest.json", () => {
     }
   });
 
-  it("declares the Starkeep-only `mcp_tokens` table", () => {
-    const table = result.manifest!.infraRequirements.appSpecificSyncable.tables.find(
-      (t) => t.name === "mcp_tokens",
-    );
-    expect(table).toBeDefined();
-    const cols = table!.columns.map((c) => ({
-      name: c.name,
-      type: c.type,
-      primaryKey: c.primaryKey ?? false,
-      notNull: c.notNull ?? false,
-    }));
-    expect(cols).toEqual([
-      { name: "id", type: "text", primaryKey: true, notNull: true },
-      { name: "token_hash", type: "text", primaryKey: false, notNull: true },
-      { name: "label", type: "text", primaryKey: false, notNull: false },
-      { name: "created_at", type: "timestamp", primaryKey: false, notNull: true },
-      { name: "last_used_at", type: "timestamp", primaryKey: false, notNull: false },
-      { name: "expires_at", type: "timestamp", primaryKey: false, notNull: true },
-    ]);
-  });
-
-  it("declares POST /mcp public on its own route and no static MCP token in env", () => {
+  it("declares POST /mcp delegated on its own route and no static MCP token in env", () => {
     const shell = result.manifest!.infraRequirements.compute.handlers.find((h) => h.name === "static")!;
-    expect(shell.routes).toContainEqual({ route: "POST /mcp", auth: "public" });
+    expect(shell.routes).toContainEqual({ route: "POST /mcp", auth: "delegated" });
     expect(shell.env).not.toHaveProperty("STARKEEP_MCP_TOKEN");
     expect(JSON.stringify(result.manifest)).not.toContain("STARKEEP_MCP_TOKEN");
   });

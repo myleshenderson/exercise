@@ -11,9 +11,10 @@ import {
   distRebuildReason,
   mainChunkPath,
   STARKEEP_BACKEND,
-  STARKEEP_ONLY_TABLE,
+  STARKEEP_ONLY_MARKER,
   SUPABASE_JS_SIGNATURE,
 } from "./spa-build.js";
+import { IMMUTABLE_ASSETS_DIR } from "./client-routes.js";
 
 const APP_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BUILD_TIMEOUT = 180_000;
@@ -36,7 +37,7 @@ describe("buildStarkeepSpa (real vite build)", () => {
   });
 
   it(
-    "builds the local server's dist/ for the Starkeep backend, writes the marker and restores the env",
+    "builds the local server's dist/ (_immutable) for the Starkeep backend, writes the marker and restores the env",
     async () => {
       // Even a caller whose shell says otherwise gets a Starkeep build.
       process.env.VITE_DATA_BACKEND = "mock";
@@ -48,9 +49,11 @@ describe("buildStarkeepSpa (real vite build)", () => {
       expect(built).toBe(outDir);
       expect(process.env.VITE_DATA_BACKEND).toBe("mock");
 
-      const main = readFileSync(mainChunkPath(outDir), "utf8");
+      const chunk = mainChunkPath(outDir);
+      expect(chunk.startsWith(join(outDir, IMMUTABLE_ASSETS_DIR) + "/")).toBe(true);
+      const main = readFileSync(chunk, "utf8");
       expect(main).not.toContain(SUPABASE_JS_SIGNATURE);
-      expect(main).toContain(STARKEEP_ONLY_TABLE);
+      expect(main).toContain(STARKEEP_ONLY_MARKER);
       expect(readFileSync(join(outDir, BACKEND_MARKER), "utf8").trim()).toBe(STARKEEP_BACKEND);
     },
     BUILD_TIMEOUT,
@@ -66,13 +69,13 @@ describe("buildStarkeepSpa (real vite build)", () => {
         base: "/apps/exercise/",
         mode: "production",
         logLevel: "warn",
-        build: { outDir, emptyOutDir: true, assetsDir: "_immutable", sourcemap: false },
+        build: { outDir, emptyOutDir: true, sourcemap: false },
       });
       const chunk = mainChunkPath(outDir, "/apps/exercise/");
-      expect(chunk.startsWith(join(outDir, "_immutable") + "/")).toBe(true);
+      expect(chunk.startsWith(join(outDir, IMMUTABLE_ASSETS_DIR) + "/")).toBe(true);
       const main = readFileSync(chunk, "utf8");
       expect(main).not.toContain(SUPABASE_JS_SIGNATURE);
-      expect(main).toContain(STARKEEP_ONLY_TABLE);
+      expect(main).toContain(STARKEEP_ONLY_MARKER);
       expect(process.env.VITE_DATA_BACKEND).toBeUndefined();
     },
     BUILD_TIMEOUT,
@@ -93,7 +96,11 @@ describe("buildStarkeepSpa (real vite build)", () => {
 
 describe("distRebuildReason", () => {
   /** A package with one source file at t=1000s and a dist/ whose shell is at `shellAt`. */
-  function fixture(shellAt: number, marker?: { content: string; at: number }) {
+  function fixture(
+    shellAt: number,
+    marker?: { content: string; at: number },
+    layout: "immutable" | "assets" = "immutable",
+  ) {
     const pkg = tempDir();
     mkdirSync(join(pkg, "src"));
     writeFileSync(join(pkg, "src", "main.tsx"), "");
@@ -102,6 +109,7 @@ describe("distRebuildReason", () => {
     mkdirSync(dist);
     writeFileSync(join(dist, "index.html"), "<html></html>");
     utimesSync(join(dist, "index.html"), shellAt, shellAt);
+    if (layout === "immutable") mkdirSync(join(dist, IMMUTABLE_ASSETS_DIR));
     if (marker) {
       writeFileSync(join(dist, BACKEND_MARKER), marker.content);
       utimesSync(join(dist, BACKEND_MARKER), marker.at, marker.at);
@@ -127,6 +135,11 @@ describe("distRebuildReason", () => {
   it("rebuilds when the shell was rebuilt after the marker", () => {
     const { pkg, dist } = fixture(3000, { content: `${STARKEEP_BACKEND}\n`, at: 2000 });
     expect(distRebuildReason(pkg, dist)).toBe("not a Starkeep build");
+  });
+
+  it("rebuilds a Starkeep build without the `_immutable/` asset layout", () => {
+    const { pkg, dist } = fixture(2000, { content: `${STARKEEP_BACKEND}\n`, at: 2000 }, "assets");
+    expect(distRebuildReason(pkg, dist)).toBe("from an older asset layout");
   });
 
   it("rebuilds a Starkeep build older than its sources", () => {

@@ -66,11 +66,12 @@ export interface DataLayer {
   findExerciseByName(name: string): Promise<Exercise | null>;
   findProgramByName(name: string): Promise<Program | null>;
 
-  // Atomically claims the right to run first-login seeding for the current
-  // user: returns true for exactly one caller among any concurrent callers,
-  // false for every other one (they must not seed). Guards against the
-  // ensureSeeded() race — see exercise-c9l and 0014_seed_claims.sql.
-  claimSeed(): Promise<boolean>;
+  // Adds the starter exercises and day templates (seed.ts) for a user who has
+  // none, at most once per user however many callers race (exercise-c9l).
+  // Each backend guards it its own way: Supabase and the mock with a claim
+  // (seedWithClaim, 0014_seed_claims.sql), Starkeep with fixed starter ids and
+  // `ifAbsent` inserts. Called through ensureSeeded().
+  seedStarterData(): Promise<void>;
 
   getWorkoutDays(): Promise<WorkoutDay[]>;
   getDayExercises(dayId: string): Promise<Exercise[]>;

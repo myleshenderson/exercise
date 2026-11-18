@@ -16,9 +16,9 @@
  * `starkeep/handler.ts` to `index.mjs` with esbuild, zip.
  *
  * `vite.config.ts` is shared with the Vercel build and is not edited for
- * Starkeep. The two Starkeep-only settings (`base` and the `_immutable` assets
- * dir) are passed inline here; Vite merges them over the config file.
- * `VITE_DATA_BACKEND=starkeep` comes from `spa-build.ts`.
+ * Starkeep. The cloud-only setting, `base`, is passed inline here; Vite merges
+ * it over the config file. `VITE_DATA_BACKEND=starkeep` and the `_immutable`
+ * assets dir come from `spa-build.ts`.
  */
 
 import { execFileSync } from "node:child_process";
@@ -62,7 +62,7 @@ async function buildBundle(appBasePath: string, distZip: string): Promise<void> 
       root: APP_DIR,
       base: `${appBasePath}/`,
       mode: "production",
-      build: { outDir: assets, emptyOutDir: true, assetsDir: "_immutable", sourcemap: false },
+      build: { outDir: assets, emptyOutDir: true, sourcemap: false },
     });
 
     // 2. The Lambda entry. ESM `.mjs` for the top-level await in handler.ts;

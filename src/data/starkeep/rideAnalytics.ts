@@ -197,7 +197,8 @@ export function createRideAnalytics(rows: RowClient): RideAnalyticsMethods {
       // them for an empty set), then upsert the rest.
       const keep = new Set<string>(deduped.map((s) => s.channel));
       const doomed = existing.filter((r) => !keep.has(r.channel)).map((r) => r.id);
-      for (const part of chunks(doomed)) await rows.remove(T.streams, { id: { in: part } });
+      // One keyed delete per channel: the row API refuses an `in` list.
+      for (const id of doomed) await rows.remove(T.streams, { id });
       if (deduped.length === 0) return;
       const at = now();
       const created = new Map(existing.map((r) => [r.id, r.created_at]));

@@ -17,3 +17,7 @@ supabase/.temp/
 # API probe outputs (personal data)
 garmin-probe-out/
 peloton-probe-out/
+
+# Written by the cloud test's `prepare` step (starkeep/cloud/run-step.ts): a
+# throwaway user's password and session cookies for the AWS test stack
+starkeep/cloud/.cloud-run/

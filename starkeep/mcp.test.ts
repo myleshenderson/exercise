@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
-import { FakeDataPlane, TEST_CREDS } from "./test-support.js";
+import { mcpHeaders, TEST_CREDS } from "./test-support.js";
 
 // tools/list as api/mcp.ts returned it on main, committed by AI-589.
 const MAIN_TOOLS_LIST: unknown = JSON.parse(
@@ -15,26 +15,22 @@ vi.mock("@starkeep/app-client", async (importOriginal) => {
 
 const { createApp } = await import("./server.js");
 
-// Local mode: a sealed token whose row lives in a fake data plane.
-const plane = new FakeDataPlane();
-const { token: TOKEN } = plane.seed();
+// Local mode: `verifyDelegation` admits a loopback caller with no token, and
+// neither initialize nor tools/list reads a row.
 const app = createApp();
 
 beforeAll(() => {
   delete process.env.STARKEEP_APP_CLIENT_MODE;
-  vi.stubGlobal("fetch", plane.fetch);
+  vi.stubGlobal("fetch", async () => {
+    throw new Error("initialize and tools/list must not reach the data server");
+  });
 });
 afterAll(() => vi.unstubAllGlobals());
 
 async function rpc(body: unknown) {
   const res = await app.request("/mcp", {
     method: "POST",
-    headers: {
-      authorization: `Bearer ${TOKEN}`,
-      "content-type": "application/json",
-      accept: "application/json, text/event-stream",
-      "mcp-protocol-version": "2025-06-18",
-    },
+    headers: mcpHeaders(),
     body: JSON.stringify(body),
   });
   expect(res.status).toBe(200);

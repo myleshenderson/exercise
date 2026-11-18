@@ -548,18 +548,18 @@ describe("Supabase DataLayer contract", () => {
     clientHolder.client = null;
   });
 
-  describe("claimSeed", () => {
-    test("inserts an empty seed_claims row and wins", async () => {
+  describe("seedStarterData", () => {
+    test("claims with an empty seed_claims insert; a lost claim (23505) seeds nothing", async () => {
       const { db, stub } = setup();
-      expect(await db.claimSeed()).toBe(true);
+      stub.reply({ error: { code: "23505", message: "duplicate key" } });
+      await db.seedStarterData();
       expect(stub.queries).toEqual([{ table: "seed_claims", op: "insert", payload: {}, steps: [{ method: "insert", args: [{}] }] }]);
     });
 
-    test("loses on 23505 and rethrows anything else", async () => {
+    test("rethrows any other claim error", async () => {
       const { db, stub } = setup();
-      stub.reply({ error: { code: "23505", message: "duplicate key" } }, { error: FAIL });
-      expect(await db.claimSeed()).toBe(false);
-      await expect(db.claimSeed()).rejects.toBe(FAIL);
+      stub.reply({ error: FAIL });
+      await expect(db.seedStarterData()).rejects.toBe(FAIL);
     });
   });
 

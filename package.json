@@ -11,6 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:cloud": "node scripts/link-core-harness.mjs && vitest run --config starkeep/cloud/vitest.config.ts",
+    "test:platform": "node scripts/link-core-harness.mjs && vitest run --config starkeep/platform/vitest.config.ts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.api.json && tsc -p tsconfig.starkeep.json && tsc -p tsconfig.scripts.json --noEmit",
     "starkeep:serve": "tsx starkeep/serve.ts",
     "starkeep:validate": "tsx starkeep/validate-manifest.ts",
@@ -21,7 +23,7 @@
   "dependencies": {
     "@hono/node-server": "1.19.17",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@starkeep/app-client": "0.10.0",
+    "@starkeep/app-client": "0.14.0",
     "@supabase/supabase-js": "^2.108.2",
     "fflate": "0.8.3",
     "hono": "4.13.7",
@@ -32,7 +34,7 @@
     "zod": "^4.5.4"
   },
   "devDependencies": {
-    "@starkeep/admin-manifest": "0.9.0",
+    "@starkeep/admin-manifest": "0.10.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^26.4.0",

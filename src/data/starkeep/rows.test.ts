@@ -137,8 +137,10 @@ test("aggregate sends select as the GROUP BY list and aggregate as JSON", async 
 });
 
 test("insert: POST { row } with a JSON content type", async () => {
-  const { calls, client } = recorder({ ok: true });
-  await client.insert("programs", { id: "p1", name: "Base", created_at: "2026-01-01T00:00:00.000Z", archived_at: null });
+  const { calls, client } = recorder({ ok: true, changes: 1 });
+  expect(
+    await client.insert("programs", { id: "p1", name: "Base", created_at: "2026-01-01T00:00:00.000Z", archived_at: null }),
+  ).toEqual({ changes: 1 });
   expect(calls[0]).toEqual({
     path: "/app-data/db/programs",
     init: {
@@ -149,31 +151,56 @@ test("insert: POST { row } with a JSON content type", async () => {
   });
 });
 
+test("insert with ifAbsent: sends the condition and returns the skip", async () => {
+  const { calls, client } = recorder({ ok: true, changes: 0, skipped: "deleted" });
+  expect(await client.insert("programs", { id: "p1" }, { ifAbsent: true })).toEqual({ changes: 0, skipped: "deleted" });
+  expect(calls[0].init.body).toBe('{"row":{"id":"p1"},"ifAbsent":true}');
+});
+
 test("patch: PATCH { where, patch } and returns changes", async () => {
-  const { calls, client } = recorder({ changes: 2 });
-  const changes = await client.patch("workout_days", { id: "d1", archived_at: null }, { name: "X" });
-  expect(changes).toBe(2);
+  const { calls, client } = recorder({ changes: 1 });
+  expect(await client.patch("workout_days", { id: "d1" }, { name: "X" })).toEqual({ changes: 1 });
   expect(calls[0]).toEqual({
     path: "/app-data/db/workout_days",
     init: {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: '{"where":{"id":"d1","archived_at":{"is":null}},"patch":{"name":"X"}}',
+      body: '{"where":{"id":"d1"},"patch":{"name":"X"}}',
     },
   });
 });
 
-test("remove: DELETE { where } and returns changes", async () => {
-  const { calls, client } = recorder({ changes: 1 });
-  const changes = await client.remove("session_sets", { session_id: "s1", exercise_id: { in: ["e1"] } });
-  expect(changes).toBe(1);
+test("remove: DELETE { where } and returns changes, or the skip for a row already deleted", async () => {
+  const { calls, client } = recorder({ changes: 1 }, { changes: 0, skipped: "deleted" });
+  expect(await client.remove("session_sets", { id: "set-1" })).toEqual({ changes: 1 });
   expect(calls[0]).toEqual({
     path: "/app-data/db/session_sets",
     init: {
       method: "DELETE",
       headers: { "content-type": "application/json" },
-      body: '{"where":{"session_id":"s1","exercise_id":{"in":["e1"]}}}',
+      body: '{"where":{"id":"set-1"}}',
     },
+  });
+  expect(await client.remove("session_sets", { id: "set-1" })).toEqual({ changes: 0, skipped: "deleted" });
+});
+
+describe("a write to a key no live row holds", () => {
+  const missing = { error: "No live row holds that key", changes: 0, skipped: "missing" };
+  const answer = (status: number, body: unknown) => createRowClient(async () => new Response(JSON.stringify(body), { status }));
+
+  test("patch and remove return skipped: missing for the data server's row 404", async () => {
+    expect(await answer(404, missing).patch("exercises", { id: "nope" }, { name: "x" })).toEqual({ changes: 0, skipped: "missing" });
+    expect(await answer(404, missing).remove("exercises", { id: "nope" })).toEqual({ changes: 0, skipped: "missing" });
+  });
+
+  test("a 404 without skipped (no such route) still throws", async () => {
+    const err = await answer(404, { error: "no app-syncable namespace" }).patch("exercises", { id: "x" }, { name: "x" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RowApiError);
+    expect((err as RowApiError).status).toBe(404);
+  });
+
+  test("a select's 404 throws even with skipped: missing", async () => {
+    await expect(answer(404, missing).select("exercises")).rejects.toBeInstanceOf(RowApiError);
   });
 });
 

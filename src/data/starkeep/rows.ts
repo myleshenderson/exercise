@@ -18,8 +18,21 @@
  * - `aggregate`: strict JSON; `select` becomes the GROUP BY list.
  *
  * Responses: `{rows, truncated, page_token}` or `{groups, truncated}`. Writes:
- * `POST {row}` → `{ok}`, `PATCH {where, patch}` → `{changes}`,
- * `DELETE {where}` → `{changes}`. Errors are a non-2xx status with `{error}`.
+ * `POST {row, ifAbsent?}` → `{ok, changes, skipped?}`, `PATCH {where, patch}`
+ * → `{changes}`, `DELETE {where}` → `{changes, skipped?}`. Errors are a
+ * non-2xx status with `{error}`.
+ *
+ * Write rules, as the data server enforces them (guide §6b):
+ * - A `PATCH` or `DELETE` `where` names the whole primary key, each column as
+ *   a plain value. Exercise's tables all key on `id`, so a write names one row
+ *   by its `id`; to write several, select their ids and write each.
+ * - A `PATCH` or `DELETE` of a key no live row holds answers 404 with
+ *   `skipped: "missing"`. The client returns that as a result
+ *   (`{ changes: 0, skipped: "missing" }`), not an error, because it is an
+ *   expected answer, as an update matching no row is in Postgres. Any other
+ *   404 still throws.
+ * - An `ifAbsent` insert of a key some row already holds, live or deleted,
+ *   writes nothing and answers `skipped: "live"` or `"deleted"`.
  */
 
 export type Transport = (path: string, init: RequestInit) => Promise<Response>;
@@ -94,16 +107,30 @@ export class RowApiError extends Error {
   }
 }
 
+/** Why a write changed nothing, as the data server reports it. */
+export type WriteSkip = "live" | "deleted" | "missing";
+
+/** What one row write did. */
+export interface WriteResult {
+  changes: number;
+  skipped?: WriteSkip;
+}
+
+export interface InsertOptions {
+  /** Write only when no row, live or deleted, holds the key. */
+  ifAbsent?: boolean;
+}
+
 export interface RowClient {
   select<T extends Row = Row>(table: string, opts?: SelectOptions): Promise<SelectResult<T>>;
   /** Every matching row: follows `page_token` (at {@link MAX_PAGE} rows a page) until exhausted. */
   selectAll<T extends Row = Row>(table: string, opts?: Omit<SelectOptions, "limit" | "pageToken">): Promise<T[]>;
   aggregate<T extends Row = Row>(table: string, opts: AggregateOptions): Promise<AggregateResult<T>>;
-  insert(table: string, row: Row): Promise<void>;
-  /** Returns the number of rows changed. */
-  patch(table: string, where: Where, patch: Row): Promise<number>;
-  /** Returns the number of rows deleted. */
-  remove(table: string, where: Where): Promise<number>;
+  insert(table: string, row: Row, opts?: InsertOptions): Promise<WriteResult>;
+  /** `where` names the whole primary key; `skipped: "missing"` when no live row holds it. */
+  patch(table: string, where: Where, patch: Row): Promise<WriteResult>;
+  /** `where` names the whole primary key; `skipped` when the row is already deleted or never existed. */
+  remove(table: string, where: Where): Promise<WriteResult>;
 }
 
 /** Normalise a `Where` to the wire form: `{eq: v}` → `v`, bare `null` → `{is: null}`. */
@@ -150,8 +177,22 @@ export function buildQuery(opts: SelectOptions & { aggregate?: Record<string, Ag
 
 const JSON_HEADERS = { "content-type": "application/json" };
 
+const SKIPS: readonly string[] = ["live", "deleted", "missing"];
+
+function writeResult(body: unknown): WriteResult {
+  const { changes, skipped } = (body ?? {}) as { changes?: unknown; skipped?: unknown };
+  const result: WriteResult = { changes: typeof changes === "number" ? changes : 0 };
+  if (typeof skipped === "string" && SKIPS.includes(skipped)) result.skipped = skipped as WriteSkip;
+  return result;
+}
+
+/** The data server's answer for a row write to a key no live row holds. */
+function isMissingRow(status: number, body: unknown): boolean {
+  return status === 404 && (body as { skipped?: unknown } | null)?.skipped === "missing";
+}
+
 export function createRowClient(transport: Transport): RowClient {
-  async function call<T>(table: string, path: string, init: RequestInit): Promise<T> {
+  async function call<T>(table: string, path: string, init: RequestInit, acceptMissing = false): Promise<T> {
     const res = await transport(path, init);
     const text = await res.text();
     let body: unknown = null;
@@ -162,6 +203,7 @@ export function createRowClient(transport: Transport): RowClient {
         body = null;
       }
     }
+    if (acceptMissing && isMissingRow(res.status, body)) return body as T;
     if (!res.ok) {
       const message =
         body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
@@ -215,24 +257,31 @@ export function createRowClient(transport: Transport): RowClient {
       });
       return { groups: body?.groups ?? [], truncated: !!body?.truncated };
     },
-    async insert(table, row) {
-      await call(table, tablePath(table), { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ row }) });
+    async insert(table, row, opts = {}) {
+      const body = await call(table, tablePath(table), {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(opts.ifAbsent ? { row, ifAbsent: true } : { row }),
+      });
+      return writeResult(body);
     },
     async patch(table, where, patch) {
-      const body = await call<{ changes?: number }>(table, tablePath(table), {
-        method: "PATCH",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ where: encodeWhere(where), patch }),
-      });
-      return body?.changes ?? 0;
+      const body = await call(
+        table,
+        tablePath(table),
+        { method: "PATCH", headers: JSON_HEADERS, body: JSON.stringify({ where: encodeWhere(where), patch }) },
+        true,
+      );
+      return writeResult(body);
     },
     async remove(table, where) {
-      const body = await call<{ changes?: number }>(table, tablePath(table), {
-        method: "DELETE",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ where: encodeWhere(where) }),
-      });
-      return body?.changes ?? 0;
+      const body = await call(
+        table,
+        tablePath(table),
+        { method: "DELETE", headers: JSON_HEADERS, body: JSON.stringify({ where: encodeWhere(where) }) },
+        true,
+      );
+      return writeResult(body);
     },
   };
 }

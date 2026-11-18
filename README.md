@@ -96,7 +96,7 @@ There are three ways to run the app for real. Pick one.
   CI applies database migrations from `main`. Full steps are in
   [docs/deploying.md](docs/deploying.md).
 - **Starkeep local.** Starkeep's admin-web starts the app on your machine
-  with `npm run starkeep:serve -- -p <port>`, the `localRun` command in
+  with `npm run starkeep:serve -- --port <port>`, the `localRun` command in
   `starkeep.manifest.json`; see [starkeep/README.md](starkeep/README.md).
 - **Starkeep cloud.** The Starkeep installer runs `bundle` to build
   `dist.zip` and deploys it as a Lambda behind the Starkeep API Gateway under

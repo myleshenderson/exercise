@@ -10,9 +10,13 @@
  * duration of the build, checks that Vite resolved it, and checks the emitted
  * main chunk.
  *
+ * Every Starkeep build puts its content-hashed files under `_immutable/`
+ * (`IMMUTABLE_ASSETS_DIR`), because both surfaces serve them with the same
+ * static rules (`client-routes.ts`, `staticOptions`).
+ *
  * The minifier folds `isStarkeepBackend()` to a constant, so the chunk check
- * cannot look for the string `starkeep`. It looks for the Starkeep-only
- * `app_meta` table instead, which only the Starkeep DataLayer names, and for
+ * cannot look for the string `starkeep`. It looks for the row API's path
+ * prefix `/app-data/db/` instead, which only the Starkeep row client builds, and for
  * the absence of supabase-js (which lives in the lazily loaded
  * `supabaseClient-*.js` chunk).
  */
@@ -20,6 +24,7 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { InlineConfig, Plugin } from "vite";
+import { IMMUTABLE_ASSETS_DIR } from "./client-routes.js";
 
 export const STARKEEP_BACKEND = "starkeep";
 
@@ -30,8 +35,8 @@ export const STARKEEP_BACKEND = "starkeep";
  */
 export const BACKEND_MARKER = ".starkeep-backend";
 
-/** A table only the Starkeep DataLayer names; see the module comment. */
-export const STARKEEP_ONLY_TABLE = "app_meta";
+/** A string only the Starkeep row client holds: the row API's path prefix. See the module comment. */
+export const STARKEEP_ONLY_MARKER = "/app-data/db/";
 
 /** A supabase-js error string; it must not be in the main chunk. */
 export const SUPABASE_JS_SIGNATURE = "supabaseUrl is required";
@@ -77,6 +82,10 @@ export function distRebuildReason(pkgDir: string, distDir: string): string | nul
   if (markerTime < built || readFileSync(markerPath, "utf8").trim() !== STARKEEP_BACKEND) {
     return "not a Starkeep build";
   }
+  // A build from before both surfaces shared one asset layout.
+  if (!statSync(join(distDir, IMMUTABLE_ASSETS_DIR), { throwIfNoEntry: false })?.isDirectory()) {
+    return "from an older asset layout";
+  }
   if (CLIENT_INPUTS.some((p) => newestMtime(join(pkgDir, p)) > built)) return "older than its sources";
   return null;
 }
@@ -102,9 +111,9 @@ export function assertStarkeepMainChunk(outDir: string, base = "/"): void {
   if (code.includes(SUPABASE_JS_SIGNATURE)) {
     throw new Error(`${chunk} bundles supabase-js ("${SUPABASE_JS_SIGNATURE}"); a Starkeep build must not.`);
   }
-  if (!code.includes(STARKEEP_ONLY_TABLE)) {
+  if (!code.includes(STARKEEP_ONLY_MARKER)) {
     throw new Error(
-      `${chunk} never names the \`${STARKEEP_ONLY_TABLE}\` table, so it is not the Starkeep DataLayer ` +
+      `${chunk} never names the row API path \`${STARKEEP_ONLY_MARKER}\`, so it is not the Starkeep DataLayer ` +
         "(VITE_DATA_BACKEND was not starkeep when Vite built it).",
     );
   }
@@ -117,8 +126,8 @@ export interface StarkeepBuildOptions {
 
 /**
  * `vite build` with `VITE_DATA_BACKEND=starkeep`, whatever the caller's
- * environment says. `config` is merged over `vite.config.ts` as usual.
- * Returns the absolute output directory.
+ * environment says, and assets under `_immutable/`. `config` is merged over
+ * `vite.config.ts` as usual. Returns the absolute output directory.
  */
 export async function buildStarkeepSpa(config: InlineConfig, options: StarkeepBuildOptions = {}): Promise<string> {
   let resolvedBackend: string | undefined;
@@ -138,7 +147,11 @@ export async function buildStarkeepSpa(config: InlineConfig, options: StarkeepBu
   process.env.VITE_DATA_BACKEND = STARKEEP_BACKEND;
   try {
     const { build } = await import("vite");
-    await build({ ...config, plugins: [...(config.plugins ?? []), probe] });
+    await build({
+      ...config,
+      build: { ...config.build, assetsDir: IMMUTABLE_ASSETS_DIR },
+      plugins: [...(config.plugins ?? []), probe],
+    });
   } finally {
     if (previous === undefined) delete process.env.VITE_DATA_BACKEND;
     else process.env.VITE_DATA_BACKEND = previous;

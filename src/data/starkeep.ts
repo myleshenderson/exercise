@@ -8,14 +8,20 @@
  * Postgres schema did for free is done here by hand (starkeep/README.md
  * "Table mapping"):
  * - Ids come from `crypto.randomUUID()` and `created_at`/`recorded_at` from
- *   `new Date().toISOString()`; the server assigns neither.
+ *   `new Date().toISOString()`; the server assigns neither. Starter rows are
+ *   the exception: their ids are fixed (`./starkeep/starterIds.ts`).
  * - `target_sets` is a JSON string in a `text` column.
  * - Soft delete is the app column `archived_at`; reads filter it themselves.
  * - Foreign-key cascades (deleteSession → session_sets) are explicit deletes.
+ * - Every PATCH and DELETE names one row by its `id`, because the row API
+ *   refuses a `where` that does not name the whole primary key as plain
+ *   values. A write to several rows selects their ids first and writes each.
+ *   A write to a row that is not there is not an error, as an update
+ *   matching no row is not in Postgres; `updateExercise` alone reports it.
  * - Joins happen in memory after fetching rows bounded by the method's own
  *   filters, and every list uses `selectAll` so nothing is cut at 500 rows.
- * - First-use seeding is guarded by a row in the Starkeep-only `app_meta`
- *   table instead of Supabase's `seed_claims`.
+ * - First-use seeding writes the starter rows under fixed ids with `ifAbsent`,
+ *   instead of claiming the seed as Supabase's `seed_claims` does.
  *
  * - Ride analytics (AI-822) lives in `./starkeep/rideAnalytics.ts`, over the
  *   ids and row mappers of `./starkeep/rideRows.ts`.
@@ -30,6 +36,8 @@ import { compareText } from "../analysis/sqlSemantics.js";
 import { createRowClient, type Row, type RowClient, type Transport, type Where } from "./starkeep/rows.js";
 import { chunks, IN_CHUNK, selectIn } from "./starkeep/select.js";
 import { createRideAnalytics } from "./starkeep/rideAnalytics.js";
+import { seedDays, seedExercises } from "./seed.js";
+import { starterDayId, starterExerciseId, starterLinkId } from "./starkeep/starterIds.js";
 
 /** Shared with starkeep/handlers.ts. */
 export { selectIn };
@@ -109,22 +117,7 @@ const T = {
   history: "workout_day_exercise_scheme_history",
   sessions: "sessions",
   sets: "session_sets",
-  meta: "app_meta",
 } as const;
-
-/**
- * `app_meta.id` prefix of first-use seeding claims: each claimant writes
- * `seed_claim:<uuid>`. See claimSeed.
- */
-export const SEED_CLAIM_PREFIX = "seed_claim:";
-
-/** How long a claimant waits for concurrent claims to land before deciding. */
-const DEFAULT_CLAIM_SETTLE_MS = 300;
-
-export interface StarkeepDataLayerOptions {
-  /** claimSeed's settle delay; tests pass 0. */
-  claimSettleMs?: number;
-}
 
 const LIVE = { archived_at: null } as const;
 
@@ -171,16 +164,24 @@ function newestFirst(a: SessionRow, b: SessionRow): number {
   return 0;
 }
 
-export function createStarkeepDataLayer(transport: Transport, opts: StarkeepDataLayerOptions = {}): DataLayer {
-  return createStarkeepDataLayerFromRows(createRowClient(transport), opts);
+export function createStarkeepDataLayer(transport: Transport): DataLayer {
+  return createStarkeepDataLayerFromRows(createRowClient(transport));
 }
 
-export function createStarkeepDataLayerFromRows(rows: RowClient, opts: StarkeepDataLayerOptions = {}): DataLayer {
-  const claimSettleMs = opts.claimSettleMs ?? DEFAULT_CLAIM_SETTLE_MS;
-
+export function createStarkeepDataLayerFromRows(rows: RowClient): DataLayer {
   async function first<R extends Row>(table: string, where: Where, order: string[] = []): Promise<R | null> {
     const { rows: found } = await rows.select<R>(table, { where, order, limit: 1 });
     return found[0] ?? null;
+  }
+
+  /** Delete each row by its id: the row API deletes one keyed row per request. */
+  async function removeEach(table: string, ids: string[]): Promise<void> {
+    for (const id of ids) await rows.remove(table, { id });
+  }
+
+  /** The ids of the rows matching `where`. */
+  async function idsWhere(table: string, where: Where): Promise<string[]> {
+    return (await rows.selectAll<{ id: string }>(table, { where, select: ["id"] })).map((r) => r.id);
   }
 
   /**
@@ -198,10 +199,10 @@ export function createStarkeepDataLayerFromRows(rows: RowClient, opts: StarkeepD
         written.push(row.id as string);
       }
     } catch (err) {
-      for (const part of chunks(written)) await rows.remove(table, { id: { in: part } }).catch(() => 0);
+      for (const id of written) await rows.remove(table, { id }).catch(() => undefined);
       throw err;
     }
-    for (const part of chunks(oldIds)) await rows.remove(table, { id: { in: part } });
+    await removeEach(table, oldIds);
   }
 
   async function fetchExercise(id: string): Promise<Exercise | null> {
@@ -257,29 +258,57 @@ export function createStarkeepDataLayerFromRows(rows: RowClient, opts: StarkeepD
   }
 
   return {
-    async claimSeed() {
-      // supabase.ts relies on seed_claims' primary key: a second insert fails.
-      // Starkeep's insert is a last-writer-wins upsert, so one shared claim
-      // row cannot pick a winner. Instead every claimant adds its own row and,
-      // once concurrent claims have had time to land, the lowest id wins:
-      // - Any claim already present → someone else claimed; don't seed.
-      // - Otherwise add ours, wait, and seed only if ours sorts first among
-      //   all claims. Claimants that both got past the check see the same
-      //   set and agree; only one landing more than the settle time after
-      //   the other's read could make both win.
-      const claims = () =>
-        rows.selectAll<{ id: string }>(T.meta, { where: { id: { prefix: SEED_CLAIM_PREFIX } }, select: ["id"] });
-      if ((await claims()).length > 0) return false;
-      const mine = `${SEED_CLAIM_PREFIX}${newId()}`;
-      try {
-        await rows.insert(T.meta, { id: mine, value: now() });
-      } catch (err) {
-        // The write may have landed even though the response failed.
-        if (!(await first(T.meta, { id: mine }))) throw err;
+    async seedStarterData() {
+      // One read decides. A day that is not a starter day means the user has
+      // their own data, such as a user seeded before starter ids were fixed;
+      // every starter day present, live or archived, means the seed finished.
+      // Otherwise write whatever is missing: `ifAbsent` leaves alone a row
+      // another surface or tab already wrote, and a row the user deleted.
+      const starterDays = await Promise.all(seedDays.map((d) => starterDayId(d.id)));
+      const dayIds = new Set((await rows.selectAll<{ id: string }>(T.days, { select: ["id"] })).map((r) => r.id));
+      if ([...dayIds].some((id) => !starterDays.includes(id))) return;
+      if (starterDays.every((id) => dayIds.has(id))) return;
+
+      const at = now();
+      const exerciseIds = new Map<string, string>();
+      for (const e of seedExercises) {
+        const id = await starterExerciseId(e.id);
+        exerciseIds.set(e.id, id);
+        const row: ExerciseRow = {
+          id,
+          name: e.name,
+          cue: e.cue,
+          default_sets: e.defaultSets,
+          default_rep_low: e.defaultRepLow,
+          default_rep_high: e.defaultRepHigh,
+          created_at: at,
+          archived_at: null,
+        };
+        await rows.insert(T.exercises, row, { ifAbsent: true });
       }
-      if (claimSettleMs > 0) await new Promise((resolve) => setTimeout(resolve, claimSettleMs));
-      const all = (await claims()).map((c) => c.id).sort();
-      return all[0] === mine;
+      // Each day's links before the day: the day row is what marks it done.
+      for (const [index, d] of seedDays.entries()) {
+        for (const [position, slug] of d.exerciseIds.entries()) {
+          const link: LinkRow = {
+            id: await starterLinkId(d.id, slug),
+            workout_day_id: starterDays[index],
+            exercise_id: exerciseIds.get(slug)!,
+            position,
+            target_sets: null,
+          };
+          await rows.insert(T.links, link, { ifAbsent: true });
+        }
+        const day: DayRow = {
+          id: starterDays[index],
+          name: d.name,
+          position: d.position,
+          program_id: null,
+          program_position: null,
+          created_at: at,
+          archived_at: null,
+        };
+        await rows.insert(T.days, day, { ifAbsent: true });
+      }
     },
 
     async listExercises() {
@@ -312,11 +341,21 @@ export function createStarkeepDataLayerFromRows(rows: RowClient, opts: StarkeepD
       if (patch.defaultSets !== undefined) dbPatch.default_sets = patch.defaultSets;
       if (patch.defaultRepLow !== undefined) dbPatch.default_rep_low = patch.defaultRepLow;
       if (patch.defaultRepHigh !== undefined) dbPatch.default_rep_high = patch.defaultRepHigh;
-      if (Object.keys(dbPatch).length > 0) await rows.patch(T.exercises, { id }, dbPatch);
-      // supabase.ts's `.single()` throws when no row matched; so does this.
-      const updated = await fetchExercise(id);
-      if (!updated) throw new Error(`Exercise ${id} not found`);
-      return updated;
+      // supabase.ts's `.single()` throws when no row matched; so does this,
+      // whether the row is gone before the read or before the patch.
+      const current = await fetchExercise(id);
+      if (!current) throw new Error(`Exercise ${id} not found`);
+      if (Object.keys(dbPatch).length === 0) return current;
+      const { skipped } = await rows.patch(T.exercises, { id }, dbPatch);
+      if (skipped === "missing") throw new Error(`Exercise ${id} not found`);
+      return {
+        ...current,
+        ...(patch.name !== undefined && { name: patch.name }),
+        ...(patch.cue !== undefined && { cue: patch.cue }),
+        ...(patch.defaultSets !== undefined && { defaultSets: patch.defaultSets }),
+        ...(patch.defaultRepLow !== undefined && { defaultRepLow: patch.defaultRepLow }),
+        ...(patch.defaultRepHigh !== undefined && { defaultRepHigh: patch.defaultRepHigh }),
+      };
     },
     async deleteExercise(id) {
       const usage = await exerciseUsage(id);
@@ -436,7 +475,7 @@ export function createStarkeepDataLayerFromRows(rows: RowClient, opts: StarkeepD
       });
     },
     async removeExerciseFromDay(dayId, exerciseId) {
-      await rows.remove(T.links, { workout_day_id: dayId, exercise_id: exerciseId });
+      await removeEach(T.links, await idsWhere(T.links, { workout_day_id: dayId, exercise_id: exerciseId }));
     },
     async updateDayExercises(dayId, exerciseIds) {
       const existing = await dayLinks(dayId);
@@ -501,7 +540,9 @@ export function createStarkeepDataLayerFromRows(rows: RowClient, opts: StarkeepD
     async setDayExerciseTarget(dayId, exerciseId, sets) {
       const target_sets =
         sets && sets.length > 0 ? JSON.stringify(sets.map((s) => ({ weight: s.weight, reps: s.reps }))) : null;
-      await rows.patch(T.links, { workout_day_id: dayId, exercise_id: exerciseId }, { target_sets });
+      for (const id of await idsWhere(T.links, { workout_day_id: dayId, exercise_id: exerciseId })) {
+        await rows.patch(T.links, { id }, { target_sets });
+      }
       await rows.insert(T.history, {
         id: newId(),
         workout_day_id: dayId,
@@ -595,7 +636,7 @@ export function createStarkeepDataLayerFromRows(rows: RowClient, opts: StarkeepD
     },
     async deleteSession(id) {
       // Postgres cascaded session_sets; Starkeep has no foreign keys.
-      await rows.remove(T.sets, { session_id: id });
+      await removeEach(T.sets, await idsWhere(T.sets, { session_id: id }));
       await rows.remove(T.sessions, { id });
     },
     ...createRideAnalytics(rows),

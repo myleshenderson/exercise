@@ -48,11 +48,15 @@ test("getLastSessionForDay ignores freshly-started empty sessions", async () => 
   expect(last?.performedOn).toBe("2026-06-20"); // still the seeded non-empty one
 });
 
-test("claimSeed succeeds once then refuses further callers", async () => {
+test("seedStarterData seeds once, then a second call seeds nothing", async () => {
   const db = createMockDataLayer({ seed: false });
-  expect(await db.claimSeed()).toBe(true);
-  expect(await db.claimSeed()).toBe(false);
-  expect(await db.claimSeed()).toBe(false);
+  await db.seedStarterData();
+  const days = await db.getWorkoutDays();
+  expect(days.map((d) => d.name)).toEqual(["Leg Day", "Upper Day"]);
+  await db.deleteDay(days[0].id);
+  await db.deleteDay(days[1].id);
+  await db.seedStarterData();
+  expect(await db.getWorkoutDays()).toEqual([]);
 });
 
 test("createMockDataLayer({ seed: false }) starts empty", async () => {

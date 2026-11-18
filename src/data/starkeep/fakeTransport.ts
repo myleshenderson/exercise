@@ -12,7 +12,17 @@
  * - `timestamp` columns accept only canonical `toISOString()` text.
  * - `notNull` columns are rejected on insert. A duplicate primary key is NOT
  *   an error: like the real applier (an `ON CONFLICT DO UPDATE` upsert,
- *   last writer wins), the later insert replaces the row.
+ *   last writer wins), the later insert replaces the row, and revives a
+ *   deleted one.
+ * - `ifAbsent` on an insert writes nothing when a row holds the key, and
+ *   answers `skipped: "live"`, or `"deleted"` for a deleted row (the fake
+ *   keeps the keys it deleted, as the data server keeps tombstones).
+ * - A `PATCH` or `DELETE` `where` must name the whole primary key, and every
+ *   value in it must be a plain value, not an operator object (the data
+ *   server's `requireKeyedWhere` and `checkValue`).
+ * - A `PATCH` of a key no live row holds answers 404 with `skipped:
+ *   "missing"`. A `DELETE` of a deleted row answers 200 with `skipped:
+ *   "deleted"`, and of a key no row ever held, 404 with `skipped: "missing"`.
  * - `order` sorts nulls last unless told otherwise and appends the primary key.
  */
 import type { Transport } from "./rows.js";
@@ -50,6 +60,18 @@ const MAX_LIMIT = 500;
 const ISO_MS_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 class BadRequest extends Error {}
+
+/** A row write the data server answers with a status other than 200, and a body. */
+class WriteAnswer extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: Record<string, unknown>,
+  ) {
+    super(String(body.error ?? status));
+  }
+}
+
+const MISSING = () => new WriteAnswer(404, { error: "No live row holds that key", changes: 0, skipped: "missing" });
 
 type Row = Record<string, unknown>;
 
@@ -134,6 +156,8 @@ export function createFakeTransport(schema: FakeTable[]): FakeTransport {
     tables[t.name] = [];
   }
   const requests: FakeRequest[] = [];
+  /** Keys deleted, by table: the fake's tombstones. */
+  const deleted = new Map<string, Set<unknown>>(schema.map((t) => [t.name, new Set()]));
 
   function tableSchema(name: string): FakeTable {
     const t = byName.get(name);
@@ -310,10 +334,35 @@ export function createFakeTransport(schema: FakeTable[]): FakeTransport {
     return { rows, truncated: more, page_token: more ? btoa(`fake:${offset + limit}`) : null };
   }
 
+  /**
+   * The `where` of a `PATCH` or `DELETE`: the whole primary key, each column a
+   * plain value. Returns the rows it matches.
+   */
+  function keyedTargets(op: "update" | "delete", t: FakeTable, where: Record<string, unknown> | undefined): Row[] {
+    if (!where || Object.keys(where).length === 0) {
+      throw new BadRequest(`app-syncable ${op} for ${t.name} carries no "where"`);
+    }
+    for (const [col, value] of Object.entries(where)) {
+      column(t, col);
+      if (value !== null && typeof value === "object") {
+        throw new BadRequest(`${t.name}: "${col}" is declared ${column(t, col).type} and received an object`);
+      }
+      validateValue(t, col, value);
+    }
+    const key = pk(t);
+    if (where[key] === undefined) {
+      throw new BadRequest(`app-syncable ${op} for ${t.name} names only part of the primary key (missing ${key})`);
+    }
+    return tables[t.name].filter((r) => Object.entries(where).every(([col, value]) => r[col] === value));
+  }
+
   function handleWrite(method: string, t: FakeTable, body: Record<string, unknown>) {
+    const key = pk(t);
+    const tombstones = deleted.get(t.name)!;
     if (method === "POST") {
       const row = body.row as Row | undefined;
       if (!row || typeof row !== "object") throw new BadRequest("row is required");
+      if (body.ifAbsent !== undefined && typeof body.ifAbsent !== "boolean") throw new BadRequest("ifAbsent must be a boolean");
       for (const [k, v] of Object.entries(row)) validateValue(t, k, v);
       const full: Row = {};
       for (const c of t.columns) {
@@ -321,26 +370,36 @@ export function createFakeTransport(schema: FakeTable[]): FakeTransport {
         validateValue(t, c.name, v);
         full[c.name] = v;
       }
-      const key = pk(t);
       const existing = tables[t.name].findIndex((r) => r[key] === full[key]);
+      if (body.ifAbsent) {
+        if (existing !== -1) return { ok: true, changes: 0, skipped: "live" };
+        if (tombstones.has(full[key])) return { ok: true, changes: 0, skipped: "deleted" };
+      }
+      tombstones.delete(full[key]);
       if (existing !== -1) tables[t.name][existing] = full;
       else tables[t.name].push(full);
-      return { ok: true };
+      return { ok: true, changes: 1 };
     }
+    if (body.ifAbsent !== undefined) throw new BadRequest(`${method} does not take ifAbsent`);
     if (method === "PATCH") {
-      const where = body.where as Record<string, unknown> | undefined;
       const patch = body.patch as Row | undefined;
-      if (!where || !patch) throw new BadRequest("where and patch are required");
+      if (!body.where || !patch) throw new BadRequest("where and patch are required");
       if (Object.keys(patch).length === 0) throw new BadRequest("patch is empty");
       for (const [k, v] of Object.entries(patch)) validateValue(t, k, v);
-      const targets = filter(t, where);
+      const targets = keyedTargets("update", t, body.where as Record<string, unknown>);
+      if (targets.length === 0) throw MISSING();
       for (const r of targets) Object.assign(r, patch);
       return { changes: targets.length };
     }
     if (method === "DELETE") {
       const where = body.where as Record<string, unknown> | undefined;
       if (!where) throw new BadRequest("where is required");
-      const doomed = new Set(filter(t, where));
+      const doomed = new Set(keyedTargets("delete", t, where));
+      if (doomed.size === 0) {
+        if (tombstones.has(where[key])) return { changes: 0, skipped: "deleted" };
+        throw MISSING();
+      }
+      for (const r of doomed) tombstones.add(r[key]);
       tables[t.name] = tables[t.name].filter((r) => !doomed.has(r));
       return { changes: doomed.size };
     }
@@ -363,6 +422,7 @@ export function createFakeTransport(schema: FakeTable[]): FakeTransport {
       return json(200, handleWrite(method, t, (body ?? {}) as Record<string, unknown>));
     } catch (err) {
       if (err instanceof BadRequest) return json(400, { error: err.message });
+      if (err instanceof WriteAnswer) return json(err.status, err.body);
       throw err;
     }
   };

@@ -16,6 +16,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import type { DelegatedPrincipal } from "@starkeep/app-client";
 import { createStarkeepDataLayer } from "../src/data/starkeep.js";
 import { createRowClient } from "../src/data/starkeep/rows.js";
 import { withDefaultToolArguments } from "../src/mcp/defaults.js";
@@ -23,7 +24,6 @@ import { registerTools, type McpToolHandlers } from "../src/mcp/handlers.js";
 import { toolError } from "../src/mcp/format.js";
 import { TOOL_DEFINITIONS } from "../src/mcp/tools.js";
 import { createStarkeepHandlers } from "./handlers.js";
-import type { McpRequestContext } from "./mcp-auth.js";
 import { createServerTransport } from "./serverTransport.js";
 
 /** The MCP `serverInfo.name` a client sees after `initialize`. */
@@ -31,31 +31,33 @@ export const MCP_SERVER_NAME = "exercise";
 export const MCP_SERVER_VERSION = "0.1.0";
 
 /**
- * What the server needs to answer tool calls. `context` is who the request
- * acts for, resolved by `mcp-auth.ts` from the bearer token. Without it every
- * tool answers `unauthenticated`; there is no shared fallback client.
+ * What the server needs to answer tool calls. `principal` is who the request
+ * acts for, as `verifyDelegation` returned it. Without it every tool answers
+ * `unauthenticated`; there is no shared fallback client.
  */
 export interface ExerciseMcpDeps {
-  context?: McpRequestContext;
+  principal?: DelegatedPrincipal;
 }
 
-/** Every tool answering `unauthenticated`: what a request with no context gets. */
+/** Every tool answering `unauthenticated`: what a request with no principal gets. */
 function unauthenticatedHandlers(): McpToolHandlers {
   const deny = async () => toolError("unauthenticated");
   return Object.fromEntries(TOOL_DEFINITIONS.map(({ name }) => [name, deny])) as unknown as McpToolHandlers;
 }
 
 /**
- * The tool handlers for one request: a transport carrying that request's user
- * token, a row client and a DataLayer over it. Built per request and never
- * cached, so two requests can never share a transport (and so a user token).
+ * The tool handlers for one request: a transport carrying that request's
+ * delegation token, a row client and a DataLayer over it. Built per request
+ * and never cached, so two requests can never share a transport (and so a
+ * delegation token).
  */
 export function createRequestHandlers(deps: ExerciseMcpDeps): McpToolHandlers {
-  const { context } = deps;
-  if (!context) return unauthenticatedHandlers();
-  // Signs each row request with the app credential and, in the cloud, sends
-  // context.userToken as X-Starkeep-User-Token; locally it is undefined.
-  const transport = createServerTransport({ userToken: context.userToken });
+  const { principal } = deps;
+  if (!principal) return unauthenticatedHandlers();
+  // Signs each row request with the app credential and, in the cloud,
+  // forwards principal.token, so the platform applies the delegation's mode
+  // and revocation to every call. Locally the token is null.
+  const transport = createServerTransport({ delegation: principal.token });
   return createStarkeepHandlers(createStarkeepDataLayer(transport), createRowClient(transport));
 }
 

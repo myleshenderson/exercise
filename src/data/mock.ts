@@ -14,7 +14,7 @@ import type {
   SyncState,
 } from "../types";
 import type { RideFixtures } from "../rides/testing/fixtures";
-import { seedExercises, seedDays, seedSessions } from "./seed";
+import { seedExercises, seedDays, seedSessions, seedWithClaim } from "./seed";
 import { findLastSetsForExercise } from "../lib/lastSession";
 import { nextAvailablePositionByProgram, isDayAvailable } from "../lib/programAvailability";
 import { compareText, timestampMicros } from "../analysis/sqlSemantics";
@@ -63,12 +63,13 @@ export function createMockDataLayer(opts?: { seed?: boolean; rides?: RideFixture
   const instant = (ts: string) => timestampMicros(ts);
   const byInstant = (x: string, y: string) => Number(instant(x) - instant(y));
 
-  return {
-    async claimSeed() {
-      if (seedClaimed) return false;
-      seedClaimed = true;
-      return true;
-    },
+  const db: DataLayer = {
+    seedStarterData: () =>
+      seedWithClaim(db, async () => {
+        if (seedClaimed) return false;
+        seedClaimed = true;
+        return true;
+      }),
     async listExercises() {
       return exercises.slice();
     },
@@ -437,4 +438,5 @@ export function createMockDataLayer(opts?: { seed?: boolean; rides?: RideFixture
         .map((s) => structuredClone(s));
     },
   };
+  return db;
 }

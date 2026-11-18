@@ -1,21 +1,24 @@
 // @vitest-environment node
 /**
- * Smoke test for the local Starkeep server (AI-617): a real Starkeep-mode
- * build of the SPA, served by `startServer` on a free loopback port, driven
- * over `node:http` the way a browser or MCP client reaches it.
+ * Smoke test for the local Starkeep server: a real Starkeep-mode build of the
+ * SPA, served by the platform's `serveLocal` with `serve.ts`'s options on a
+ * free loopback port, driven over `node:http` the way a browser or MCP client
+ * reaches it.
  *
  * `node:http` rather than `fetch`: `fetch` will not set a `Host` header, and
- * the global `fetch` is stubbed with a `FakeDataPlane` for the data server,
- * which would also catch the test's own requests.
+ * the global `fetch` is stubbed for the data server, which would also catch
+ * the test's own requests.
  */
 import { request as httpRequest } from "node:http";
+import type { AddressInfo } from "node:net";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, relative, sep } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { FakeDataPlane, TEST_CREDS } from "./test-support.js";
-import { assertStarkeepMainChunk, buildStarkeepSpa, mainChunkPath } from "./spa-build.js";
+import { localPort, serveLocal } from "@starkeep/app-client/local";
+import manifest from "../starkeep.manifest.json" with { type: "json" };
+import { INITIALIZE, mcpHeaders, TEST_CREDS } from "./test-support.js";
+import { assertStarkeepMainChunk, BACKEND_MARKER, mainChunkPath } from "./spa-build.js";
 
 vi.mock("@starkeep/app-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@starkeep/app-client")>();
@@ -23,9 +26,8 @@ vi.mock("@starkeep/app-client", async (importOriginal) => {
 });
 
 // After the mock: `serve.ts` loads `server.ts`, which must see it.
-const { portFromArgv, startServer } = await import("./serve.js");
+const { ensureStarkeepDist, localServerOptions } = await import("./serve.js");
 
-const APP_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BUILD_TIMEOUT = 180_000;
 
 interface Reply {
@@ -37,7 +39,8 @@ interface Reply {
 
 let tempDir: string;
 let outDir: string;
-let server: { port: number; close: () => Promise<void> } | undefined;
+let server: ReturnType<typeof serveLocal> | undefined;
+let port: number;
 
 function request(
   path: string,
@@ -45,7 +48,7 @@ function request(
 ): Promise<Reply> {
   return new Promise((done, fail) => {
     const req = httpRequest(
-      { host: "127.0.0.1", port: server!.port, path, method: opts.method ?? "GET", headers: opts.headers, agent: false },
+      { host: "127.0.0.1", port, path, method: opts.method ?? "GET", headers: opts.headers, agent: false },
       (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (c: Buffer) => chunks.push(c));
@@ -65,61 +68,63 @@ function request(
 beforeAll(async () => {
   tempDir = mkdtempSync(join(tmpdir(), "exercise-serve-"));
   outDir = join(tempDir, "dist");
-  await buildStarkeepSpa(
-    { root: APP_DIR, logLevel: "warn", build: { outDir, emptyOutDir: true } },
-    { marker: true },
-  );
-  // The marker is written and the build is newer than its sources, so this does not rebuild.
-  server = await startServer({ distDir: outDir, port: 0 });
+  // The directory is empty, so this builds it.
+  await ensureStarkeepDist(outDir);
+  await new Promise<void>((listening) => {
+    server = serveLocal({ ...localServerOptions(outDir), port: 0, onListen: () => listening() });
+  });
+  port = (server!.address() as AddressInfo).port;
 }, BUILD_TIMEOUT);
 
 afterAll(async () => {
-  await server?.close();
+  await new Promise<void>((closed) => (server ? server.close(() => closed()) : closed()));
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
 });
 
-let plane: FakeDataPlane;
+/** Requests that reached the (stubbed) data server. */
+let dataHits: number;
 beforeEach(() => {
   delete process.env.STARKEEP_APP_CLIENT_MODE;
-  plane = new FakeDataPlane();
-  vi.stubGlobal("fetch", plane.fetch);
+  dataHits = 0;
+  vi.stubGlobal("fetch", async () => {
+    dataHits += 1;
+    return Response.json({ rows: [], truncated: false, page_token: null });
+  });
 });
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("startServer (real Starkeep build)", () => {
-  it("binds a real port when asked for port 0", () => {
-    expect(server!.port).toBeGreaterThan(0);
+describe("the local server (real Starkeep build)", () => {
+  it("rebuilt the missing dist/ as a Starkeep build", () => {
+    expect(readFileSync(join(outDir, BACKEND_MARKER), "utf8").trim()).toBe("starkeep");
+    expect(() => assertStarkeepMainChunk(outDir)).not.toThrow();
   });
 
-  it("GET / answers the shell; client routes and missing assets fall back to it", async () => {
+  it("answers the shell for / and the client routes, and 404 for any other path", async () => {
     const root = await request("/");
     expect(root.status).toBe(200);
     expect(root.headers["content-type"]).toBe("text/html; charset=utf-8");
     expect(root.text).toContain('<div id="root">');
 
-    const route = await request("/some/client/route");
-    expect(route.status).toBe(200);
-    expect(route.text).toBe(root.text);
+    for (const route of ["/mcp-login", "/history/2026-11-17", "/activities/42"]) {
+      const res = await request(route);
+      expect(res.status, route).toBe(200);
+      expect(res.text, route).toBe(root.text);
+    }
 
-    const missing = await request("/assets/nonexistent.js");
-    expect(missing.status).toBe(200);
-    expect(missing.headers["content-type"]).toBe("text/html; charset=utf-8");
-    expect(missing.text).toBe(root.text);
+    expect((await request("/some/client/route")).status).toBe(404);
+    expect((await request("/_immutable/nonexistent.js")).status).toBe(404);
   });
 
-  it("GET /mcp-login answers the shell, and the main chunk is a Starkeep build served byte-identical", async () => {
-    const login = await request("/mcp-login");
-    expect(login.status).toBe(200);
-    expect(login.text).toContain('<div id="root">');
-
-    expect(() => assertStarkeepMainChunk(outDir)).not.toThrow();
+  it("serves the main chunk byte-identical, cached as immutable", async () => {
     const chunk = mainChunkPath(outDir);
     const urlPath = "/" + relative(outDir, chunk).split(sep).join("/");
+    expect(urlPath.startsWith("/_immutable/")).toBe(true);
     const served = await request(urlPath);
     expect(served.status).toBe(200);
     expect(served.headers["content-type"]).toBe("application/javascript; charset=utf-8");
+    expect(served.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
     expect(served.body.equals(readFileSync(chunk))).toBe(true);
   });
 
@@ -129,33 +134,43 @@ describe("startServer (real Starkeep build)", () => {
     expect(res.headers.allow).toBe("POST");
   });
 
-  it("POST /mcp without a bearer is 401 unauthorized", async () => {
+  it("POST /mcp from a loopback client without a token answers initialize", async () => {
+    const res = await request("/mcp", { method: "POST", headers: mcpHeaders(), body: JSON.stringify(INITIALIZE) });
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.text)).toMatchObject({ result: { serverInfo: { name: "exercise" } } });
+  });
+
+  it("refuses POST /mcp sent by a page on another site with 403, before the app runs", async () => {
     const res = await request("/mcp", {
       method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }),
+      headers: { ...mcpHeaders(), "sec-fetch-site": "cross-site" },
+      body: JSON.stringify(INITIALIZE),
     });
-    expect(res.status).toBe(401);
-    expect(JSON.parse(res.text)).toEqual({ error: "unauthorized" });
-  });
-
-  it("GET /api/mcp-sessions from a foreign Origin is 403 forbidden_origin", async () => {
-    const res = await request("/api/mcp-sessions", { headers: { origin: "https://evil.example" } });
     expect(res.status).toBe(403);
-    expect(JSON.parse(res.text)).toEqual({ error: "forbidden_origin" });
+    expect(dataHits).toBe(0);
   });
 
-  it("GET /api/mcp-sessions from the server's own loopback Origin lists sessions from the data plane", async () => {
-    const res = await request("/api/mcp-sessions", { headers: { origin: `http://127.0.0.1:${server!.port}` } });
-    expect(res.status).toBe(200);
-    expect(JSON.parse(res.text)).toEqual({ sessions: [] });
-    expect(plane.requestsTo("GET").length).toBeGreaterThan(0);
+  it("refuses a data proxy write from another site with 403, before it reaches the data server", async () => {
+    const body = JSON.stringify({ rows: [{ id: "p1", name: "x" }] });
+    const bySite = await request("/api/local-data/app-data/db/programs", {
+      method: "POST",
+      headers: { "content-type": "text/plain", "sec-fetch-site": "cross-site" },
+      body,
+    });
+    expect(bySite.status).toBe(403);
+    // A browser without Sec-Fetch-Site still names the page's Origin.
+    const byOrigin = await request("/api/local-data/app-data/db/programs", {
+      method: "POST",
+      headers: { "content-type": "text/plain", origin: "https://evil.example" },
+      body,
+    });
+    expect(byOrigin.status).toBe(403);
+    expect(dataHits).toBe(0);
   });
 
-  it("a non-loopback Host is 403", async () => {
+  it("refuses a non-loopback Host with 403", async () => {
     const res = await request("/", { headers: { host: "not-loopback.example" } });
     expect(res.status).toBe(403);
-    expect(JSON.parse(res.text)).toEqual({ error: "Exercise answers on its loopback address only" });
   });
 
   it("GET /starkeep-runtime-config is 200 JSON", async () => {
@@ -164,39 +179,10 @@ describe("startServer (real Starkeep build)", () => {
     expect(res.headers["content-type"]).toMatch(/^application\/json/);
     expect(() => JSON.parse(res.text)).not.toThrow();
   });
-
-  it("POST to a client path is 405 with Allow: GET, HEAD", async () => {
-    const res = await request("/", { method: "POST", body: "x" });
-    expect(res.status).toBe(405);
-    expect(res.headers.allow).toBe("GET, HEAD");
-  });
 });
 
-describe("portFromArgv", () => {
-  const envPort = process.env.PORT;
-  afterEach(() => {
-    if (envPort === undefined) delete process.env.PORT;
-    else process.env.PORT = envPort;
-  });
-
-  it("reads -p and --port", () => {
-    delete process.env.PORT;
-    expect(portFromArgv(["-p", "5199"])).toBe(5199);
-    expect(portFromArgv(["--port", "5200"])).toBe(5200);
-  });
-
-  it("prefers the flag over PORT and falls back to PORT without one", () => {
-    process.env.PORT = "6000";
-    expect(portFromArgv(["-p", "5199"])).toBe(5199);
-    expect(portFromArgv([])).toBe(6000);
-  });
-
-  it("throws on a missing or invalid port", () => {
-    delete process.env.PORT;
-    expect(() => portFromArgv([])).toThrow(/needs a port/);
-    expect(() => portFromArgv(["-p"])).toThrow(/needs a port/);
-    expect(() => portFromArgv(["-p", "abc"])).toThrow(/needs a port/);
-    expect(() => portFromArgv(["--port", "0"])).toThrow(/needs a port/);
-    expect(() => portFromArgv(["-p", "1.5"])).toThrow(/needs a port/);
+describe("the port flag", () => {
+  it("is the flag serveLocal reads, so admin-web's port reaches the server", () => {
+    expect(localPort(["node", "serve.ts", manifest.localRun.portFlag, "5199"], {})).toBe(5199);
   });
 });

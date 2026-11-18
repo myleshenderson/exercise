@@ -17,24 +17,11 @@
 import { createWebAppHandler } from "@starkeep/app-client/web";
 import { honoUpstream } from "@starkeep/app-client/hono";
 import manifest from "../starkeep.manifest.json" with { type: "json" };
-import { CLIENT_ROUTES, IMMUTABLE_PREFIX } from "./client-routes.js";
-
-const shell = manifest.infraRequirements.compute.handlers.find((h) => h.name === "static");
-if (!shell) throw new Error("exercise manifest has no `static` compute handler");
-
-const clientRoutes: readonly string[] = CLIENT_ROUTES;
-
-// The manifest's `staticAssetPaths` is everything answered from disk ahead of
-// the app; the adapter wants the shell routes separately.
-const staticPaths = shell.staticAssetPaths.filter((p) => !clientRoutes.includes(p));
+import { staticOptions } from "./client-routes.js";
 
 export const handler = await createWebAppHandler({
   basePath: process.env.STARKEEP_APP_BASE_PATH || `/apps/${manifest.id}`,
-  assetsDir: new URL("./assets/", import.meta.url),
-  staticPaths,
-  shellPaths: [...clientRoutes],
-  immutablePaths: [IMMUTABLE_PREFIX],
-  staticMiss: "notFound",
+  ...staticOptions(new URL("./assets/", import.meta.url)),
   requestUpstream: import("./server.js").then((m) => ({ handler: honoUpstream(m.app) })),
   onError: (err) => ({
     statusCode: 500,

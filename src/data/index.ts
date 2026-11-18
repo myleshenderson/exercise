@@ -8,7 +8,7 @@ import { buildRideFixtures } from "../rides/testing/fixtures";
 // method to the interface without listing it here is a type error.
 const METHODS: Record<keyof DataLayer, true> = {
   listExercises: true, getExercise: true, createExercise: true, updateExercise: true, deleteExercise: true,
-  findDayByName: true, findExerciseByName: true, findProgramByName: true, claimSeed: true,
+  findDayByName: true, findExerciseByName: true, findProgramByName: true, seedStarterData: true,
   getWorkoutDays: true, getDayExercises: true, createDay: true, deleteDay: true, addExerciseToDay: true,
   removeExerciseFromDay: true, updateDayExercises: true, updateDayName: true, createProgram: true,
   renameProgram: true, deleteProgram: true, addDayToProgram: true, removeDayFromProgram: true,

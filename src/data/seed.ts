@@ -1,4 +1,5 @@
-import type { Exercise, WorkoutDay, Session } from "../types";
+import type { DataLayer } from "./DataLayer.js";
+import type { Exercise, WorkoutDay, Session } from "../types.js";
 
 export const seedExercises: Exercise[] = [
   { id: "leg-press", name: "Leg Press", cue: "main driver", defaultSets: 3, defaultRepLow: 10, defaultRepHigh: 12 },
@@ -53,3 +54,36 @@ export const seedSessions: Session[] = [
     ],
   },
 ];
+
+/**
+ * First-use seeding through the DataLayer's own methods, guarded by `claim`:
+ * true for exactly one caller among any concurrent callers (exercise-c9l).
+ * Supabase claims with a `seed_claims` row and the mock with a flag. The
+ * starter rows get the backend's own ids.
+ */
+export async function seedWithClaim(db: DataLayer, claim: () => Promise<boolean>): Promise<void> {
+  if (!(await claim())) return;
+
+  const existing = await db.getWorkoutDays();
+  if (existing.length > 0) return;
+
+  const exIdBySlug: Record<string, string> = {};
+  for (const ex of seedExercises) {
+    const created = await db.createExercise({
+      name: ex.name,
+      cue: ex.cue,
+      defaultSets: ex.defaultSets,
+      defaultRepLow: ex.defaultRepLow,
+      defaultRepHigh: ex.defaultRepHigh,
+    });
+    exIdBySlug[ex.id] = created.id;
+  }
+
+  for (const day of seedDays) {
+    const created = await db.createDay(day.name);
+    await db.updateDayExercises(
+      created.id,
+      day.exerciseIds.map((slug) => exIdBySlug[slug]),
+    );
+  }
+}

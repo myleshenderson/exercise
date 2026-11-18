@@ -22,6 +22,7 @@ import type {
   SyncSource,
 } from "../types.js";
 import { getSupabase } from "./supabaseClient.js";
+import { seedWithClaim } from "./seed.js";
 import { nextAvailablePositionByProgram, isDayAvailable } from "../lib/programAvailability.js";
 
 interface ExerciseRow {
@@ -869,8 +870,8 @@ export function createSupabaseDataLayer(): DataLayer {
   /** Rows per getLastSetsForExercise read; a session holding more sets of the exercise takes one follow-up read. */
   const LAST_SETS_LIMIT = 200;
 
-  return {
-    claimSeed: () => claimSeed(supabase),
+  const db: DataLayer = {
+    seedStarterData: () => seedWithClaim(db, () => claimSeed(supabase)),
     listExercises: () => listExercises(supabase),
     getExercise: (id) => fetchExercise(id),
     createExercise: (input) => createExercise(supabase, input),
@@ -1114,4 +1115,5 @@ export function createSupabaseDataLayer(): DataLayer {
     upsertDailyTrainingLoad: (rows) => upsertDailyTrainingLoad(supabase, rows),
     listSyncState: () => listSyncState(supabase),
   };
+  return db;
 }

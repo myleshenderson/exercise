@@ -3,14 +3,15 @@
 /// <reference types="vite/client" />
 /**
  * All 32 MCP tools under Starkeep (AI-604), called in-process through the
- * Hono app's `POST /mcp` with a real sealed bearer token.
+ * Hono app's `POST /mcp`.
  *
- * Real: the Hono app, token auth, `createServerTransport` → `signedFetch`,
- * the Starkeep DataLayer and row client, `starkeep/handlers.ts`, the analysis
- * functions. Stubbed: the app credential, Cognito (cloud tests), and the data
- * server (global `fetch`): `mcp_tokens` goes to a {@link FakeDataPlane}, every
- * app table to `createFakeTransport` over the manifest's tables, one per user
- * token so the cloud tests see per-user scoping.
+ * Real: the Hono app, the local `verifyDelegation` check,
+ * `createServerTransport` → `signedFetch`, the Starkeep DataLayer and row
+ * client, `starkeep/handlers.ts`, the analysis functions. Stubbed: the app
+ * credential, the cloud `verifyDelegation` (the platform's token check, which
+ * core tests), and the data server (global `fetch`): every app table goes to
+ * `createFakeTransport` over the manifest's tables, one per delegated user so
+ * the cloud tests see per-user scoping.
  *
  * Parity: the same scenario is also loaded into a fake Supabase and the
  * Supabase handler set in `api/mcp.ts` is run over HTTP. Each parity test
@@ -35,28 +36,29 @@ import { createStarkeepDataLayer } from "../src/data/starkeep.js";
 import type {
   ActivityStream, AthleteSettings, BodyWeight, DailyTrainingLoad, ExternalActivity, FtpHistoryEntry, SyncState,
 } from "../src/types.js";
-import { FakeDataPlane, fakeJwt, mcpHeaders, TEST_CREDS } from "./test-support.js";
+import { mcpHeaders, TEST_CREDS } from "./test-support.js";
 import type { Transport } from "./serverTransport.js";
 import { DEFAULT_ATHLETE_TIMEZONE, todayIn } from "../src/metrics/dates.js";
 
 // ---- module stubs -------------------------------------------------------------
 
-const cognito = vi.hoisted(() => ({
-  refreshTokens: vi.fn<(cfg: unknown, rt: string) => Promise<{ idToken: string; accessToken: string; expiresIn: number }>>(),
-}));
-const created = vi.hoisted(() => ({ transports: [] as { userToken: string | undefined; transport: unknown }[] }));
+/** The delegation tokens the cloud tests issue, and whom each acts for. */
+const delegations = vi.hoisted(() => new Map<string, { userId: string; mode: "read" | "readwrite" }>());
+const created = vi.hoisted(() => ({ transports: [] as { delegation: string | null; transport: unknown }[] }));
 
 vi.mock("@starkeep/app-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@starkeep/app-client")>();
-  return { ...actual, loadAppCredentials: async () => TEST_CREDS };
-});
-
-vi.mock("@starkeep/app-client/auth", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@starkeep/app-client/auth")>();
   return {
     ...actual,
-    poolConfig: () => ({ region: "us-east-1", userPoolId: "pool", userPoolClientId: "client" }),
-    refreshTokens: cognito.refreshTokens,
+    loadAppCredentials: async () => TEST_CREDS,
+    // Cloud: a token in `delegations` verifies, as a token the deployment
+    // signed would. Local: the real check, which admits a loopback caller.
+    verifyDelegation: async (req: Request) => {
+      if (process.env.STARKEEP_APP_CLIENT_MODE !== "cloud") return actual.verifyDelegation(req);
+      const token = /^Bearer\s+(\S+)$/i.exec(req.headers.get("authorization") ?? "")?.[1];
+      const d = token === undefined ? undefined : delegations.get(token);
+      return d ? { surface: "cloud", userId: d.userId, delegationId: token, mode: d.mode, token } : null;
+    },
   };
 });
 
@@ -65,9 +67,9 @@ vi.mock("./serverTransport.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./serverTransport.js")>();
   return {
     ...actual,
-    createServerTransport: (opts: { userToken?: string } = {}): Transport => {
+    createServerTransport: (opts: { delegation?: string | null } = {}): Transport => {
       const transport = actual.createServerTransport(opts);
-      created.transports.push({ userToken: opts.userToken, transport });
+      created.transports.push({ delegation: opts.delegation ?? null, transport });
       return transport;
     },
   };
@@ -82,7 +84,6 @@ vi.stubEnv("SUPABASE_URL", "https://example.supabase.co");
 vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "service-key");
 
 const { createApp } = await import("./server.js");
-const { resetMcpAuthCaches } = await import("./mcp-auth.js");
 /**
  * The ride fixtures. testFixtures.ts reaches src/data/mock.ts, whose
  * extensionless imports tsconfig.starkeep.json (nodenext) cannot check, so the
@@ -403,18 +404,17 @@ const sb = {
 // withRideTables: AI-824 declares the ride tables in the manifest; until it lands, its declaration's copy.
 const SCHEMA = withRideTables(manifest.infraRequirements.appSpecificSyncable.tables as FakeTable[]);
 
-let plane: FakeDataPlane;
-/** App tables per `X-Starkeep-User-Token` (null: local mode). */
+/** App tables per delegated user (null: local mode). */
 let stores: Map<string | null, FakeTransport>;
-/** Every app-table request the data server received. */
-let dataRequests: { method: string; path: string; userToken: string | null }[];
+/** Every app-table request the data server received, with its `X-Starkeep-Delegation`. */
+let dataRequests: { method: string; path: string; delegation: string | null }[];
 const realFetch = globalThis.fetch;
 
-function store(userToken: string | null): FakeTransport {
-  let s = stores.get(userToken);
+function store(userId: string | null): FakeTransport {
+  let s = stores.get(userId);
   if (!s) {
     s = createFakeTransport(SCHEMA);
-    stores.set(userToken, s);
+    stores.set(userId, s);
   }
   return s;
 }
@@ -464,7 +464,7 @@ const RIDE_JSON_COLUMNS: Record<string, string[]> = {
 async function seedRides(): Promise<void> {
   const { fixtures } = buildUuidRideFixtures(new Date());
   const s = store(null);
-  const db = createStarkeepDataLayer(s.transport, { claimSettleMs: 0 });
+  const db = createStarkeepDataLayer(s.transport);
   const key = new Map(fixtures.activities.map((a) => [a.id, externalActivityId(a.source, a.sourceId)]));
   await db.upsertExternalActivities(
     fixtures.activities.map(({ id: _id, syncedAt: _syncedAt, ...a }) => ({
@@ -497,11 +497,12 @@ async function seedRides(): Promise<void> {
 async function dataServerFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
   const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
   if (url.origin !== new URL(TEST_CREDS.dataServerUrl).origin) return realFetch(input, init);
-  if (url.pathname === "/app-data/db/mcp_tokens") return plane.fetch(input, init);
-  const userToken = new Headers(init?.headers).get("x-starkeep-user-token");
+  const delegation = new Headers(init?.headers).get("x-starkeep-delegation");
   const method = (init?.method ?? "GET").toUpperCase();
-  dataRequests.push({ method, path: url.pathname + url.search, userToken });
-  return store(userToken).transport(url.pathname + url.search, { method, body: init?.body });
+  dataRequests.push({ method, path: url.pathname + url.search, delegation });
+  // The cloud data plane scopes rows to the delegation's user.
+  const userId = delegation === null ? null : (delegations.get(delegation)?.userId ?? "unknown");
+  return store(userId).transport(url.pathname + url.search, { method, body: init?.body });
 }
 
 // ---- callers --------------------------------------------------------------------
@@ -512,7 +513,6 @@ interface ToolReply {
 }
 
 let app: ReturnType<typeof createApp>;
-let localToken: string;
 let rpcId = 0;
 
 function toolCall(name: string, args?: Record<string, unknown>) {
@@ -522,7 +522,8 @@ function toolCall(name: string, args?: Record<string, unknown>) {
 /** Every tool called through the Starkeep app in this file; the last test checks all 32. */
 const called = new Set<string>();
 
-async function callStarkeep(name: string, args?: Record<string, unknown>, token = localToken): Promise<ToolReply> {
+/** Calls a tool locally, or in the cloud as the holder of `token`. */
+async function callStarkeep(name: string, args?: Record<string, unknown>, token?: string): Promise<ToolReply> {
   called.add(name);
   const res = await app.request("/mcp", { method: "POST", headers: mcpHeaders(token), body: toolCall(name, args) });
   expect(res.status).toBe(200);
@@ -603,13 +604,10 @@ afterAll(async () => {
 
 beforeEach(() => {
   delete process.env.STARKEEP_APP_CLIENT_MODE;
-  resetMcpAuthCaches();
-  cognito.refreshTokens.mockReset();
+  delegations.clear();
   created.transports.length = 0;
-  plane = new FakeDataPlane();
   stores = new Map();
   dataRequests = [];
-  localToken = plane.seed().token;
   seedStarkeep(store(null));
   supabaseRides = {};
   seedSupabase();
@@ -1098,68 +1096,78 @@ describe("auth context", () => {
     expect(dataRequests).toHaveLength(0);
   });
 
-  it("local mode sends no user token", async () => {
+  it("local mode sends no delegation token", async () => {
     await callStarkeep("list_exercises");
     expect(dataRequests.length).toBeGreaterThan(0);
-    for (const r of dataRequests) expect(r.userToken).toBeNull();
+    for (const r of dataRequests) expect(r.delegation).toBeNull();
+  });
+
+  it("local mode refuses a request a page on another site sent", async () => {
+    const res = await app.request("/mcp", {
+      method: "POST",
+      headers: { ...mcpHeaders(), "sec-fetch-site": "cross-site" },
+      body: toolCall("list_exercises"),
+    });
+    expect(res.status).toBe(401);
+    expect(dataRequests).toHaveLength(0);
   });
 });
 
-// ---- cloud: per-user tokens -------------------------------------------------
+// ---- cloud: delegation tokens ------------------------------------------------
 
 describe("cloud mode", () => {
-  /** Cognito: refresh-<user> mints an ID token for <user>, distinct per mint. */
-  let mints = 0;
-  const subOf = (idToken: string | undefined | null) =>
-    idToken ? (JSON.parse(Buffer.from(idToken.split(".")[1]!, "base64url").toString()) as { sub: string }).sub : null;
-
   beforeEach(() => {
     process.env.STARKEEP_APP_CLIENT_MODE = "cloud";
-    mints = 0;
-    cognito.refreshTokens.mockImplementation(async (_cfg, rt) => {
-      mints += 1;
-      const sub = rt.replace(/^refresh-/, "");
-      // A distinct suffix per mint, after the signature, keeps the JWT decodable.
-      return { idToken: `${fakeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, sub })}${mints}`, accessToken: "x", expiresIn: 3600 };
-    });
-    plane.ownerOf = (t) => subOf(t);
   });
 
-  async function userWith(sub: string, exerciseName: string) {
-    const { token } = plane.seed({ owner: sub, rt: `refresh-${sub}`, sub });
-    // The data plane scopes rows by user: give each user their own store,
-    // keyed by whatever ID token Cognito mints for them on first use.
-    const warm = await callStarkeep("training_gaps", {}, token);
-    expect(warm.isError).toBeUndefined();
-    const idToken = dataRequests.at(-1)!.userToken!;
-    expect(subOf(idToken)).toBe(sub);
-    const s = store(idToken);
+  /** A `readwrite` delegation for `userId`, whose own store holds one exercise. */
+  function userWith(userId: string, exerciseName: string) {
+    const token = `skd_${userId}`;
+    delegations.set(token, { userId, mode: "readwrite" });
+    const s = store(userId);
     s.tables.exercises = [
       { id: crypto.randomUUID(), name: exerciseName, cue: "", default_sets: 3, default_rep_low: 8, default_rep_high: 10, created_at: TS("08-01"), archived_at: null },
     ];
-    return { token, idToken, store: s };
+    return { token, store: s };
   }
 
-  it("every row request during a tool call carries the context's user token", async () => {
-    const a = await userWith("user-a", "A Press");
+  it("no bearer is a 401 challenge without invalid_token, and reads nothing", async () => {
+    const res = await app.request("/mcp", { method: "POST", headers: mcpHeaders(), body: toolCall("list_exercises") });
+    expect(res.status).toBe(401);
+    const challenge = res.headers.get("www-authenticate") ?? "";
+    expect(challenge).toMatch(/^Bearer /);
+    expect(challenge).not.toContain("invalid_token");
+    expect(dataRequests).toHaveLength(0);
+  });
+
+  it("a bearer that is not a valid delegation is a 401 with invalid_token, and reads nothing", async () => {
+    const res = await app.request("/mcp", {
+      method: "POST",
+      headers: mcpHeaders("exr_an-old-exercise-token"),
+      body: toolCall("list_exercises"),
+    });
+    expect(res.status).toBe(401);
+    expect(res.headers.get("www-authenticate")).toContain('error="invalid_token"');
+    expect(dataRequests).toHaveLength(0);
+  });
+
+  it("every row request during a tool call carries the request's delegation token", async () => {
+    const a = userWith("user-a", "A Press");
     a.store.tables.workout_days = [
       { id: D1, name: "Push", position: 0, program_id: null, program_position: null, created_at: TS("08-01"), archived_at: null },
     ];
     const exerciseId = a.store.tables.exercises![0]!.id as string;
-    dataRequests = [];
     const r = await callStarkeep("add_exercise_to_day", { day_id: D1, exercise_id: exerciseId }, a.token);
     expect(text(r)).toBe(json({ day_id: D1, exercise_id: exerciseId }));
     // findDay, findExercise, duplicate check, last position, insert.
     expect(dataRequests.length).toBeGreaterThanOrEqual(5);
-    for (const req of dataRequests) expect(req.userToken).toBe(a.idToken);
+    for (const req of dataRequests) expect(req.delegation).toBe(a.token);
     expect(a.store.tables.workout_day_exercises).toHaveLength(1);
   });
 
-  it("two concurrent requests with different contexts never share a transport", async () => {
-    const a = await userWith("user-a", "A Press");
-    const b = await userWith("user-b", "B Row");
-    created.transports.length = 0;
-    dataRequests = [];
+  it("two concurrent requests for different users never share a transport", async () => {
+    const a = userWith("user-a", "A Press");
+    const b = userWith("user-b", "B Row");
 
     const [ra, rb] = await Promise.all([
       callStarkeep("list_exercises", undefined, a.token),
@@ -1168,15 +1176,15 @@ describe("cloud mode", () => {
     expect((JSON.parse(text(ra)) as { name: string }[]).map((e) => e.name)).toEqual(["A Press"]);
     expect((JSON.parse(text(rb)) as { name: string }[]).map((e) => e.name)).toEqual(["B Row"]);
 
-    // One transport for the auth lookup and one for the tools, per request;
-    // all distinct objects, each bound to its own request's user token.
-    expect(created.transports).toHaveLength(4);
-    expect(new Set(created.transports.map((t) => t.transport)).size).toBe(4);
-    expect(created.transports.map((t) => t.userToken).sort()).toEqual([a.idToken, a.idToken, b.idToken, b.idToken].sort());
+    // One transport per request, distinct objects, each bound to its own
+    // request's delegation token.
+    expect(created.transports).toHaveLength(2);
+    expect(new Set(created.transports.map((t) => t.transport)).size).toBe(2);
+    expect(created.transports.map((t) => t.delegation).sort()).toEqual([a.token, b.token].sort());
 
     const appReads = dataRequests.filter((r) => r.path.startsWith("/app-data/db/exercises"));
     expect(appReads).toHaveLength(2);
-    expect(appReads.map((r) => r.userToken).sort()).toEqual([a.idToken, b.idToken].sort());
+    expect(appReads.map((r) => r.delegation).sort()).toEqual([a.token, b.token].sort());
   });
 });
 
@@ -1185,7 +1193,7 @@ describe("coverage", () => {
   it("every one of the 32 tools in tools/list was called through the Starkeep app above", async () => {
     const res = await app.request("/mcp", {
       method: "POST",
-      headers: mcpHeaders(localToken),
+      headers: mcpHeaders(),
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
     });
     const names = ((await res.json()) as { result: { tools: { name: string }[] } }).result.tools.map((t) => t.name);

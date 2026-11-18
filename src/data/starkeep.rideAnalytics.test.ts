@@ -42,7 +42,7 @@ afterEach(() => {
 });
 
 function setup(fake: FakeTransport = createFakeTransport(TABLES)) {
-  return { db: createStarkeepDataLayer(fake.transport, { claimSettleMs: 0 }), fake };
+  return { db: createStarkeepDataLayer(fake.transport), fake };
 }
 
 const ride = (sourceId: string, startedAt: string, over: Partial<ExternalActivityInput> = {}): ExternalActivityInput => ({
@@ -305,7 +305,7 @@ describe("activity streams", () => {
       { call: "DELETE activity_streams" },
       { call: "POST activity_streams" },
     ]);
-    expect(fake.requests[before + 2].body).toEqual({ where: { id: { in: ["garmin:g-1:heart_rate"] } } });
+    expect(fake.requests[before + 2].body).toEqual({ where: { id: "garmin:g-1:heart_rate" } });
     expect(await db.getActivityStreams(a1.id)).toEqual([{ activityId: a1.id, channel: "power", startOffsetS: 0, values: [110] }]);
     expect(fake.tables.activity_streams.find((r) => r.id === "garmin:g-1:power")).toMatchObject({ created_at: NOW });
     expect((await db.getActivityStreams(a2.id)).map((s) => s.channel)).toEqual(["heart_rate"]);

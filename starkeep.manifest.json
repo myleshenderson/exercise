@@ -8,7 +8,7 @@
   "localRun": {
     "command": "npm",
     "args": ["run", "starkeep:serve", "--"],
-    "portFlag": "-p"
+    "portFlag": "--port"
   },
   "infraRequirements": {
     "appSpecificSyncable": {
@@ -263,17 +263,6 @@
           ]
         },
         {
-          "name": "mcp_tokens",
-          "columns": [
-            { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
-            { "name": "token_hash", "type": "text", "notNull": true },
-            { "name": "label", "type": "text" },
-            { "name": "created_at", "type": "timestamp", "notNull": true },
-            { "name": "last_used_at", "type": "timestamp" },
-            { "name": "expires_at", "type": "timestamp", "notNull": true }
-          ]
-        },
-        {
           "name": "app_meta",
           "columns": [
             { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
@@ -293,7 +282,7 @@
           "routes": [
             "GET /",
             "ANY /{proxy+}",
-            { "route": "POST /mcp", "auth": "public" }
+            { "route": "POST /mcp", "auth": "delegated" }
           ],
           "auth": "session",
           "publicPaths": [
